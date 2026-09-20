@@ -54,7 +54,16 @@ export interface RendererState {
   readonly loadError: ContractError | null;
   readonly actionError: ContractError | null;
   readonly trackedOperation: TrackedOperation | null;
-  /** Error from polling `operations.get`, kept separate from command errors. */
+  /**
+   * The operation id the controller is observing but has no snapshot for yet.
+   *
+   * It is set as soon as a `create`/`start` returns an `operationId` and is
+   * cleared on the first successful `operations.get` snapshot. Keeping it while
+   * `trackedOperation === null` lets the UI show a failed first fetch and offer
+   * an explicit retry without inventing a phase/status/progress.
+   */
+  readonly pendingOperationId: string | null;
+  /** Error from observing `operations.get`, kept separate from command errors. */
   readonly trackingError: ContractError | null;
   /** True after polling exhausted its bounded retries and stopped. */
   readonly trackingPaused: boolean;
@@ -99,6 +108,7 @@ export const INITIAL_STATE: RendererState = {
   loadError: null,
   actionError: null,
   trackedOperation: null,
+  pendingOperationId: null,
   trackingError: null,
   trackingPaused: false,
   commandPending: false,
