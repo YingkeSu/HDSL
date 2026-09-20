@@ -23,11 +23,19 @@ HDSL 面向 DeepSeek Harness（DSH），借鉴 PCL 的简洁操作层次和 HMCL
 
 ## 开发入口
 
-目前仓库校验仅依赖 Python 3 标准库：
+工程 workspace 使用 pnpm + TypeScript，工具与依赖版本锁定在 `package.json`、`pnpm-workspace.yaml`（`saveExact`/`engineStrict` 在此生效）、`.nvmrc` 与 `pnpm-lock.yaml`（精确版本见[工具链初始化记录](docs/development/tooling.md)）：
 
 ```bash
-python3 scripts/check_repository.py
+node --version                          # 24.21.0（.nvmrc）
+corepack enable                         # 或自行安装 pnpm 11.7.0
+pnpm install --frozen-lockfile
+pnpm run typecheck
+pnpm run build
+pnpm run test
+python3 scripts/check_repository.py     # 仓库文档结构校验
 ```
+
+**当前是工程骨架，不是可用的启动器。** `packages/contracts`、`packages/core`、`packages/runtime` 只有可编译入口且导出为空，`apps/desktop` 只有 main/preload/renderer 骨架，没有环境创建、安装、进程或界面行为；Electron 启动不会打开窗口。CI 见 `.github/workflows/engineering-checks.yml`（ubuntu 上的 typecheck/build/unit 与[仓库校验](.github/workflows/repository-checks.yml)）。路径、权限、锁、rename 与进程树等平台敏感项由 T008 在实机验收，Linux 通过不代表启动器可用。
 
 已通过官方 Specify CLI 1.0.8 安装 Codex 集成，项目 skills 位于 `.agents/skills/`，模板和脚本位于 `.specify/`。其他开发者可安装：
 
@@ -43,15 +51,18 @@ specify check
 当前只创建有实际内容的目录；应用代码在相应任务中加入。
 
 ```text
-.agents/skills/    Codex Spec Kit 工作流
-.specify/         项目原则、官方模板、脚本
+.agents/skills/     Codex Spec Kit 工作流
+.specify/          项目原则、官方模板、脚本
+apps/desktop/      Electron main / preload / renderer 骨架
+packages/          contracts / core / runtime 共享包
+tests/engineering/ 工程边界与工具链一致性测试
 specs/001-*/      首个功能的 spec / plan / tasks / contracts
-docs/            产品、架构、研究、协作与 ADR
-scripts/          仓库完整性检查
+docs/             产品、架构、研究、协作与 ADR
+scripts/          仓库完整性检查与研究探针
 .github/          Issue / PR 模板和 CI
 ```
 
-拟采用 Electron + React + TypeScript，受管 Node/DSH 运行时独立于 Electron。候选代码布局见 [实施计划](specs/001-environment-lifecycle/plan.md)。论坛、Registry 和微信小程序在本地闭环验证后进入建设。
+已建立 Electron + React + TypeScript 工程骨架（实际版本在[工具链记录](docs/development/tooling.md)锁定），受管 Node/DSH 运行时独立于 Electron。完整代码布局见 [实施计划](specs/001-environment-lifecycle/plan.md)。论坛、Registry 和微信小程序在本地闭环验证后进入建设。
 
 ## 来源与许可
 

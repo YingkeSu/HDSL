@@ -1,0 +1,25 @@
+{
+  "name": "hdsl",
+  "version": "0.0.0",
+  "private": true,
+  "description": "HDSL — Hello DSH Launcher. Engineering workspace root (scaffold only; no launcher behavior yet).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "packageManager": "pnpm@11.7.0",
+  "engines": {
+    "node": "^22.19.0 || ^24.0.0 || >=26.0.0"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "build": "tsc -b tsconfig.build.json",
+    "clean": "tsc -b tsconfig.build.json --clean",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:repository": "python3 scripts/check_repository.py"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.6",
+    "typescript": "7.0.2",
+    "vitest": "5.0.1"
+  }
+}

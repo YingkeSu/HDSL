@@ -1,0 +1,20 @@
+{
+  "name": "@hdsl/runtime",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Managed artifact install, composition, real DSH process lifecycle and upstream adaptation. Must not depend on Electron.",
+  "license": "UNLICENSED",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@hdsl/contracts": "workspace:*"
+  }
+}

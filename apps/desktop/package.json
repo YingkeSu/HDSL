@@ -1,0 +1,38 @@
+{
+  "name": "@hdsl/desktop",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Electron + React desktop shell (scaffold only; UI, IPC whitelist and lifecycle land in T003/T006).",
+  "license": "UNLICENSED",
+  "type": "module",
+  "main": "./dist/main/index.js",
+  "exports": {
+    ".": {
+      "types": "./dist/main/index.d.ts",
+      "default": "./dist/main/index.js"
+    },
+    "./main": {
+      "types": "./dist/main/index.d.ts",
+      "default": "./dist/main/index.js"
+    },
+    "./preload": {
+      "types": "./dist/preload/index.d.ts",
+      "default": "./dist/preload/index.js"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@hdsl/contracts": "workspace:*",
+    "@hdsl/core": "workspace:*",
+    "@hdsl/runtime": "workspace:*",
+    "react": "19.3.0",
+    "react-dom": "19.3.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "electron": "44.4.3"
+  }
+}
