@@ -28,6 +28,7 @@ const noopActions: RendererActions = {
   openWebUI: () => undefined,
   exportDiagnostics: () => undefined,
   cancelTrackedOperation: () => undefined,
+  retryTracking: () => undefined,
 };
 
 const environment = (
@@ -179,6 +180,47 @@ describe('AppView state matrix', () => {
     });
     expect(html).toMatch(/role="alert"[\s\S]*START_TIMEOUT/);
     expect(html).toContain('（可重试）');
+  });
+
+  it('renders a poll failure and an explicit retry entry when tracking is paused', () => {
+    const html = renderAppView({
+      state: state({
+        trackedOperation: {
+          operationId: 'op-1',
+          kind: 'start',
+          phase: 'starting',
+          status: 'running',
+          sequence: 1,
+          progress: null,
+          environmentId: 'env-1',
+          error: null,
+        },
+        trackingError: {
+          code: 'INTERNAL_ERROR',
+          message: 'unclassified internal error',
+          retryable: true,
+        },
+        trackingPaused: true,
+      }),
+      actions: noopActions,
+    });
+    expect(html).toMatch(/role="alert"[\s\S]*获取操作状态失败/);
+    expect(buttonNamed(html, '重试获取状态')).toBeDefined();
+  });
+
+  it('disables command buttons while a command is pending', () => {
+    const html = renderAppView({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        createName: '待创建环境',
+        commandPending: true,
+      }),
+      actions: noopActions,
+    });
+    expect(buttonNamed(html, '启动')?.attrs).toContain('disabled');
+    expect(buttonNamed(html, '停止')?.attrs).toContain('disabled');
+    expect(buttonNamed(html, '创建')?.attrs).toContain('disabled');
   });
 
   it('shows the loopback WebUI origin and the redacted export summary', () => {

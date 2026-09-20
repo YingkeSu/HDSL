@@ -54,6 +54,12 @@ export interface RendererState {
   readonly loadError: ContractError | null;
   readonly actionError: ContractError | null;
   readonly trackedOperation: TrackedOperation | null;
+  /** Error from polling `operations.get`, kept separate from command errors. */
+  readonly trackingError: ContractError | null;
+  /** True after polling exhausted its bounded retries and stopped. */
+  readonly trackingPaused: boolean;
+  /** True while a user command is in flight (serializes mutations). */
+  readonly commandPending: boolean;
   readonly exportResult: ExportResult | null;
   /** Set only after `openWebUI` returns a verified loopback origin. */
   readonly webUIOrigin: string | null;
@@ -77,6 +83,8 @@ export interface RendererActions {
   openWebUI(): void;
   exportDiagnostics(): void;
   cancelTrackedOperation(): void;
+  /** Explicit recovery after polling paused on repeated transient failures. */
+  retryTracking?(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -91,6 +99,9 @@ export const INITIAL_STATE: RendererState = {
   loadError: null,
   actionError: null,
   trackedOperation: null,
+  trackingError: null,
+  trackingPaused: false,
+  commandPending: false,
   exportResult: null,
   webUIOrigin: null,
   notice: null,

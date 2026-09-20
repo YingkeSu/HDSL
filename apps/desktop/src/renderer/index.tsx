@@ -31,6 +31,11 @@ export function createRendererController(
   client: RendererContractClient,
   options: RendererEntryOptions = {},
 ): RendererController {
+  if (client === undefined || client === null) {
+    throw new Error(
+      'createRendererController requires an explicit RendererContractClient; production must not fall back to a mock client.',
+    );
+  }
   return new RendererController({
     client,
     demo: options.demo ?? false,
@@ -43,25 +48,21 @@ export function createRendererController(
 /**
  * Mounts the app into `container` and starts the initial load.
  *
- * Returns a disposer that unmounts React and releases every operation
- * subscription/timer.
+ * Returns an async disposer that unmounts React and awaits every operation
+ * subscription/timer being released, so tests and hand-off code can observe a
+ * completed cleanup instead of a fire-and-forget promise.
  */
 export function renderRenderer(
   container: Element,
   client: RendererContractClient,
   options: RendererEntryOptions = {},
-): () => void {
-  if (client === undefined || client === null) {
-    throw new Error(
-      'renderRenderer requires an explicit RendererContractClient; production must not fall back to a mock client.',
-    );
-  }
+): () => Promise<void> {
   const controller = createRendererController(client, options);
   const root = createRoot(container);
   root.render(<App controller={controller} />);
   void controller.load();
-  return () => {
+  return async () => {
     root.unmount();
-    void controller.dispose();
+    await controller.dispose();
   };
 }

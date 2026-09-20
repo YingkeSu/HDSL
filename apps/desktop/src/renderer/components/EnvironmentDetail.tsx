@@ -30,7 +30,7 @@ export function EnvironmentDetail({
     return null;
   }
   const tracked = state.trackedOperation;
-  const busy = tracked !== null && !isOperationTerminal(tracked.status);
+  const busy = state.commandPending || (tracked !== null && !isOperationTerminal(tracked.status));
   return (
     <section aria-labelledby="detail-heading" className="panel">
       <h2 id="detail-heading">环境详情</h2>

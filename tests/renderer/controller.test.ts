@@ -108,16 +108,18 @@ describe('RendererController load', () => {
 });
 
 describe('RendererController create', () => {
-  it('rejects an invalid name locally without calling the client', async () => {
+  it('surfaces the contract INVALID_INPUT for an invalid name without a port effect', async () => {
     const { client, port, calls } = createTestRendererClient();
     const controller = new RendererController({ client });
     await controller.load();
     const effectsBefore = port.effects.length;
     controller.setCreateName('../escape');
     await controller.createEnvironment();
-    expect(controller.getState().createError).not.toBeNull();
+    // The frozen `environments.create` schema is the authority; the renderer just
+    // shows the sanitized error and must not apply an effect.
+    expect(controller.getState().actionError?.code).toBe('INVALID_INPUT');
     expect(port.effects.length).toBe(effectsBefore);
-    expect(calls.some((call) => call.method === 'environments.create')).toBe(false);
+    expect(calls.some((call) => call.method === 'environments.create')).toBe(true);
     await controller.dispose();
   });
 

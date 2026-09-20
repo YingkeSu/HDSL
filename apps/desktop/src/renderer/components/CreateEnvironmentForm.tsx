@@ -19,7 +19,7 @@ export function CreateEnvironmentForm({
   actions,
 }: CreateEnvironmentFormProps): ReactElement {
   const disabled = state.phase !== 'ready' || state.catalog.length === 0;
-  const canSubmit = !disabled && state.createName.trim().length > 0;
+  const canSubmit = !disabled && !state.commandPending && state.createName.trim().length > 0;
   return (
     <section aria-labelledby="create-heading" className="panel">
       <h2 id="create-heading">创建环境</h2>
