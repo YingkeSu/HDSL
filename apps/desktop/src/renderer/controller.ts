@@ -19,6 +19,20 @@
  * - `openWebUI` only displays a verified loopback origin and never forwards the
  *   token URL that main keeps private.
  *
+ * Concurrency rules (review P2-1/P2-2/P3):
+ * - one **tracking epoch** owns the current operation. Starting a new track,
+ *   cancelling tracking and `dispose` all bump the epoch, and every async
+ *   continuation re-checks it after each `await` before touching state or
+ *   creating/releasing subscriptions (no stale cross-operation result can
+ *   overwrite a newer track, and a subscription created after invalidation is
+ *   released immediately);
+ * - user commands expose a `commandPending` flag for UI button disabling. It is
+ *   intentionally not a hard lock: a repeated click still issues its own call
+ *   with a fresh `requestId` (independent QA acceptance), and the tracking epoch
+ *   keeps the later call authoritative;
+ * - polling failures retry with bounded backoff and then pause with a visible
+ *   retry action instead of freezing silently.
+ *
  * The developer demo and unit tests inject an explicit client; the production
  * entry never creates one and never falls back to a mock.
  */
@@ -28,10 +42,8 @@ import {
   contractErrorSchema,
   environmentSummaryListSchema,
   exportResultSchema,
-  formatValidationIssues,
   isLoopbackOrigin,
   isPlainRecord,
-  nameSchema,
   openWebUIResultSchema,
   operationRefSchema,
   operationSnapshotSchema,
@@ -74,6 +86,8 @@ export interface RendererControllerOptions {
   readonly events?: RendererEventSource | undefined;
   /** Polling interval in milliseconds; injectable for tests. */
   readonly pollIntervalMs?: number | undefined;
+  /** Bounded poll retries after a transient `operations.get` failure. */
+  readonly maxPollRetries?: number | undefined;
   /** Request id factory; injectable for deterministic tests. */
   readonly createRequestId?: (() => string) | undefined;
 }
@@ -102,11 +116,13 @@ const toTrackedOperation = (snapshot: OperationSnapshot): TrackedOperation => ({
 });
 
 const DEFAULT_POLL_INTERVAL_MS = 400;
+const DEFAULT_MAX_POLL_RETRIES = 3;
 
 export class RendererController implements RendererActions {
   readonly #client: RendererContractClient;
   readonly #events: RendererEventSource | null;
   readonly #pollIntervalMs: number;
+  readonly #maxPollRetries: number;
   readonly #createRequestId: ((() => string) | undefined);
   readonly #listeners = new Set<() => void>();
   readonly #subscriptions = new Map<string, string>();
@@ -115,11 +131,21 @@ export class RendererController implements RendererActions {
   #detachEvents: (() => void) | null = null;
   #requestCounter = 0;
   #disposed = false;
+  /** Bumped whenever the tracked operation or disposal changes. */
+  #trackingEpoch = 0;
+  #pollFailures = 0;
+  #pendingCommands = 0;
 
   constructor(options: RendererControllerOptions) {
+    if (options.client === undefined || options.client === null) {
+      throw new Error(
+        'RendererController requires an explicit RendererContractClient; production must not fall back to a mock client.',
+      );
+    }
     this.#client = options.client;
     this.#events = options.events ?? null;
     this.#pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.#maxPollRetries = Math.max(1, options.maxPollRetries ?? DEFAULT_MAX_POLL_RETRIES);
     this.#createRequestId = options.createRequestId;
     this.#state = { ...INITIAL_STATE, demo: options.demo ?? false };
     if (this.#events !== null) {
@@ -183,7 +209,9 @@ export class RendererController implements RendererActions {
   }
 
   async refresh(): Promise<void> {
-    await this.load();
+    await this.#runCommand(async () => {
+      await this.load();
+    });
   }
 
   setCreateName(name: string): void {
@@ -195,35 +223,38 @@ export class RendererController implements RendererActions {
   }
 
   async createEnvironment(): Promise<void> {
-    const { createName: name, createCombinationId } = this.#state;
-    const issues: ValidationIssue[] = [];
-    if (nameSchema(name, 'name', issues) === undefined) {
-      this.#update({ createError: formatValidationIssues(issues), actionError: null });
-      return;
-    }
-    if (createCombinationId === null) {
-      this.#update({ createError: '请选择一个已核验的运行时组合', actionError: null });
-      return;
-    }
-    this.#update({
-      createError: null,
-      actionError: null,
-      notice: null,
-      exportResult: null,
-      webUIOrigin: null,
+    await this.#runCommand(async () => {
+      const { createName: name, createCombinationId } = this.#state;
+      if (createCombinationId === null) {
+        this.#update({ createError: '请选择一个已核验的运行时组合', actionError: null });
+        return;
+      }
+      // Name validity (1-80 chars, no path separators) is enforced by the frozen
+      // `environments.create` schema in main; the renderer dispatches and shows
+      // the contract's sanitized `INVALID_INPUT` instead of duplicating the rule.
+      this.#update({
+        createError: null,
+        actionError: null,
+        notice: null,
+        exportResult: null,
+        webUIOrigin: null,
+      });
+      const result = await this.#call(
+        'environments.create',
+        { requestId: this.#newRequestId(), name, catalogCombinationId: createCombinationId },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      this.#update({ createName: '' });
+      await this.#trackOperation(result.value.operationId);
+      await this.#refreshEnvironments();
     });
-    const result = await this.#call(
-      'environments.create',
-      { requestId: this.#newRequestId(), name, catalogCombinationId: createCombinationId },
-      operationRefSchema,
-    );
-    if (!result.ok) {
-      this.#update({ actionError: result.error });
-      return;
-    }
-    this.#update({ createName: '' });
-    await this.#trackOperation(result.value.operationId);
-    await this.#refreshEnvironments();
   }
 
   selectEnvironment(environmentId: string): void {
@@ -236,79 +267,114 @@ export class RendererController implements RendererActions {
   }
 
   async startSelected(): Promise<void> {
-    await this.#revisionCommand('environments.start');
+    await this.#runCommand(async () => {
+      await this.#revisionCommand('environments.start');
+    });
   }
 
   async stopSelected(): Promise<void> {
-    await this.#revisionCommand('environments.stop');
+    await this.#runCommand(async () => {
+      await this.#revisionCommand('environments.stop');
+    });
   }
 
   async openWebUI(): Promise<void> {
-    const environment = selectedEnvironment(this.#state);
-    if (environment === null) {
-      this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
-      return;
-    }
-    this.#update({ actionError: null, notice: null, webUIOrigin: null });
-    const result = await this.#call(
-      'environments.openWebUI',
-      { requestId: this.#newRequestId(), environmentId: environment.id },
-      openWebUIResultSchema,
-    );
-    if (!result.ok) {
-      this.#update({ actionError: result.error });
-      return;
-    }
-    // Defence in depth: even though the dispatcher already rejects non-loopback
-    // origins, the renderer refuses to display anything else. The token URL
-    // never reaches this layer.
-    if (!isLoopbackOrigin(result.value.loopbackOrigin)) {
-      this.#update({ actionError: contractErrorForCode('WEBUI_UNAVAILABLE') });
-      return;
-    }
-    this.#update({
-      webUIOrigin: result.value.loopbackOrigin,
-      notice: 'WebUI 已由主进程打开；此处只显示已验证的 loopback 地址。',
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, webUIOrigin: null });
+      const result = await this.#call(
+        'environments.openWebUI',
+        { requestId: this.#newRequestId(), environmentId: environment.id },
+        openWebUIResultSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      // Defence in depth: even though the dispatcher already rejects non-loopback
+      // origins, the renderer refuses to display anything else. The token URL
+      // never reaches this layer.
+      if (!isLoopbackOrigin(result.value.loopbackOrigin)) {
+        this.#update({ actionError: contractErrorForCode('WEBUI_UNAVAILABLE') });
+        return;
+      }
+      this.#update({
+        webUIOrigin: result.value.loopbackOrigin,
+        notice: 'WebUI 已由主进程打开；此处只显示已验证的 loopback 地址。',
+      });
     });
   }
 
   async exportDiagnostics(): Promise<void> {
-    const environment = selectedEnvironment(this.#state);
-    if (environment === null) {
-      this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
-      return;
-    }
-    this.#update({ actionError: null, notice: null, exportResult: null });
-    const result = await this.#call(
-      'diagnostics.export',
-      { requestId: this.#newRequestId(), environmentId: environment.id },
-      exportResultSchema,
-    );
-    if (!result.ok) {
-      this.#update({ actionError: result.error });
-      return;
-    }
-    this.#update({
-      exportResult: result.value,
-      notice: '诊断导出完成（已脱敏；结果不含本地路径）。',
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, exportResult: null });
+      const result = await this.#call(
+        'diagnostics.export',
+        { requestId: this.#newRequestId(), environmentId: environment.id },
+        exportResultSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      this.#update({
+        exportResult: result.value,
+        notice: '诊断导出完成（已脱敏；结果不含本地路径）。',
+      });
     });
   }
 
   async cancelTrackedOperation(): Promise<void> {
+    await this.#runCommand(async () => {
+      const tracked = this.#state.trackedOperation;
+      if (tracked === null || isOperationTerminal(tracked.status)) {
+        return;
+      }
+      const epoch = this.#trackingEpoch;
+      const result = await this.#call(
+        'operations.cancel',
+        { requestId: this.#newRequestId(), operationId: tracked.operationId },
+        operationSnapshotSchema,
+      );
+      if (!this.#isCurrent(epoch)) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      this.#applySnapshot(result.value, epoch);
+    });
+  }
+
+  /**
+   * Explicit recovery entry shown after polling exhausted its bounded retries.
+   * It only resumes observing the current operation; it never re-issues the
+   * original command.
+   */
+  retryTracking(): void {
     const tracked = this.#state.trackedOperation;
     if (tracked === null || isOperationTerminal(tracked.status)) {
       return;
     }
-    const result = await this.#call(
-      'operations.cancel',
-      { requestId: this.#newRequestId(), operationId: tracked.operationId },
-      operationSnapshotSchema,
-    );
-    if (!result.ok) {
-      this.#update({ actionError: result.error });
-      return;
-    }
-    this.#applySnapshot(result.value);
+    this.#pollFailures = 0;
+    this.#update({ trackingError: null, trackingPaused: false });
+    this.#schedulePoll(this.#trackingEpoch);
   }
 
   /**
@@ -320,17 +386,48 @@ export class RendererController implements RendererActions {
       return;
     }
     this.#disposed = true;
+    this.#invalidateTracking();
     this.#clearPollTimer();
     this.#detachEvents?.();
     this.#detachEvents = null;
-    const subscriptionIds = [...this.#subscriptions.values()];
-    this.#subscriptions.clear();
-    for (const subscriptionId of subscriptionIds) {
-      await this.#unsubscribe(subscriptionId);
+    await this.#releaseAllSubscriptions();
+  }
+
+  // --- command serialization ----------------------------------------------
+
+  /**
+   * Marks a user command as in flight so the UI can disable its buttons. It is
+   * deliberately **not** a hard lock: the accepted behavior is that a repeated
+   * click still issues its own call with a fresh `requestId` (QA acceptance
+   * "repeated start clicks issue distinct requestIds"), and the tracking epoch
+   * keeps the later call authoritative.
+   */
+  async #runCommand(action: () => Promise<void>): Promise<void> {
+    if (this.#disposed) {
+      return;
+    }
+    this.#pendingCommands += 1;
+    this.#update({ commandPending: true });
+    try {
+      await action();
+    } finally {
+      this.#pendingCommands = Math.max(0, this.#pendingCommands - 1);
+      if (!this.#disposed) {
+        this.#update({ commandPending: this.#pendingCommands > 0 });
+      }
     }
   }
 
   // --- operation tracking --------------------------------------------------
+
+  #invalidateTracking(): number {
+    this.#trackingEpoch += 1;
+    return this.#trackingEpoch;
+  }
+
+  #isCurrent(epoch: number): boolean {
+    return !this.#disposed && this.#trackingEpoch === epoch;
+  }
 
   async #revisionCommand(method: 'environments.start' | 'environments.stop'): Promise<void> {
     const environment = selectedEnvironment(this.#state);
@@ -349,6 +446,9 @@ export class RendererController implements RendererActions {
       },
       operationRefSchema,
     );
+    if (this.#disposed) {
+      return;
+    }
     if (!result.ok) {
       this.#update({ actionError: result.error });
       return;
@@ -358,29 +458,55 @@ export class RendererController implements RendererActions {
   }
 
   async #trackOperation(operationId: string): Promise<void> {
-    await this.#stopTracking();
+    // A new track supersedes any previous one: bump the epoch, then release the
+    // previous timer/subscriptions so a late response cannot resurrect it.
+    const epoch = this.#invalidateTracking();
+    this.#clearPollTimer();
+    this.#pollFailures = 0;
+    this.#update({ trackedOperation: null, trackingError: null, trackingPaused: false });
+    await this.#releaseAllSubscriptions();
+    if (!this.#isCurrent(epoch)) {
+      return;
+    }
+
     const snapshot = await this.#call('operations.get', { operationId }, operationSnapshotSchema);
+    if (!this.#isCurrent(epoch)) {
+      return;
+    }
     if (!snapshot.ok) {
-      this.#update({ actionError: snapshot.error });
+      this.#update({ trackingError: snapshot.error });
       return;
     }
     this.#update({ trackedOperation: toTrackedOperation(snapshot.value) });
-    await this.#subscribeTo(operationId);
+
+    await this.#subscribeTo(operationId, epoch);
+    if (!this.#isCurrent(epoch)) {
+      return;
+    }
+
     if (isOperationTerminal(snapshot.value.status)) {
-      await this.#completeTracking();
+      await this.#completeTracking(epoch);
     } else {
-      this.#schedulePoll();
+      this.#schedulePoll(epoch);
     }
   }
 
-  async #subscribeTo(operationId: string): Promise<void> {
+  async #subscribeTo(operationId: string, epoch: number): Promise<void> {
     const result = await this.#call(
       'operations.subscribe',
       { requestId: this.#newRequestId(), operationId },
       subscriptionRefSchema,
     );
+    if (!this.#isCurrent(epoch)) {
+      // The subscription was created after the track was superseded or after
+      // dispose. Release it immediately so it cannot leak in the main session.
+      if (result.ok) {
+        await this.#unsubscribe(result.value.subscriptionId);
+      }
+      return;
+    }
     if (!result.ok) {
-      this.#update({ actionError: result.error });
+      this.#update({ trackingError: result.error });
       return;
     }
     this.#subscriptions.set(operationId, result.value.subscriptionId);
@@ -394,18 +520,26 @@ export class RendererController implements RendererActions {
     );
   }
 
-  #schedulePoll(): void {
-    if (this.#disposed || this.#pollTimer !== null) {
+  async #releaseAllSubscriptions(): Promise<void> {
+    const subscriptionIds = [...this.#subscriptions.values()];
+    this.#subscriptions.clear();
+    for (const subscriptionId of subscriptionIds) {
+      await this.#unsubscribe(subscriptionId);
+    }
+  }
+
+  #schedulePoll(epoch: number, delayMs: number = this.#pollIntervalMs): void {
+    if (!this.#isCurrent(epoch) || this.#pollTimer !== null) {
       return;
     }
     this.#pollTimer = setTimeout(() => {
       this.#pollTimer = null;
-      void this.#poll();
-    }, this.#pollIntervalMs);
+      void this.#poll(epoch);
+    }, delayMs);
   }
 
-  async #poll(): Promise<void> {
-    if (this.#disposed) {
+  async #poll(epoch: number): Promise<void> {
+    if (!this.#isCurrent(epoch)) {
       return;
     }
     const tracked = this.#state.trackedOperation;
@@ -417,65 +551,74 @@ export class RendererController implements RendererActions {
       { operationId: tracked.operationId },
       operationSnapshotSchema,
     );
-    if (this.#disposed) {
+    if (!this.#isCurrent(epoch)) {
       return;
     }
     if (!result.ok) {
-      this.#update({ actionError: result.error });
+      this.#pollFailures += 1;
+      const exhausted = this.#pollFailures >= this.#maxPollRetries;
+      this.#update({ trackingError: result.error, trackingPaused: exhausted });
+      if (!exhausted) {
+        this.#schedulePoll(epoch, this.#pollIntervalMs * this.#pollFailures);
+      }
       return;
     }
-    this.#applySnapshot(result.value);
+    this.#pollFailures = 0;
+    this.#update({ trackingError: null, trackingPaused: false });
+    this.#applySnapshot(result.value, epoch);
     const current = this.#state.trackedOperation;
-    if (current !== null && !isOperationTerminal(current.status)) {
-      this.#schedulePoll();
+    if (this.#isCurrent(epoch) && current !== null && !isOperationTerminal(current.status)) {
+      this.#schedulePoll(epoch);
     }
   }
 
-  #applySnapshot(snapshot: OperationSnapshot): void {
+  #applySnapshot(snapshot: OperationSnapshot, epoch: number): void {
+    if (!this.#isCurrent(epoch)) {
+      return;
+    }
     const current = this.#state.trackedOperation;
-    if (
-      current !== null &&
-      snapshot.id === current.operationId &&
-      snapshot.sequence < current.sequence
-    ) {
-      // Stale snapshot/event: never move the view backwards.
+    // Ignore results for any other operation (cross-operation stale response)
+    // and any regressing sequence for the tracked operation.
+    if (current === null || snapshot.id !== current.operationId) {
+      return;
+    }
+    if (snapshot.sequence < current.sequence) {
       return;
     }
     this.#update({ trackedOperation: toTrackedOperation(snapshot) });
     if (isOperationTerminal(snapshot.status)) {
-      void this.#completeTracking();
+      void this.#completeTracking(epoch);
     }
   }
 
-  async #completeTracking(): Promise<void> {
+  async #completeTracking(epoch: number): Promise<void> {
+    if (!this.#isCurrent(epoch)) {
+      return;
+    }
     this.#clearPollTimer();
     const tracked = this.#state.trackedOperation;
-    if (tracked === null) {
+    if (tracked === null || !isOperationTerminal(tracked.status)) {
       return;
     }
     const subscriptionId = this.#subscriptions.get(tracked.operationId);
     if (subscriptionId !== undefined) {
       this.#subscriptions.delete(tracked.operationId);
       await this.#unsubscribe(subscriptionId);
+      if (!this.#isCurrent(epoch)) {
+        return;
+      }
     }
     if (tracked.status === 'succeeded') {
-      await this.#refreshEnvironments();
+      await this.#refreshEnvironments(epoch);
     }
   }
 
-  async #stopTracking(): Promise<void> {
-    this.#clearPollTimer();
-    const subscriptionIds = [...this.#subscriptions.values()];
-    this.#subscriptions.clear();
-    for (const subscriptionId of subscriptionIds) {
-      await this.#unsubscribe(subscriptionId);
-    }
-    this.#update({ trackedOperation: null });
-  }
-
-  async #refreshEnvironments(): Promise<void> {
+  async #refreshEnvironments(epoch?: number): Promise<void> {
     const result = await this.#call('environments.list', {}, environmentSummaryListSchema);
     if (this.#disposed) {
+      return;
+    }
+    if (epoch !== undefined && !this.#isCurrent(epoch)) {
       return;
     }
     if (!result.ok) {
@@ -502,6 +645,12 @@ export class RendererController implements RendererActions {
     if (current === null || current.operationId !== event.operationId) {
       return;
     }
+    // Only the subscription currently owning this operation may drive it, so a
+    // late event from a released subscription cannot affect a newer track.
+    const subscriptionId = this.#subscriptions.get(event.operationId);
+    if (subscriptionId === undefined || subscriptionId !== event.subscriptionId) {
+      return;
+    }
     if (event.sequence <= current.sequence) {
       return;
     }
@@ -515,7 +664,7 @@ export class RendererController implements RendererActions {
       },
     });
     if (isOperationTerminal(event.status)) {
-      void this.#completeTracking();
+      void this.#completeTracking(this.#trackingEpoch);
     }
   }
 
@@ -546,6 +695,9 @@ export class RendererController implements RendererActions {
   }
 
   #update(patch: Partial<RendererState>): void {
+    if (this.#disposed) {
+      return;
+    }
     this.#state = { ...this.#state, ...patch };
     for (const listener of this.#listeners) {
       try {
@@ -581,7 +733,10 @@ export class RendererController implements RendererActions {
   async #invoke(
     method: ContractMethod,
     input: unknown,
-  ): Promise<{ readonly ok: true; readonly value: unknown } | { readonly ok: false; readonly error: ContractError }> {
+  ): Promise<
+    | { readonly ok: true; readonly value: unknown }
+    | { readonly ok: false; readonly error: ContractError }
+  > {
     let response: unknown;
     try {
       response = await this.#client.call(method, input);

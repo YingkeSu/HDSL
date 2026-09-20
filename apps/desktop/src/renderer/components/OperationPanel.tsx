@@ -49,9 +49,28 @@ export function OperationPanel({ state, actions }: OperationPanelProps): ReactEl
           操作失败：{describeError(operation.error)}
         </p>
       )}
+      {state.trackingError !== null && (
+        <p role="alert" className="notice notice-error">
+          获取操作状态失败：{describeError(state.trackingError)}
+        </p>
+      )}
+      {state.trackingPaused && (
+        <p>
+          连续多次获取操作状态失败，已暂停自动刷新。
+          <button
+            type="button"
+            onClick={() => {
+              actions.retryTracking?.();
+            }}
+          >
+            重试获取状态
+          </button>
+        </p>
+      )}
       {!terminal && (
         <button
           type="button"
+          disabled={state.commandPending}
           onClick={() => {
             actions.cancelTrackedOperation();
           }}
