@@ -23,6 +23,6 @@
 - 活动代际只在准备与验证成功后切换，失败时旧代际可用。
 - 相同锁定组成不代表运行数据或模型响应相同。
 - 独立目录、进程与 home 不等于操作系统安全沙箱。
-- 凭据由 OS 凭据存储引用，不进入整合包、普通日志、Git。
+- 受管用户凭据只以 OS 凭据存储引用保存；上游可能写入环境 home 的本地凭据产物（如 `.credentials.yaml` Web grant secret）同样视为秘密，不进入整合包、导出、普通日志与 Git。见 [ADR 0002](docs/adr/0002-credential-boundary.md)。
 
 这是单领域上下文，即使未来采用 monorepo 也不自动分裂上下文。决策见 [ADR](docs/adr/README.md)。
