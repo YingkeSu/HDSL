@@ -58,6 +58,10 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
   `recover()`；若存在 `unverifiable` 进程，main 侧**禁止 `environments.create`/`environments.start`**
   （返回受控 `ENVIRONMENT_BUSY` + 原生提示），只保留 stop/读/导出以便人工处置；不得覆盖归属。
   人工处置边界：确认并清理残留进程后重启，由 recover 重新对账。
+- 数据目录不可用分支：在显示原生错误框**之前**向 stderr 输出单行固定信号
+  `[hdsl] data-root unavailable reason=<busy|unknown>`（`busy` = 另一实例持有；其余 = `unknown`；
+  不含路径/owner/PID/hostname/secret/异常文本）；用户关闭错误框后进程以**退出码 1** 结束；
+  不向未持锁 dataRoot 写任何 evidence。该信号是生产真实行为，用于无窗口/无 page 时的归因。
 
 ## 窄 IPC 与 sender 校验
 
@@ -193,7 +197,7 @@ electron apps/desktop/dist/main/qa-entry.js \
 - `pnpm run typecheck`：通过。
 - `pnpm run build` + `pnpm run build:renderer`：通过（`dist/preload/bridge.cjs`、
   `dist/renderer/app.js`、`dist/main/qa-entry.js` 生成）。
-- `pnpm run test`：**61 passed / 5 skipped，680 tests**（含 `tests/desktop/**` 10 文件）。
+- `pnpm run test`：**62 passed / 5 skipped，684 tests**（含 `tests/desktop/**` 11 文件）。
 - `python3 scripts/check_repository.py`：PASS。
 - 真实 Electron 冒烟（`smoke-electron.mjs`，Electron 44.4.3，生产入口）：
   `hasBridge:true`、成员精确 `call,onOperationUpdated,selectEnvironment`、
