@@ -107,6 +107,20 @@ describe('extractTarGz', () => {
     await expect(extractTarGz(archive, join(root, 'out'))).rejects.toThrow(/checksum/);
   });
 
+  it('rejects an oversized pax/GNU metadata header', async () => {
+    const root = temporaryRoot();
+    const archive = join(root, 'archive.tgz');
+    writeFileSync(
+      archive,
+      buildTarGz([
+        { name: 'package/a.txt', type: 'file', content: 'x', paxPath: `package/${'long/'.repeat(200)}a.txt` },
+      ]),
+    );
+    await expect(
+      extractTarGz(archive, join(root, 'out'), { stripComponents: 1, maxMetadataBytes: 64 }),
+    ).rejects.toThrow(/oversized/);
+  });
+
   it('rejects an archive that ends mid-entry', async () => {
     const root = temporaryRoot();
     const archive = join(root, 'archive.tgz');

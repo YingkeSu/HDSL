@@ -12,7 +12,7 @@
 import { createHash } from 'node:crypto';
 import type { IdempotencyRecord } from '@hdsl/contracts';
 import { REQUEST_ID_PATTERN } from '@hdsl/contracts';
-import { readJsonFile, readDirectoryNames, writeJsonAtomic } from './fsx.js';
+import { tryReadJsonFile, readDirectoryNames, writeJsonAtomic } from './fsx.js';
 import type { AppDataLayout } from './layout.js';
 import { join } from 'node:path';
 
@@ -35,7 +35,7 @@ export class IdempotencyStore {
     if (!REQUEST_ID_PATTERN.test(requestId)) {
       return undefined;
     }
-    const file = readJsonFile<IdempotencyFile>(join(this.#layout.idempotency, fileNameFor(requestId)));
+    const file = tryReadJsonFile<IdempotencyFile>(join(this.#layout.idempotency, fileNameFor(requestId)));
     return file?.record;
   }
 
@@ -52,7 +52,7 @@ export class IdempotencyStore {
       if (!name.endsWith('.json')) {
         continue;
       }
-      const file = readJsonFile<IdempotencyFile>(join(this.#layout.idempotency, name));
+      const file = tryReadJsonFile<IdempotencyFile>(join(this.#layout.idempotency, name));
       if (file !== undefined) {
         entries.push({ requestId: file.requestId, record: file.record });
       }

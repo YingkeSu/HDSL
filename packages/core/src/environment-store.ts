@@ -8,7 +8,7 @@
  */
 import type { EnvironmentState, EnvironmentSummary } from '@hdsl/contracts';
 import { OPAQUE_ID_PATTERN } from '@hdsl/contracts';
-import { readJsonFile, readDirectoryNames, writeJsonAtomic } from './fsx.js';
+import { tryReadJsonFile, readDirectoryNames, writeJsonAtomic } from './fsx.js';
 import { environmentDirectory, environmentRecordPath, type AppDataLayout } from './layout.js';
 
 export interface EnvironmentRecord {
@@ -45,7 +45,7 @@ export class EnvironmentStore {
     if (!OPAQUE_ID_PATTERN.test(environmentId)) {
       return undefined;
     }
-    return readJsonFile<EnvironmentRecord>(environmentRecordPath(this.#layout, environmentId));
+    return tryReadJsonFile<EnvironmentRecord>(environmentRecordPath(this.#layout, environmentId));
   }
 
   /** Reads every record whose directory is still present, skipping torn ones. */

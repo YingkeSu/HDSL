@@ -16,7 +16,7 @@
  */
 import type { CompositionLock, ErrorCode } from '@hdsl/contracts';
 import { OPAQUE_ID_PATTERN } from '@hdsl/contracts';
-import { readJsonFile, readDirectoryNames, removePath, writeJsonAtomic } from './fsx.js';
+import { tryReadJsonFile, readDirectoryNames, removePath, writeJsonAtomic } from './fsx.js';
 import { transactionRecordPath, type AppDataLayout } from './layout.js';
 
 export type JournalPhase = 'prepared' | 'artifacts-installed' | 'committed' | 'failed';
@@ -47,7 +47,7 @@ export class JournalStore {
     if (!OPAQUE_ID_PATTERN.test(transactionId)) {
       return undefined;
     }
-    return readJsonFile<CreateJournalRecord>(transactionRecordPath(this.#layout, transactionId));
+    return tryReadJsonFile<CreateJournalRecord>(transactionRecordPath(this.#layout, transactionId));
   }
 
   list(): CreateJournalRecord[] {

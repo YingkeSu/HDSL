@@ -175,6 +175,8 @@ export interface TarExtractOptions {
   readonly signal?: AbortSignal;
   readonly maxEntries?: number;
   readonly maxTotalBytes?: number;
+  /** Cap for a single pax/GNU metadata payload (decompression-bomb guard). */
+  readonly maxMetadataBytes?: number;
   readonly onBytes?: (bytes: number) => void;
 }
 
@@ -208,6 +210,7 @@ export const extractTarGz = async (
   const prefixSegments = options.prefix === undefined ? [] : safeSegments(options.prefix);
   const maxEntries = options.maxEntries ?? 200_000;
   const maxTotalBytes = options.maxTotalBytes ?? 2 * 1024 * 1024 * 1024;
+  const maxMetadataBytes = options.maxMetadataBytes ?? 1024 * 1024;
 
   await mkdir(destination, { recursive: true });
   const input = createReadStream(archivePath);
@@ -246,6 +249,12 @@ export const extractTarGz = async (
       const linkname = readString(header, 157, 100);
 
       if (type === 'x' || type === 'g' || type === 'L' || type === 'K') {
+        if (size > maxMetadataBytes) {
+          throw new InstallFailure(
+            'INTERNAL_ERROR',
+            'the archive contains an oversized pax/GNU metadata header',
+          );
+        }
         const payload = (await reader.readExactly(size)) ?? Buffer.alloc(0);
         const padding = size % BLOCK_SIZE === 0 ? 0 : BLOCK_SIZE - (size % BLOCK_SIZE);
         await reader.drain(padding);

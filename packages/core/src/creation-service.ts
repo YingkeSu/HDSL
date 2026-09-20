@@ -350,6 +350,11 @@ tryReadInstallManifest(
     const journalOperations = new Set(journals.map((journal) => journal.operationId));
 
     for (const journal of journals) {
+      // Never roll back a transaction this process is still running; recovery
+      // is a post-restart entry point and must not delete live staging.
+      if (this.#controllers.has(journal.operationId)) {
+        continue;
+      }
       const environment = this.#environments.read(journal.environmentId);
       if (environment !== undefined && environment.activeGenerationId === journal.generationId) {
         this.#finalizeCommitted(journal);
@@ -395,6 +400,31 @@ tryReadInstallManifest(
         transactionId: null,
         environmentId: operation.environmentId,
         operationId: operation.id,
+        generationId: null,
+        resolution: 'failed',
+      });
+    }
+
+    // Extremely narrow crash window: the environment record was written but the
+    // journal/operation were not. No scan above would ever see it, so the
+    // environment would stay `creating` forever. Fail it explicitly.
+    const journalEnvironments = new Set(journals.map((journal) => journal.environmentId));
+    for (const environment of this.#environments.list()) {
+      if (environment.state !== 'creating' || journalEnvironments.has(environment.id)) {
+        continue;
+      }
+      // A live in-process operation keeps the environment legitimately creating.
+      const live = this.#operations
+        .list()
+        .some((operation) => operation.environmentId === environment.id && !isTerminalStatus(operation.status));
+      if (live) {
+        continue;
+      }
+      this.#markEnvironmentError(environment.id);
+      details.push({
+        transactionId: null,
+        environmentId: environment.id,
+        operationId: null,
         generationId: null,
         resolution: 'failed',
       });
@@ -537,6 +567,19 @@ tryReadInstallManifest(
     }
     if (manifest.installMode === 'npm-ci' && !manifest.preflight.passed) {
       this.#fail(job, 'INTERNAL_ERROR', 'managed install preflight did not pass');
+      return;
+    }
+    // Defence in depth (review P3-1): the manifest is written by the same
+    // process, but the commit must still prove it describes *this* composition.
+    const manifestBindsComposition =
+      manifest.compositionDigest === job.digest &&
+      manifest.node.sha256 === job.lock.node.sha256 &&
+      manifest.dsh.sha256 === job.lock.dsh.sha256 &&
+      manifest.node.version === job.lock.node.version &&
+      manifest.dsh.version === job.lock.dsh.version &&
+      (manifest.installMode !== 'npm-ci' || manifest.closure?.installed === true);
+    if (!manifestBindsComposition || !(manifest.preflight.passed === true || manifest.preflight.skipped === true)) {
+      this.#fail(job, 'INTERNAL_ERROR', 'the install manifest does not match the requested composition');
       return;
     }
     const paths = generationPaths(this.#layout, job.environmentId, job.generationId);

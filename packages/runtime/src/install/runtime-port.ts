@@ -24,6 +24,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { open } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import {
   type CompositionLock,
@@ -350,9 +351,65 @@ export class RuntimePort implements ManagedRuntimePort {
     return { directory: destination, nodeExecutable, dshEntrypoint, manifestPath };
   }
 
+  /** True when `cachePath` exists and hashes to the expected digest. */
+  async #cacheIsValid(cachePath: string, sha256: string): Promise<boolean> {
+    if (!existsSync(cachePath)) {
+      return false;
+    }
+    try {
+      return (await sha256File(cachePath)) === sha256;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Publishes a verified private staging file to the content-addressed cache.
+   *
+   * Publish invariants (issue #37):
+   * - the staging file is unique per attempt, so concurrent attempts never
+   *   share a writable file;
+   * - a valid cache entry is always reused and this attempt's staging discarded,
+   *   so a concurrent winner is never clobbered;
+   * - an invalid/corrupt existing entry is replaced atomically by `rename`, never
+   *   read back in a partial state;
+   * - `EEXIST`/`EPERM` (platforms that refuse rename-over-existing) and `ENOENT`
+   *   races re-check the cache and either reuse the winner or retry once.
+   */
+  async #publishArchive(temporary: string, cachePath: string, sha256: string): Promise<void> {
+    mkdirSync(dirname(cachePath), { recursive: true });
+    if (await this.#cacheIsValid(cachePath, sha256)) {
+      rmSync(temporary, { force: true });
+      return;
+    }
+    try {
+      renameSync(temporary, cachePath);
+      return;
+    } catch (error) {
+      if (await this.#cacheIsValid(cachePath, sha256)) {
+        rmSync(temporary, { force: true });
+        return;
+      }
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') {
+        // The destination directory raced away; recreate and retry once.
+        mkdirSync(dirname(cachePath), { recursive: true });
+        renameSync(temporary, cachePath);
+        return;
+      }
+      if (code === 'EEXIST' || code === 'EPERM' || code === 'EACCES' || code === 'ENOTEMPTY') {
+        throw new InstallFailure(
+          'INTERNAL_ERROR',
+          'another attempt holds an unreadable artifact cache entry',
+        );
+      }
+      throw new InstallFailure('INTERNAL_ERROR', 'the verified artifact could not be published to the cache');
+    }
+  }
+
   async #obtainArchive(url: string, sha256: string, context: InstallContext): Promise<string> {
     const cachePath = join(context.cacheDirectory, 'sha256', sha256, fileNameForUrl(url));
-    if (existsSync(cachePath) && (await sha256File(cachePath)) === sha256) {
+    if (await this.#cacheIsValid(cachePath, sha256)) {
       return cachePath;
     }
     if (this.#faults.forceDiskFull === true) {
@@ -366,36 +423,41 @@ export class RuntimePort implements ManagedRuntimePort {
 
     const downloadDirectory = join(context.scratchDirectory, 'downloads');
     mkdirSync(downloadDirectory, { recursive: true });
-    const temporary = join(downloadDirectory, `${sha256}.part`);
-    rmSync(temporary, { force: true });
-
-    const local = this.#localArtifactDirectory === undefined
-      ? undefined
-      : findLocalArtifact(this.#localArtifactDirectory, sha256);
-    if (local !== undefined) {
-      copyFileSync(local, temporary);
-    } else {
-      const target = this.#urlRewrites[url] ?? url;
-      await downloadToFile(target, temporary, {
-        fetch: this.#fetch,
-        signal: context.signal,
-        maxBytes: this.#limits.maxDownloadBytes,
-        ...(this.#faults.failDownloadAfterBytes === undefined
-          ? {}
-          : { failAfterBytes: this.#faults.failDownloadAfterBytes }),
-      });
-    }
-    if (this.#faults.corruptDownload === true) {
-      await mutateLastByte(temporary);
-    }
-    const actual = await sha256File(temporary);
-    if (actual !== sha256) {
+    // Unique per attempt: concurrent creates of the same composition must never
+    // share a writable staging file (issue #37).
+    const temporary = join(downloadDirectory, `${sha256}.${randomUUID()}.part`);
+    try {
+      const local = this.#localArtifactDirectory === undefined
+        ? undefined
+        : findLocalArtifact(this.#localArtifactDirectory, sha256);
+      if (local !== undefined) {
+        copyFileSync(local, temporary);
+      } else {
+        const target = this.#urlRewrites[url] ?? url;
+        await downloadToFile(target, temporary, {
+          fetch: this.#fetch,
+          signal: context.signal,
+          maxBytes: this.#limits.maxDownloadBytes,
+          ...(this.#faults.failDownloadAfterBytes === undefined
+            ? {}
+            : { failAfterBytes: this.#faults.failDownloadAfterBytes }),
+        });
+      }
+      if (this.#faults.corruptDownload === true) {
+        await mutateLastByte(temporary);
+      }
+      const actual = await sha256File(temporary);
+      if (actual !== sha256) {
+        throw new InstallFailure('DIGEST_MISMATCH', 'the downloaded artifact does not match the audited digest');
+      }
+      await this.#publishArchive(temporary, cachePath, sha256);
+      return cachePath;
+    } catch (error) {
+      // Only this attempt's uniquely named staging file is removed; published
+      // cache entries and other attempts' files are never touched.
       rmSync(temporary, { force: true });
-      throw new InstallFailure('DIGEST_MISMATCH', 'the downloaded artifact does not match the audited digest');
+      throw error;
     }
-    mkdirSync(dirname(cachePath), { recursive: true });
-    renameSync(temporary, cachePath);
-    return cachePath;
   }
 
   async #installClosure(

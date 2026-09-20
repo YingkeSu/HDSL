@@ -7,23 +7,26 @@
  * these are file-boundary tests — the opt-in `real-install` test covers the
  * official network sources.
  */
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   API_VERSION,
   createContractRuntime,
+  portFail,
   type ContractResponse,
   type RuntimeCombination,
 } from '@hdsl/contracts';
 import {
+  EnvironmentStore,
   createManagedInstall,
   generationPaths,
   resolveLayout,
   type ManagedInstall,
 } from '@hdsl/core';
-import { createRuntimePort } from '@hdsl/runtime';
+import { computeCompositionDigest, createRuntimePort, resolveComposition } from '@hdsl/runtime';
 import {
   sha256,
   syntheticCombination,
@@ -77,6 +80,22 @@ interface Harness {
 }
 
 const roots: string[] = [];
+
+const listFilesRecursively = (root: string): string[] => {
+  if (!existsSync(root)) {
+    return [];
+  }
+  const files: string[] = [];
+  for (const name of readdirSync(root)) {
+    const path = join(root, name);
+    if (statSync(path).isDirectory()) {
+      files.push(...listFilesRecursively(path));
+    } else {
+      files.push(path);
+    }
+  }
+  return files;
+};
 
 const freshRoot = (prefix: string): string => {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -188,8 +207,10 @@ afterEach(() => {
 describe('environment creation', () => {
   it('creates two independent environments with different exact compositions', async () => {
     const harness = await buildHarness();
-    const homeBefore = join(homedir(), '.dsh');
-    const existedBefore = existsSync(homeBefore);
+    const homeDirectory = join(homedir(), '.dsh');
+    const homeSnapshot = (): string[] =>
+      existsSync(homeDirectory) ? readdirSync(homeDirectory).sort() : [];
+    const homeBefore = homeSnapshot();
 
     const catalogResponse = harness.dispatch('catalog.list', {});
     expect(catalogResponse.ok).toBe(true);
@@ -264,7 +285,7 @@ describe('environment creation', () => {
     expect(existsSync(join(pathsB.generationDirectory, 'home'))).toBe(true);
 
     // The host default DSH home is untouched (FR-001).
-    expect(existsSync(homeBefore)).toBe(existedBefore);
+    expect(homeSnapshot()).toEqual(homeBefore);
 
     await harness.managed.close();
   });
@@ -301,6 +322,33 @@ describe('environment creation', () => {
     if (list.ok) {
       expect(list.value).toHaveLength(1);
     }
+    await harness.managed.close();
+  });
+
+  it('creates six environments concurrently from the same composition with one valid cache entry', async () => {
+    const harness = await buildHarness({ catalog: [combinationA] });
+    const operationIds = await Promise.all(
+      Array.from({ length: 6 }, (_unused, index) =>
+        createEnvironment(harness, combinationA.id, `req-c${String(index)}`, `concurrent-${String(index)}`),
+      ),
+    );
+    const settled = await Promise.all(
+      operationIds.map((operationId) => harness.managed.waitForOperation(operationId)),
+    );
+    expect(settled.every((snapshot) => snapshot.status === 'succeeded')).toBe(true);
+    const list = harness.dispatch('environments.list', {});
+    if (list.ok) {
+      expect(list.value).toHaveLength(6);
+    }
+    // The content-addressed cache holds exactly the two verified entries and no
+    // staging leftovers; ordering-independent, digest-checked.
+    const cacheFiles = listFilesRecursively(join(resolveLayout(harness.dataRoot).artifacts));
+    expect(cacheFiles).toHaveLength(2);
+    const digests = cacheFiles.map((file) =>
+      createHash('sha256').update(readFileSync(file)).digest('hex'),
+    );
+    expect(new Set(digests)).toEqual(new Set([sha256(nodeA), sha256(dshA)]));
+    expect(listFilesRecursively(join(resolveLayout(harness.dataRoot).tmp))).toHaveLength(0);
     await harness.managed.close();
   });
 
@@ -470,6 +518,78 @@ describe('journal recovery', () => {
     if (cancelled.ok) {
       expect(cancelled.value.status).toBe('cancelled');
     }
+    await harness.managed.close();
+  });
+
+  it('does not roll back a create that is still in flight in this process', async () => {
+    const dataRoot = freshRoot('hdsl-inflight-');
+    let release: (() => void) | undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const runtime = {
+      resolveComposition,
+      compositionDigest: computeCompositionDigest,
+      install: async () => {
+        await gate;
+        return portFail('DOWNLOAD_FAILED' as const, 'released by the test');
+      },
+    };
+    const managed = await createManagedInstall({
+      dataRoot,
+      catalog: [combinationA],
+      runtime,
+      fixtures: { allowArtifactsOnly: true },
+    });
+    const contract = createContractRuntime({ port: managed.port });
+    const created = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'environments.create',
+      input: { requestId: 'req-live', name: 'live', catalogCombinationId: combinationA.id },
+    });
+    expect(created.ok).toBe(true);
+    const operationId = created.ok ? (created.value as { operationId: string }).operationId : '';
+
+    // The install is deliberately blocked, so the operation is live when
+    // recover() runs; recovery must leave it and its journal alone.
+    const report = managed.recover();
+    expect(report.reconciled).toBe(0);
+    const running = managed.service.findOperation(operationId);
+    expect(running.ok).toBe(true);
+    if (running.ok) {
+      expect(running.value.status).toBe('running');
+    }
+    expect(readdirSync(resolveLayout(dataRoot).transactions)).toHaveLength(1);
+
+    release?.();
+    const settled = await managed.waitForOperation(operationId);
+    expect(settled.status).toBe('failed');
+    expect(settled.error?.code).toBe('DOWNLOAD_FAILED');
+    await managed.close();
+  });
+
+  it('fails an environment stuck in creating with no journal or operation', async () => {
+    const dataRoot = freshRoot('hdsl-orphan-');
+    const harness = await buildHarness({ catalog: [combinationA], dataRoot });
+    const layout = resolveLayout(dataRoot);
+    const store = new EnvironmentStore(layout);
+    const now = new Date().toISOString();
+    const orphanId = 'env-orphancreating0';
+    store.write({
+      schemaVersion: '1',
+      id: orphanId,
+      name: 'orphan',
+      revision: 0,
+      stateVersion: 1,
+      state: 'creating',
+      activeGenerationId: null,
+      compositionDigest: null,
+      createdAt: now,
+      updatedAt: now,
+    });
+    const report = harness.managed.recover();
+    expect(report.details.some((detail) => detail.environmentId === orphanId)).toBe(true);
+    expect(store.read(orphanId)?.state).toBe('error');
     await harness.managed.close();
   });
 });

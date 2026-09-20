@@ -101,6 +101,20 @@ export const readTextFile = (path: string): string | undefined => {
   }
 };
 
+/**
+ * Tolerant JSON read: a missing **or torn** record reads as `undefined`.
+ *
+ * Store `list()`/`recover()` must not fail wholesale because one record was
+ * caught mid-write or corrupted; callers treat it as absent.
+ */
+export const tryReadJsonFile = <T>(path: string): T | undefined => {
+  try {
+    return readJsonFile<T>(path);
+  } catch {
+    return undefined;
+  }
+};
+
 export const removePath = (path: string): void => {
   rmSync(path, { recursive: true, force: true });
 };

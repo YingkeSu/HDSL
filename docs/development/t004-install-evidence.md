@@ -105,6 +105,35 @@ const api = createContractRuntime({ port }); // 只走 dispatch
 - 操作 phase：`queued → downloading → extracting → installing-dependencies → preflight → committing → succeeded|failed`。
 - `recover()` 返回 `{ reconciled, finalized, rolledBack, details }`。
 
+## 评审反馈处理（reviewer hdsl-5 对 9fb42d2 的 CHANGES_REQUESTED）
+
+P1（issue #37）已按修复不变量重做：
+
+- 每次尝试使用 `randomUUID()` 后缀的私有 staging；并发尝试不共享可写文件。
+- 发布前复算 staging 的 sha256；发布用原子 `rename`。
+- 目标已存在时先校验：有效则复用并丢弃本次 staging；无效则原子替换；`ENOENT` 重建目录重试一次，`EEXIST`/`EPERM`/`EACCES`/`ENOTEMPTY` 竞态再校验后复用或显式失败。
+- 失败清理只删本次尝试的 staging，不删/截断他人或已发布缓存。
+- 回归：`tests/install/concurrency.test.ts`（8 并发同组合全部 ok、缓存恰 2 个有效条目、无 `.part`；损坏缓存原子替换；失败尝试不删已发布条目），`tests/core/creation.test.ts` 6 并发 create 全部成功。
+
+非阻断备注处理：
+
+| 备注 | 处理 |
+| --- | --- |
+| P2-1 无跨进程/dataRoot 独占锁 | **未修**，记录为 M1 单进程限制；dataRoot 级锁归 T005 `reconcile/**`（见下） |
+| P2-2 `recover()` 可能回滚在途创建 | **已修**：journal 循环跳过 `#controllers` 中活跃的 operation；新增在途 recover 回归测试 |
+| P2-3 pax/GNU 元数据头无上限 | **已修**：`maxMetadataBytes`（默认 1 MiB）+ 测试 |
+| P3-1 `#commit` 对 manifest 绑定校验偏薄 | **已修**：校验 `compositionDigest`、node/dsh sha256 与版本、`closure.installed` |
+| P3-2 torn JSON 使整表崩溃 | **已修**：store `read/list` 使用 `tryReadJsonFile`，损坏/撕裂记录按缺失跳过 |
+| P3-3 environment 已写、journal 未写的崩溃窗口 | **已修**：`recover()` 扫描无 journal/活跃 operation 的 `creating` 环境并转 `error`，含测试 |
+| P3-4 catalog 资产不在 `files` | **已修**：`packages/runtime/package.json` `files: ["dist", "catalog"]`；真正打包/发布仍归 T007/M4 验证 |
+| P3-5 `runCommand` 只杀直接子进程 | **未修**，进程树治理归 T005；安装阶段 npm 子进程残留待 T005 统一覆盖 |
+| P3-6 合成测试 HOME 断言弱 | **已修**：合成测试改为 `~/.dsh` 目录清单独照前后比对 |
+
+## M1 单进程 / 恢复入口限制（如实陈述）
+
+- `EnvironmentService` 是**单进程、单实例**假设：没有 dataRoot 级跨进程锁，两个实例/两进程对同一 dataRoot 并发写 `environment.json` 是 last-writer-wins。当前 MR 的并发安全只覆盖“同一实例内的并发 create”，不声称跨进程安全。
+- `recover()` 是**重启后、开始新工作前**的入口：现在会跳过本进程仍在途的 operation，但同一 dataRoot 上“另一进程正在写”的情形仍无锁保护。该锁与进程树治理归 T005，未在本任务实现。
+
 ## 未测 / 缺口
 
 - **Windows x64 未测**（无实机）；catalog 不含 win32 组合，平台不匹配是 `UNSUPPORTED_COMBINATION`。
@@ -112,3 +141,4 @@ const api = createContractRuntime({ port }); // 只走 dispatch
 - `--ignore-scripts` 下未发现 DSH 闭包需要构建的原生依赖；若将来某个版本需要构建，会作为单独问题报告。
 - 磁盘不足只用了注入守卫与 `ENOSPC→DISK_FULL` 映射；未在真实写满卷上复现（QA #31 的 tiny-volume 方案可覆盖）。
 - 摘要跨平台“相同语义”只证明算法平台无关（golden 摘要由独立 `shasum` 复算），未在第二平台实测。
+- 跨进程/dataRoot 锁与安装阶段子进程树终止未实现（见上）。

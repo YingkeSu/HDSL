@@ -13,7 +13,7 @@ import type {
   OperationStatus,
 } from '@hdsl/contracts';
 import { OPAQUE_ID_PATTERN } from '@hdsl/contracts';
-import { readJsonFile, readDirectoryNames, writeJsonAtomic } from './fsx.js';
+import { tryReadJsonFile, readDirectoryNames, writeJsonAtomic } from './fsx.js';
 import { operationRecordPath, type AppDataLayout } from './layout.js';
 
 export interface OperationRecord {
@@ -78,7 +78,7 @@ export class OperationStore {
     if (!OPAQUE_ID_PATTERN.test(operationId)) {
       return undefined;
     }
-    return readJsonFile<OperationRecord>(operationRecordPath(this.#layout, operationId));
+    return tryReadJsonFile<OperationRecord>(operationRecordPath(this.#layout, operationId));
   }
 
   list(): OperationRecord[] {
