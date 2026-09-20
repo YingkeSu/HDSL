@@ -19,10 +19,19 @@ export interface ReadyEndpoint {
   readonly port: number;
 }
 
+/**
+ * The verified ready target: the token-free origin plus the process-scoped
+ * bootstrap URL that carries the upstream WebUI grant token. The bootstrap URL
+ * is a secret (ADR 0002) and must never be persisted or exposed outside the
+ * main process that opens it.
+ */
+export interface ReadyTarget extends ReadyEndpoint {
+  readonly bootstrapUrl: string;
+}
+
 const READY_LINE_PATTERN = /dsh web:\s+(https?:\/\/[^\s]+)/;
 
-/** Parses the upstream ready line into a canonical, token-free loopback origin. */
-export const parseReadyEndpoint = (output: string): ReadyEndpoint | undefined => {
+const parseTarget = (output: string): ReadyTarget | undefined => {
   const match = READY_LINE_PATTERN.exec(output);
   if (match === null) {
     return undefined;
@@ -48,8 +57,22 @@ export const parseReadyEndpoint = (output: string): ReadyEndpoint | undefined =>
   if (!isLoopbackOrigin(origin)) {
     return undefined;
   }
-  return { origin, host, port };
+  return { origin, host, port, bootstrapUrl: url.toString() };
 };
+
+/** Parses the upstream ready line into a canonical, token-free loopback origin. */
+export const parseReadyEndpoint = (output: string): ReadyEndpoint | undefined => {
+  const target = parseTarget(output);
+  return target === undefined
+    ? undefined
+    : { origin: target.origin, host: target.host, port: target.port };
+};
+
+/**
+ * Parses the ready line including the bootstrap URL. Only the runtime's
+ * main-only bootstrap path may consume the returned URL.
+ */
+export const parseReadyTarget = (output: string): ReadyTarget | undefined => parseTarget(output);
 
 /** Canonical loopback origin for a verified endpoint (no token/query). */
 export const isManagedLoopbackOrigin = (origin: string): boolean => isLoopbackOrigin(origin);
