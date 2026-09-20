@@ -24,7 +24,7 @@ import {
   type LaunchRecordStore,
   type ProcessLaunchRecord,
 } from '../process/records.js';
-import { identityIsGone, verifyIdentity } from '../process/ownership.js';
+import { findOwnedProcesses, identityIsGone, verifyIdentity } from '../process/ownership.js';
 import type { ProcessProbe } from '../process/probe.js';
 import { probeLoopbackTcp } from '../process/readiness.js';
 import { killProcessTreeSync, signalProcessTree, waitForProcessExit } from '../process/tree.js';
@@ -72,21 +72,19 @@ const reconcileLaunch = async (
 
   if (identity === null) {
     // The instance crashed between writing the intent and recording an
-    // identity. The unique DSH entrypoint path still identifies our process.
-    const candidates = options.probe
-      .findIdsByCommandFragment(record.commandFragment)
-      .filter((pid) => pid !== process.pid);
+    // identity. The unique generation directory still identifies our process;
+    // a shared command fragment alone is never enough.
+    const candidates = findOwnedProcesses(
+      options.probe,
+      record.commandFragment,
+      record.generationDirectory,
+    );
     if (candidates.length === 0) {
       options.launches.write(transition(record, 'stopped'));
       return { environmentId, resolution: 'no-process' };
     }
     let stopped = true;
-    for (const pid of candidates) {
-      const info = options.probe.inspect(pid);
-      if (info === undefined) {
-        stopped = false;
-        continue;
-      }
+    for (const info of candidates) {
       stopped = (await stopOwnedTree(options, info.pid, info.pgid)) && stopped;
     }
     options.launches.write(transition(record, stopped ? 'stopped' : 'unverifiable'));

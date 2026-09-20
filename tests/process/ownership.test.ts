@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createPosixProcessProbe, verifyIdentity } from '@hdsl/runtime';
+import { createPosixProcessProbe, findOwnedProcesses, verifyIdentity } from '@hdsl/runtime';
 import type { ProcessIdentity, ProcessProbe } from '@hdsl/runtime';
 
 const identityFor = (overrides: Partial<ProcessIdentity> = {}): ProcessIdentity => ({
@@ -89,6 +89,31 @@ describe('process ownership verification', () => {
     expect(verdict.alive).toBe(true);
     expect(verdict.owned).toBe(false);
     expect(verdict.reason).toBe('unverifiable');
+  });
+});
+
+describe('identity-free candidate scan', () => {
+  const probeWith = (command: string, pids: readonly number[]): ProcessProbe => ({
+    inspect: (pid) => ({ pid, pgid: pid, startToken: 'token', command }),
+    scan: () => [],
+    findIdsByCommandFragment: () => pids,
+  });
+
+  it('never matches a shared command fragment without this generation directory', () => {
+    const probe = probeWith('node /shared/fake-dsh.mjs web', [4242]);
+    expect(
+      findOwnedProcesses(probe, '/shared/fake-dsh.mjs', '/data/envA/generations/genA'),
+    ).toEqual([]);
+  });
+
+  it('matches when both the fragment and the generation directory are present', () => {
+    const probe = probeWith('node /data/envA/generations/genA/fake-dsh.mjs web', [4242]);
+    const found = findOwnedProcesses(
+      probe,
+      '/data/envA/generations/genA/fake-dsh.mjs',
+      '/data/envA/generations/genA',
+    );
+    expect(found.map((info) => info.pid)).toEqual([4242]);
   });
 });
 

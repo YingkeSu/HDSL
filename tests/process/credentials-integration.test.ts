@@ -7,7 +7,7 @@
  * the spawn on success, isolation rejection, spawn error and cancellation.
  * The OS provider is an in-test double so no real secret is touched.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -54,6 +54,10 @@ const buildFixture = async (mode = 'never-ready'): Promise<InteropFixture> => {
     mkdirSync(directory, { recursive: true });
   }
   const infoFile = join(dataRoot, 'fake-dsh-info.json');
+  // Unique fixture copy per environment: an identity-free ownership scan must
+  // never match a concurrent test's process that merely shares the script path.
+  const localFakeDsh = join(generationDirectory, 'fake-dsh.mjs');
+  copyFileSync(FAKE_DSH_PATH, localFakeDsh);
 
   const provider: OsCredentialProvider = {
     store: 'keychain',
@@ -117,7 +121,7 @@ const buildFixture = async (mode = 'never-ready'): Promise<InteropFixture> => {
       configDirectory,
       dataDirectory,
       nodeExecutable: process.execPath,
-      dshEntrypoint: FAKE_DSH_PATH,
+      dshEntrypoint: localFakeDsh,
       installMode: 'npm-ci',
       signal: new AbortController().signal,
       ...overrides,

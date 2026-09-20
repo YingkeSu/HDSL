@@ -29,7 +29,7 @@ import {
   type OpenWebUIResult,
   type PortOutcome,
 } from '@hdsl/contracts';
-import { identityIsGone, verifyIdentity } from './ownership.js';
+import { findOwnedProcesses, identityIsGone, verifyIdentity } from './ownership.js';
 import { createPosixProcessProbe } from './probe.js';
 import {
   LaunchRecordStore,
@@ -561,20 +561,17 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     }
     const identity = record.identity;
     if (identity === null) {
-      const candidates = probe
-        .findIdsByCommandFragment(record.commandFragment)
-        .filter((pid) => pid !== process.pid);
+      const candidates = findOwnedProcesses(
+        probe,
+        record.commandFragment,
+        record.generationDirectory,
+      );
       if (candidates.length === 0) {
         launches.write(patch(record, { state: 'stopped' }));
         return portOk({ wasRunning: false });
       }
       let exitedAll = true;
-      for (const pid of candidates) {
-        const info = probe.inspect(pid);
-        if (info === undefined) {
-          exitedAll = false;
-          continue;
-        }
+      for (const info of candidates) {
         exitedAll = (await terminate(info.pid, info.pgid, signal)) && exitedAll;
       }
       launches.write(patch(record, { state: exitedAll ? 'stopped' : 'unverifiable' }));
@@ -661,15 +658,12 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     for (const record of launches.list()) {
       const identity = record.identity;
       if (identity === null) {
-        const candidates = probe
-          .findIdsByCommandFragment(record.commandFragment)
-          .filter((pid) => pid !== process.pid);
-        for (const pid of candidates) {
-          const info = probe.inspect(pid);
-          if (info === undefined) {
-            failures.push('an installation process identity could not be verified');
-            continue;
-          }
+        const candidates = findOwnedProcesses(
+          probe,
+          record.commandFragment,
+          record.generationDirectory,
+        );
+        for (const info of candidates) {
           if (!(await terminate(info.pid, info.pgid))) {
             failures.push('an installation process did not exit');
           }

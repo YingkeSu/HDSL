@@ -159,12 +159,25 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
 - 停止后 `isProcessAlive(pid) === false`，凭据 `dispose()` 调用 1 次。
 - 同一时刻机器上存在一个**不属于本任务**的 DSH 进程（相对路径 `node_modules/@deepseek-ai/dsh/lib/bin.js`，启动于本会话前、pgid 不同）；本实现未对其发出任何信号。这是「只终止自有进程」的旁证。
 
+## CI 回归根因与修复（Ubuntu）
+
+现象：工程 CI 在 `tests/process/lifecycle.test.ts` 的 “terminates the whole tree … START_TIMEOUT” 得到 `PROCESS_EXITED`（约 1.1s 退出，早于 2s 就绪超时）。macOS 本机 8 次重复均通过。
+
+根因（已在本地以确定性单测与集成场景复现）：身份未捕获（`identity === null`）的清理路径只按 `commandFragment` 广播匹配进程。多个测试文件共享同一 `fake-dsh.mjs` 路径，且 vitest 默认跨文件并行；另一个文件的 `close()`（例如 “spawn itself fails” 后清理）会把正在等待超时的 `never-ready` 子进程当作自己的残留杀掉，于是本应 `START_TIMEOUT` 的用例看到子进程提前退出。生产路径本不会冲突（DSH entrypoint 位于每个 environment/generation 的独立目录），但这是真实的广义所有权漏洞，不能只改测试期望。
+
+修复：
+
+- 生产：`findOwnedProcesses(probe, commandFragment, generationDirectory)` 要求候选进程命令行同时包含该记录唯一的 generation 目录；`manager.stop/close` 与 `reconcile` 身份未捕获路径均改用该函数。仅共享可执行路径不再足够。
+- 测试：每个 harness 把夹具复制到自己的 generation 目录（`<gen>/fake-dsh.mjs`），`commandFragment` 天然唯一。
+- 回归：`tests/process/ownership.test.ts` 的 “identity-free candidate scan”（同 fragment、不同 generation 目录必须不匹配）与 `tests/process/lifecycle.test.ts` 的 “never kills a process that only shares the command fragment …” 锁定该行为。
+
 ## 未测 / 缺口
 
 - **Windows x64 未测**：`process/**` 使用 POSIX 进程组与 `ps`；`createPosixProcessProbe` 未在 Windows 验证，`detached` 语义不同。未声称支持。
 - **Linux 未实机验收**：CI（ubuntu）只跑 typecheck/build/unit；进程组与 `ps` 在 Linux 可用，但真实 DSH 启停未在 Linux 留证。
 - **跨实例/跨进程 dataRoot 锁**：归 #43（core）；本模块只注入并不自定锁。锁设计仍在审核（目录主锁 + TCP loopback guard），本文件不把该设计当作已安全。
 - **core 整合未完成**：`EnvironmentService` 尚未注入本端口（#43 分支）。凭据适配器（#44，#46 merge `ead40c1`）已接入并由 runtime 根 index 导出。
+- **生产 `service#account` 强制**：未闭合。建议单一 owner：凭据（#44）在其 `createLaunchCredentialPort` 生产路径上要求 `parseKeychainKey(reference.key).account` 非空（测试显式 opt-out），而不是把约束留在 loader 文档；loader（核心/组合根）只负责提供引用。详细方案见本文件对应 PR 评论与发给 #43/#44 的协调消息。
 - **adopted 后 openWebUI 的存活复核**：采用 loopback TCP 可达 + 身份匹配；未覆盖 DSH 进程存活但 HTTP 层挂起的场景（会落到 reconcile 的停止路径）。
 - **子进程 stdout/stderr 不落盘**：因此没有 DSH 启动诊断文件；T006 的诊断导出需另行设计（不在本切片）。
 - 未在真实“启动后取消”与“就绪后立即停止”的时序上做穷尽并发压测；关键分支由确定性门控覆盖，无 `skip`/`it.fails` 冒充。

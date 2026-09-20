@@ -7,12 +7,14 @@
  * the opt-in evidence test.
  */
 import { createServer, type Server } from 'node:net';
+import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { isProcessAlive } from '@hdsl/runtime';
+import { createPosixProcessProbe, isProcessAlive } from '@hdsl/runtime';
 import type { ProcessExitEvent } from '@hdsl/runtime';
 import {
   createHarness,
+  FAKE_DSH_PATH,
   launchFixture,
   spawnDetachedProcess,
   waitFor,
@@ -289,6 +291,49 @@ describe('managed DSH stop', () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.code).toBe('INTERNAL_ERROR');
+    }
+  });
+
+  it('never kills a process that only shares the command fragment but not the generation directory', async () => {
+    const h = await open();
+    // A live process whose command line contains the shared fixture path but
+    // not this environment's generation directory.
+    const shared = spawn(
+      process.execPath,
+      [FAKE_DSH_PATH, 'web', '--no-open', '--host', '127.0.0.1', '--port', '0'],
+      {
+        env: { PATH: process.env['PATH'] ?? '/usr/bin:/bin', FAKE_DSH_MODE: 'never-ready' },
+        detached: true,
+        stdio: 'ignore',
+      },
+    );
+    const sharedPid = shared.pid;
+    shared.unref();
+    if (sharedPid === undefined) {
+      throw new Error('failed to spawn the shared fixture');
+    }
+    const probe = createPosixProcessProbe();
+    await waitFor(() => probe.inspect(sharedPid) !== undefined);
+    try {
+      // An identity-free record for a different generation directory.
+      writeLaunchRecord(
+        h.dataRoot,
+        launchFixture(h.dataRoot, h.environmentId, {
+          state: 'spawning',
+          identity: null,
+          commandFragment: FAKE_DSH_PATH,
+          generationDirectory: h.generationDirectory,
+        }),
+      );
+      const closed = await h.manager.close();
+      expect(closed.ok).toBe(true);
+      expect(isProcessAlive(sharedPid)).toBe(true);
+    } finally {
+      try {
+        process.kill(sharedPid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
     }
   });
 });

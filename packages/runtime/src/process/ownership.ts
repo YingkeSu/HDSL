@@ -7,7 +7,7 @@
  * that proof is unavailable the process is never signalled (`unverifiable`).
  */
 import { isProcessAlive } from './tree.js';
-import type { ProcessProbe } from './probe.js';
+import type { ProcessInfo, ProcessProbe } from './probe.js';
 import type { ProcessIdentity } from './records.js';
 
 export type OwnershipReason =
@@ -59,3 +59,30 @@ export const verifyIdentity = (
  */
 export const identityIsGone = (verdict: OwnershipVerdict): boolean =>
   !verdict.alive || verdict.reason === 'pid-reused';
+
+/**
+ * Finds live processes that match a launch record whose identity was never
+ * captured (a crash between spawn and record write).
+ *
+ * Matching only the command fragment is not enough: a fixture — or any future
+ * shared entrypoint — can reuse it, and two concurrent environments must never
+ * signal each other. The candidate must also carry the record's unique
+ * generation directory in its command line.
+ */
+export const findOwnedProcesses = (
+  probe: ProcessProbe,
+  commandFragment: string,
+  generationDirectory: string,
+): readonly ProcessInfo[] => {
+  const found: ProcessInfo[] = [];
+  for (const pid of probe.findIdsByCommandFragment(commandFragment)) {
+    if (pid === process.pid) {
+      continue;
+    }
+    const info = probe.inspect(pid);
+    if (info !== undefined && info.command.includes(generationDirectory)) {
+      found.push(info);
+    }
+  }
+  return found;
+};

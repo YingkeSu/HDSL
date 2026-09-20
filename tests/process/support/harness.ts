@@ -8,7 +8,7 @@
  * `real-process.evidence.test.ts` covers the real DSH + adapter path.
  */
 import { spawn } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -92,6 +92,12 @@ export const createHarness = async (options: HarnessOptions = {}): Promise<Harne
     mkdirSync(directory, { recursive: true });
   }
   const infoFile = join(dataRoot, 'fake-dsh-info.json');
+  // Each harness gets its own copy under the generation directory so the launch
+  // record's command fragment is unique to this environment. A shared fixture
+  // path would let one environment's identity-free cleanup scan match another
+  // environment's live process.
+  const localFakeDsh = join(generationDirectory, 'fake-dsh.mjs');
+  copyFileSync(FAKE_DSH_PATH, localFakeDsh);
 
   const mode = options.mode ?? 'ready';
   const credential = options.credential ?? 'canary-model-key';
@@ -144,7 +150,7 @@ export const createHarness = async (options: HarnessOptions = {}): Promise<Harne
     configDirectory,
     dataDirectory,
     nodeExecutable: process.execPath,
-    dshEntrypoint: FAKE_DSH_PATH,
+    dshEntrypoint: localFakeDsh,
     installMode: 'npm-ci',
     signal: new AbortController().signal,
     ...overrides,
