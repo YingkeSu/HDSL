@@ -18,12 +18,12 @@
  * Run: `pnpm vitest run tests/acceptance/contracts`
  *
  * Two sections:
- * - `frozen behavior` — cases the contract text pins down and that currently
- *   pass; they guard against regressions.
- * - `deviation (expected fail)` — `it.fails` cases that document a reproducible
- *   mismatch with the contract text. They are green while the deviation
- *   exists and turn red once it is fixed, so the fix must promote the case to
- *   the frozen section.
+ * - `frozen contract behavior` — behavior the contract pins down and that
+ *   already holds; regression guards.
+ * - `contract expectations not met` — cases that assert the behavior the
+ *   contract requires. They **fail on this SHA on purpose**: the suite must
+ *   never pass *because* a defect exists. Each failing case links its issue
+ *   and must pass unchanged once the fix lands.
  */
 import {
   contractRequest,
@@ -39,6 +39,7 @@ import {
   type ContractPort,
   type ContractResponse,
   type EnvironmentSummary,
+  type IdempotencyRecord,
   type OperationSnapshot,
   type OperationUpdatedEvent,
   type PortOutcome,
@@ -56,6 +57,10 @@ interface Harness {
 /**
  * Builds a runtime over the documented fixture port, with optional per-method
  * overrides that simulate a faulty/controlled downstream port.
+ *
+ * NOTE (issue #31): the harness imports the TEST/FIXTURE port from the package
+ * root today. When the testing subpath is isolated, only this import block
+ * should change.
  */
 const harness = (
   overrides: Partial<ContractPort> = {},
@@ -286,33 +291,59 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
   });
 });
 
-describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
-  it.fails(
-    'issue #22: a guard rejection must not permanently poison the requestId on corrected parameters',
-    () => {
-      const { base, runtime } = harness();
-      const requestId = 'acc-guard-retry';
-      const guard = runtime.dispatch(
-        contractRequest('environments.create', {
-          requestId,
-          name: 'Env',
-          catalogCombinationId: 'combo-missing',
-        }),
-      );
-      expect(errorCode(guard)).toBe('NOT_FOUND');
-      const corrected = runtime.dispatch(
-        contractRequest('environments.create', {
-          requestId,
-          name: 'Env',
-          catalogCombinationId: FIXTURE_IDS.combination.verified,
-        }),
-      );
-      expect(corrected.ok).toBe(true);
-      expect(base.effects.filter((e) => e.startsWith('createEnvironment'))).toHaveLength(1);
-    },
-  );
+describe(`contract expectations not met @ ${API_SHA} (fail until fixed)`, () => {
+  /**
+   * Every case below asserts the behavior the contract text requires. It is
+   * intentionally red on this SHA. Fixes must make the case pass without
+   * weakening the expectation, and must not be "proven" by a green suite that
+   * depends on the defect. Linked issues: #22 #23 #24 #25 #26 #27.
+   */
 
-  it.fails('issue #23: a throwing port must surface as a sanitized INTERNAL_ERROR envelope', () => {
+  it('[#22] a guard rejection must not permanently poison the requestId on corrected parameters', () => {
+    const { base, runtime } = harness();
+    const requestId = 'acc-guard-retry';
+    const guard = runtime.dispatch(
+      contractRequest('environments.create', {
+        requestId,
+        name: 'Env',
+        catalogCombinationId: 'combo-missing',
+      }),
+    );
+    expect(errorCode(guard)).toBe('NOT_FOUND');
+    const corrected = runtime.dispatch(
+      contractRequest('environments.create', {
+        requestId,
+        name: 'Env',
+        catalogCombinationId: FIXTURE_IDS.combination.verified,
+      }),
+    );
+    expect(corrected.ok).toBe(true);
+    expect(base.effects.filter((e) => e.startsWith('createEnvironment'))).toHaveLength(1);
+  });
+
+  it('[#22/idempotency ledger] an unpersisted outcome must not repeat the side effect', () => {
+    // Simulates the crash window: fingerprint is persisted, the executed
+    // outcome is not. The same requestId must not run the effect twice.
+    const store = new Map<string, IdempotencyRecord>();
+    const { base, runtime } = harness({
+      readIdempotency: (id) => store.get(id),
+      writeIdempotency: (id, record) => {
+        if (record.outcome === undefined) {
+          store.set(id, record);
+        }
+      },
+    });
+    const request = contractRequest('environments.create', {
+      requestId: 'acc-crash-window',
+      name: 'Env',
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    });
+    runtime.dispatch(request);
+    runtime.dispatch(request);
+    expect(base.effects.filter((e) => e.startsWith('createEnvironment'))).toHaveLength(1);
+  });
+
+  it('[#23] a throwing port must surface as a sanitized INTERNAL_ERROR envelope', () => {
     const { runtime } = harness({
       findEnvironment: () => {
         throw new Error('port exploded');
@@ -329,7 +360,7 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     expect(containsSecret(JSON.stringify(response), ['port exploded'])).toBe(false);
   });
 
-  it.fails('issue #23: a malformed port outcome must not throw a raw TypeError', () => {
+  it('[#23] a malformed port outcome must not throw a raw TypeError', () => {
     const malformed = { ok: true } as unknown as PortOutcome<EnvironmentSummary>;
     const { runtime } = harness({ findEnvironment: () => malformed });
     const response = runtime.dispatch(
@@ -342,7 +373,7 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     expect(errorCode(response)).toBe('INTERNAL_ERROR');
   });
 
-  it.fails('issue #23: a reused operation sequence must not throw a raw RangeError', () => {
+  it('[#23] a reused operation sequence must not throw a raw RangeError', () => {
     const snapshot: OperationSnapshot = {
       id: FIXTURE_IDS.operation.running,
       environmentId: FIXTURE_IDS.environment.running,
@@ -373,7 +404,7 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     expect(errorCode(second)).toBe('INTERNAL_ERROR');
   });
 
-  it.fails('issue #24: out-of-range loopback ports must be rejected as WEBUI_UNAVAILABLE', () => {
+  it('[#24] out-of-range loopback ports must be rejected as WEBUI_UNAVAILABLE', () => {
     const { runtime } = harness({}, {
       ...FIXTURE_SEED,
       webUIOriginOverride: 'http://127.0.0.1:99999',
@@ -388,7 +419,7 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     expect(errorCode(response)).toBe('WEBUI_UNAVAILABLE');
   });
 
-  it.fails('issue #25: an envelope built from a prototype must not pass validation', () => {
+  it('[#25] an envelope built from a prototype must not pass validation', () => {
     const { runtime } = harness();
     const request: Record<string, unknown> = Object.create({
       apiVersion: '1.0',
@@ -400,7 +431,7 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     expect(errorCode(response)).toBe('INVALID_INPUT');
   });
 
-  it.fails('issue #26: a replayed subscribe after unsubscribe must not return a dead ref', () => {
+  it('[#26] a replayed subscribe after unsubscribe must not return a dead ref', () => {
     const { runtime } = harness();
     const request = contractRequest('operations.subscribe', { requestId: 'acc-sub-replay' });
     const first = runtime.dispatch(request);
@@ -419,7 +450,7 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     expect(replay.ok && live).toBe(true);
   });
 
-  it.fails('issue #27: nested port error messages must not leak secrets or local paths', () => {
+  it('[#27] nested port error messages must not leak secrets or local paths', () => {
     const canary = 'canary-SECRET-9f3a';
     const leaky: OperationSnapshot = {
       id: 'op-leaky',
@@ -441,5 +472,16 @@ describe(`contract boundary deviations (expected fail) @ ${API_SHA}`, () => {
     const response = runtime.dispatch(contractRequest('operations.get', { operationId: 'op-leaky' }));
     expect(response.ok).toBe(true);
     expect(containsSecret(JSON.stringify(response), [canary, '/Users/alice/.dsh'])).toBe(false);
+  });
+
+  it('[catalog.list / review F3] the list must not return unverified combinations', () => {
+    const { runtime } = harness();
+    const response = runtime.dispatch(contractRequest('catalog.list', {}));
+    expect(response.ok).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+    const combinations = response.value as readonly { compatibility: { status: string } }[];
+    expect(combinations.filter((c) => c.compatibility.status !== 'verified')).toEqual([]);
   });
 });

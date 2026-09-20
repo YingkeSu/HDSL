@@ -15,10 +15,10 @@ pnpm vitest run tests/acceptance/contracts
 
 - `frozen contract behavior` — cases the contract text pins down and that pass;
   regression guards.
-- `contract boundary deviations (expected fail)` — `it.fails` cases that
-  reproduce contract/implementation mismatches. They are green while the
-  deviation exists and turn red once fixed, so a fix must promote the case to
-  the frozen section.
+- `contract expectations not met` — cases that assert the behavior the contract
+  requires. They **fail on the baseline SHA on purpose**: the suite must never
+  be green *because* a defect exists. Each case links its issue and must pass
+  unchanged once the fix lands; the expectation must not be weakened.
 
 Deviations are tracked as issues #22–#27; see
 `docs/development/contract-behavior-validation.md` for the full evidence,
