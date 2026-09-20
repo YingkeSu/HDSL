@@ -11,6 +11,7 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -234,12 +235,62 @@ describe('dataRoot lock takeover safety', () => {
     expect(holder.readPublishedLease()?.lockId).toBe('foreign-lock-0002');
   });
 
-  it('fails closed instead of taking over on Windows, which is unverified', async () => {
+  it('refuses the guarded takeover on Windows without claiming the whole lock is disabled', async () => {
     const root = freshRoot();
     writeLease(root, staleLease());
     const lock = newLock(root, { platform: 'win32', probeProcess: () => 'dead' });
     expect(await lock.acquire({ waitTimeoutMs: 150, pollIntervalMs: 20 })).toBe(false);
     expect(lock.readPublishedLease()?.lockId).toBe('stale-lock-0001');
     expect(lock.lastAttempt?.outcome).toBe('unknown');
+    expect(lock.lastAttempt?.reason).toContain('win32');
+  });
+
+  it('marks unverified platforms in the snapshot and attempt reason', async () => {
+    const root = freshRoot();
+    const lock = newLock(root, { platform: 'win32' });
+    expect(await lock.acquire({ waitTimeoutMs: 200 })).toBe(true);
+    const snapshot = lock.snapshot();
+    expect(snapshot.platform).toBe('win32');
+    expect(snapshot.platformVerified).toBe(false);
+    expect(snapshot.lastAttempt?.reason).toContain('unverified platform');
+  });
+
+  it('negative control: a mkdir-then-write variant permits two holders (why publish is atomic)', async () => {
+    const root = freshRoot();
+    const lockDir = lockDirectoryFor(root);
+    const stamp = new Date().toISOString();
+    const lease = (lockId: string): Record<string, unknown> => ({
+      schemaVersion: '1',
+      lockId,
+      instanceId: lockId,
+      pid: process.pid,
+      hostname: hostname(),
+      acquiredAt: stamp,
+      heartbeatAt: stamp,
+    });
+
+    // Test-local WRONG variant (never used by production): create the canonical
+    // directory first, then write `lease.json` in a second step. Between the two
+    // steps the canonical directory is empty, which the crash-reclaim path would
+    // treat as abandoned.
+    mkdirSync(lockDir, { recursive: true }); // "A" mkdir
+    renameSync(lockDir, `${lockDir}.quarantine`); // "B" reclaims the empty dir
+    mkdirSync(lockDir, { recursive: true }); // "B" mkdir
+    writeFileSync(join(lockDir, 'lease.json'), JSON.stringify(lease('B'))); // "B" writes
+    writeFileSync(join(lockDir, 'lease.json'), JSON.stringify(lease('A'))); // "A" writes late
+    const canonical = JSON.parse(readFileSync(join(lockDir, 'lease.json'), 'utf8')) as {
+      lockId: string;
+    };
+    // "B" still believes it holds, yet the canonical lease is "A": two holders.
+    expect(canonical.lockId).toBe('A');
+
+    // The production lock never exposes this window: a complete lease is written
+    // in a private directory and published with one atomic rename, so a live
+    // holder's canonical directory is never empty.
+    rmSync(lockDir, { recursive: true, force: true });
+    rmSync(`${lockDir}.quarantine`, { recursive: true, force: true });
+    const real = newLock(root);
+    expect(await real.acquire({ waitTimeoutMs: 500 })).toBe(true);
+    expect(real.readPublishedLease()?.lockId).toBe(real.lockId);
   });
 });

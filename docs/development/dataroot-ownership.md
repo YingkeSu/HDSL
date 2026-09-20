@@ -68,8 +68,10 @@ OS 原子互斥的 **recovery guard** 内执行：
 
 - **安全依据**：活持有者 pid 存活 → 任何 contender 判 `live` → 永不接管；因此其存活期间
   canonical lease 不会被替换，`assertHeld()` 与实际写之间不存在“他人替换”窗口。
-- `assertHeld()` **不是 CAS**：它只是写前的纵深校验。降低到“活持有者永不被接管”这一条规则
-  才是安全性来源。
+- `assertHeld()` **不是 CAS**：它只是写前的纵深校验。安全性来源是“活持有者永不被接管”这一条规则。
+- 写前重校验的覆盖：`createEnvironment` / `start` / `stop` / `cancelOperation` 入口，以及
+  `#commit`/`#fail` 与 `#runCreate` 的 journal 进度写之前；`#updateOperation` 与环境状态辅助在
+  `!held` 时 no-op。正常竞争下没有可达反例（活持有者永不被接管），这仍是纵深防御。
 - 没有把 epoch 写入每条 business 记录（journal/environment）。本切片接受该边界；若未来放宽
   接管条件（跨主机 / 共享卷），必须在记录中持久化 `ownerLockId` 并在读取时拒绝旧 epoch。
 
@@ -97,8 +99,9 @@ OS 原子互斥的 **recovery guard** 内执行：
 5. **仅当** process close `ok` 才 `await lock.release()` 并回读校验；否则保留锁并返回
    `CloseReport.released=false`，调用方不得把 root 当作可重用。
 
-`CloseReport { released; stoppedProcesses; failure? }`。崩溃遗留进程由下一次 `recover()` 按
-租约 / 进程身份处理，不靠正常 close 放任。
+`CloseReport { released; stoppedProcesses; failure? }`。`stoppedProcesses` 是 close 开始时**在途的
+start/stop operation 数**（core 无法观测 runtime 的 OS 进程数，实际停止的进程数由 runtime 负责）。
+崩溃遗留进程由下一次 `recover()` 按租约 / 进程身份处理，不靠正常 close 放任。
 
 ## 8. 观测接口（供 #45 QA）
 
@@ -108,6 +111,7 @@ OS 原子互斥的 **recovery guard** 内执行：
 - `publishedBy` 与 `publishedLease`：真实 owner 身份（含 `lockId` ABA 凭证）；
 - `lastAttempt`：最近一次获取结果（`outcome`、`reason`、`waitedMs`、`takeover`）；
 - `lastRelease`：释放结果与原因；
+- `platform` / `platformVerified`：平台与是否在实测范围内（未验证平台在 reason 中标注，不声明独占）；
 - `evidence`：`takeover` / `lost` / `restored` 记录。
 
 ## 9. 平台与依赖（F4）
@@ -116,9 +120,25 @@ OS 原子互斥的 **recovery guard** 内执行：
   `@hdsl/core` 仍只依赖 `@hdsl/contracts`，renderer 不导入。
 - macOS ARM64 与 Linux CI：guard 的 TCP 独占、崩溃自动释放、目录 rename 语义已在本仓库
   测试中实证（见 `tests/core`）。
-- **Windows x64：未实证，fail closed**。`win32` 上不做 guarded takeover（返回
-  `unknown`/busy），不声明跨平台支持；需 T008 实机验证 TCP 独占与目录 rename 语义后再启用。
+- **Windows x64：未实证（T008），按实际范围受限**。代码**只在** `#takeoverGuarded` 拒绝 `win32`
+  的 guard 接管（stale 接管返回 `unknown`/busy）；普通 acquire（原子发布）/ release / heartbeat
+  **已实现且可达**，但**未验证**，**不声明** Windows 跨进程独占。这**不等于整个 Windows 锁
+  fail-closed**，也不声明 Windows 支持。可测作用域：`VERIFIED_LOCK_PLATFORMS = ['darwin','linux']`
+  与 `DataRootLockSnapshot.platformVerified`，未验证平台在 attempt reason 中标注
+  `unverified platform`。须 T008 实机核定后再决定按实际范围拒绝或明确受限。
 - 跨主机 / 共享卷 / 容器不支持，必须文档化。
+
+## 11. 覆盖边界（未证范围，避免过度声明）
+
+- **LOCK03（三方交错）**：公开入口测试覆盖「acquire 入口的陈旧观察 → 竞者接管 → 本实例 re-read
+  后让出」；不覆盖“在 guard 内部被强制暂停”的交错（公开 API 没有该暂停点）。未发现可达反例；
+  若审核发现 guard 内部真实可达竞态，再加最小 test-only 暂停点。
+- **LOCK07/08（失锁防御）**：外部覆写 canonical lease 属**异常篡改 / 失锁防御**，不当作正常接管
+  fencing。已证：失锁检测、`lost` 证据、不覆盖/不删除新 owner、失锁后拒绝新受管写。**未证**：
+  检测到失锁前已经开始的在途写会停止（无 per-record epoch）。
+- **LOCK05（close 在途写）**：已证：被 core 跟踪的在途 writer 在 release 之前 settle；
+  `process.close()` 失败保留锁；在此前第二实例无法获取。**未证**：core pending 集合之外的写。
+- 负向对照：F1 的 “mkdir 后写 lease” 变体双持有已作为 test-only 回归例（不维护错误生产实现）。
 
 ## 10. 验收测试映射
 
