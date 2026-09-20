@@ -60,6 +60,8 @@ const writeInfo = (extra = {}) => {
           hasCredential: (process.env.DEEPSEEK_API_KEY ?? '').length > 0,
           home: process.env.HOME ?? null,
           dshHome: process.env.DSH_HOME ?? null,
+          path: process.env.PATH ?? null,
+          tmpdir: process.env.TMPDIR ?? null,
           hostLeak: process.env.__HDSL_HOST_LEAK__ ?? null,
           receivedTerm: false,
         },

@@ -23,13 +23,15 @@
 import { spawn, type ChildProcess } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import {
+  isErrorCode,
   portFail,
   portOk,
   type ErrorCode,
   type OpenWebUIResult,
   type PortOutcome,
 } from '@hdsl/contracts';
-import { findOwnedProcesses, identityIsGone, verifyIdentity } from './ownership.js';
+import { findOwnedProcessesDetailed, identityIsGone, verifyIdentity } from './ownership.js';
+import type { OwnershipVerdict } from './ownership.js';
 import { createPosixProcessProbe } from './probe.js';
 import {
   LaunchRecordStore,
@@ -45,7 +47,12 @@ import {
   probeLoopbackTcp,
   type ReadyEndpoint,
 } from './readiness.js';
-import { delay, killProcessTreeSync, signalProcessTree, waitForProcessExit } from './tree.js';
+import {
+  cleanupLostLeaderTree,
+  readGroupLeftovers,
+  type LeftoverCleanupResult,
+} from './leftovers.js';
+import { delay, isProcessAlive, killProcessTreeSync, signalProcessTree, waitForProcessExit } from './tree.js';
 import { reconcileRuntimeState } from '../reconcile/reconcile.js';
 import type { LaunchCredentialPort, LaunchEnvironmentHandle } from '../credentials/index.js';
 import type {
@@ -91,6 +98,36 @@ const MANAGED_PATH_SUFFIX = '/usr/bin:/bin:/usr/sbin:/sbin';
 const appendBounded = (current: string, chunk: Buffer): string => {
   const next = current + chunk.toString('utf8');
   return next.length > OUTPUT_BUFFER_LIMIT ? next.slice(-OUTPUT_BUFFER_LIMIT) : next;
+};
+
+/** Runtime shape check for the injected credential port result (review P3-2). */
+const isCredentialOutcome = (value: unknown): value is PortOutcome<LaunchEnvironmentHandle> => {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as { readonly ok?: unknown };
+  if (candidate.ok === true) {
+    return Object.prototype.hasOwnProperty.call(value, 'value');
+  }
+  if (candidate.ok === false) {
+    return (
+      Object.prototype.hasOwnProperty.call(value, 'code') &&
+      Object.prototype.hasOwnProperty.call(value, 'message')
+    );
+  }
+  return false;
+};
+
+const isLaunchEnvironmentHandle = (value: unknown): value is LaunchEnvironmentHandle => {
+  if (value === null || typeof value !== 'object') {
+    return false;
+  }
+  const candidate = value as { readonly env?: unknown; readonly dispose?: unknown };
+  return (
+    candidate.env !== null &&
+    typeof candidate.env === 'object' &&
+    typeof candidate.dispose === 'function'
+  );
 };
 
 export const createProcessManager = (options: ProcessManagerOptions): ProcessManager => {
@@ -178,7 +215,10 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
           createdAt: new Date().toISOString(),
         };
       }
-      if (!(await waitForProcessExit(pid, 0))) {
+      // The process dying is a definite failure; a transiently unreadable
+      // living pid (for example `ps` racing the fork) is retried until the
+      // deadline instead of giving up immediately.
+      if (!isProcessAlive(pid)) {
         return undefined;
       }
       if (Date.now() >= deadline) {
@@ -202,6 +242,25 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     killProcessTreeSync({ pid, pgid }, { group: true });
     return waitForProcessExit(pid, confirmMs);
   };
+
+  /**
+   * Resolves the descendant tree of a leader that is no longer owned.
+   *
+   * A `dead` leader means the recorded group was created by our detached child
+   * and may still hold descendants: signal and await it. A reused pid means the
+   * group id may have been reassigned, so nothing is signalled — a surviving
+   * group is reported as unverifiable so `close` can refuse to report success.
+   */
+  const cleanupGoneLeader = async (
+    identity: ProcessIdentity,
+    verdict: OwnershipVerdict,
+  ): Promise<LeftoverCleanupResult> =>
+    cleanupLostLeaderTree({
+      probe,
+      pgid: identity.pgid,
+      leaderReason: verdict.reason,
+      confirmMs,
+    });
 
   const waitForReadiness = (
     child: ChildProcess,
@@ -290,6 +349,10 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       if (expectedPid !== undefined && current.identity?.pid !== expectedPid) {
         return;
       }
+      // Mark the launch stopped. Descendants left in the recorded process group
+      // are resolved by `stop()`, `close()` and `recover()`, which all treat a
+      // stopped record with live group members as unfinished cleanup (and fail
+      // rather than report success when they cannot prove ownership).
       launches.write(
         patch(current, { state: 'stopped', exitCode: code, errorCode: 'PROCESS_EXITED' }),
       );
@@ -383,14 +446,25 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       return failStart(record, 'INTERNAL_ERROR', 'the start was cancelled');
     }
 
-    let resolved: PortOutcome<LaunchEnvironmentHandle>;
+    let resolved: unknown;
     try {
       resolved = await credentials.resolveLaunchEnvironment(request.environmentId);
     } catch {
       return failStart(record, 'INTERNAL_ERROR', 'managed credential resolution failed');
     }
+    // The port is injected by the composition root, so its runtime shape is
+    // validated before any field is trusted; a malformed result becomes a
+    // controlled INTERNAL_ERROR, never an undefined code/message.
+    if (!isCredentialOutcome(resolved)) {
+      return failStart(record, 'INTERNAL_ERROR', 'managed credential resolution returned an invalid result');
+    }
     if (!resolved.ok) {
-      return failStart(record, resolved.code, resolved.message);
+      const code = isErrorCode(resolved.code) ? resolved.code : 'INTERNAL_ERROR';
+      const message =
+        typeof resolved.message === 'string' && resolved.message.length > 0
+          ? resolved.message
+          : 'managed credential resolution failed';
+      return failStart(record, code, message);
     }
 
     // Credential plaintext exists only between resolution and `spawn`. The
@@ -400,6 +474,13 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     // and the local child-environment copy is cleared at the same point. Nothing
     // here is persisted, logged or captured by a long-lived closure.
     const launchEnvironment = resolved.value;
+    if (!isLaunchEnvironmentHandle(launchEnvironment)) {
+      return failStart(
+        record,
+        'INTERNAL_ERROR',
+        'managed credential resolution returned an invalid environment',
+      );
+    }
     let child: ChildProcess | undefined;
     try {
       if (signal.aborted) {
@@ -416,21 +497,22 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         '--port',
         portArgument,
       ];
-      const childEnvironment: Record<string, string> = {
-        ...managedEnvironment(request),
-        ...launchEnvironment.env,
-      };
-      try {
-        const isolationPreserved =
-          childEnvironment['HOME'] === request.homeDirectory &&
-          childEnvironment['DSH_HOME'] === request.homeDirectory;
-        if (!isolationPreserved) {
+      const managed = managedEnvironment(request);
+      // A launch environment may not redirect the managed isolation variables.
+      for (const key of ['HOME', 'DSH_HOME'] as const) {
+        const provided = launchEnvironment.env[key];
+        if (provided !== undefined && provided !== request.homeDirectory) {
           return failStart(
             record,
             'INTERNAL_ERROR',
-            'the launch environment did not preserve the managed HOME isolation',
+            `the launch environment tried to override managed ${key}`,
           );
         }
+      }
+      // Managed variables are authoritative: PATH, TMPDIR, DSH_AGENTS_HOME and
+      // the HOME pair can never be redirected by the injected launch env.
+      const childEnvironment: Record<string, string> = { ...launchEnvironment.env, ...managed };
+      try {
         child = spawn(request.nodeExecutable, args, {
           cwd: request.dataDirectory,
           env: childEnvironment,
@@ -561,17 +643,22 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     }
     const identity = record.identity;
     if (identity === null) {
-      const candidates = findOwnedProcesses(
-        probe,
-        record.commandFragment,
-        record.generationDirectory,
-      );
-      if (candidates.length === 0) {
+      const scan = findOwnedProcessesDetailed(probe, record.commandFragment, record.generationDirectory);
+      if (!scan.ok) {
+        // The scan or a candidate could not be read: nothing was proven, so this
+        // must not be reported as "already stopped".
+        launches.write(patch(record, { state: 'unverifiable' }));
+        return portFail(
+          'INTERNAL_ERROR',
+          'the managed process scan is unavailable; nothing was proven',
+        );
+      }
+      if (scan.processes.length === 0) {
         launches.write(patch(record, { state: 'stopped' }));
         return portOk({ wasRunning: false });
       }
       let exitedAll = true;
-      for (const info of candidates) {
+      for (const info of scan.processes) {
         exitedAll = (await terminate(info.pid, info.pgid, signal)) && exitedAll;
       }
       launches.write(patch(record, { state: exitedAll ? 'stopped' : 'unverifiable' }));
@@ -582,6 +669,14 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
 
     const verdict = verifyIdentity(probe, identity);
     if (identityIsGone(verdict)) {
+      const cleanup = await cleanupGoneLeader(identity, verdict);
+      if (!cleanup.ok) {
+        launches.write(patch(record, { state: 'unverifiable' }));
+        return portFail(
+          'INTERNAL_ERROR',
+          'the managed process tree could not be confirmed exited',
+        );
+      }
       launches.write(patch(record, { state: 'stopped' }));
       return portOk({ wasRunning: false, pid: identity.pid });
     }
@@ -658,28 +753,39 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     for (const record of launches.list()) {
       const identity = record.identity;
       if (identity === null) {
-        const candidates = findOwnedProcesses(
-          probe,
-          record.commandFragment,
-          record.generationDirectory,
-        );
-        for (const info of candidates) {
+        const scan = findOwnedProcessesDetailed(probe, record.commandFragment, record.generationDirectory);
+        if (!scan.ok) {
+          failures.push('a managed process scan was unavailable');
+          continue;
+        }
+        for (const info of scan.processes) {
           if (!(await terminate(info.pid, info.pgid))) {
-            failures.push('an installation process did not exit');
+            failures.push('a managed process did not exit');
           }
         }
         continue;
       }
       const verdict = verifyIdentity(probe, identity);
-      if (identityIsGone(verdict)) {
-        continue;
-      }
-      if (!verdict.owned) {
+      if (verdict.owned) {
+        if (!(await terminate(identity.pid, identity.pgid))) {
+          failures.push('a managed process did not exit');
+          continue;
+        }
+      } else if (!verdict.alive) {
+        const cleanup = await cleanupGoneLeader(identity, verdict);
+        if (!cleanup.ok) {
+          failures.push('a managed process tree could not be confirmed exited');
+          continue;
+        }
+      } else {
         failures.push('a managed process identity could not be verified');
         continue;
       }
-      if (!(await terminate(identity.pid, identity.pgid))) {
-        failures.push('a managed process did not exit');
+      // A successful close means no own descendant remains in the recorded
+      // group; a scan failure or a live member is a failure, never success.
+      const leftovers = readGroupLeftovers(probe, identity.pgid);
+      if (leftovers === undefined || leftovers.length > 0) {
+        failures.push('a managed process group still has live members');
         continue;
       }
       const current = launches.read(record.environmentId);

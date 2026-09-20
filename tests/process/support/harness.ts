@@ -62,6 +62,10 @@ export interface HarnessOptions {
   readonly isRecoveryPermitted?: () => boolean;
   readonly onProcessExit?: (event: ProcessExitEvent) => void;
   readonly probe?: ProcessProbe;
+  /** Extra variables the credential stub injects into the launch env. */
+  readonly envOverrides?: Readonly<Record<string, string>>;
+  /** Raw (possibly malformed) value the credential stub returns, for shape tests. */
+  readonly credentialRaw?: unknown;
 }
 
 export interface Harness {
@@ -104,6 +108,9 @@ export const createHarness = async (options: HarnessOptions = {}): Promise<Harne
   let credentialDisposals = 0;
   const credentials: LaunchCredentialPort = {
     resolveLaunchEnvironment: async (): Promise<PortOutcome<LaunchEnvironmentHandle>> => {
+      if (options.credentialRaw !== undefined) {
+        return options.credentialRaw as PortOutcome<LaunchEnvironmentHandle>;
+      }
       if (credential === false) {
         return portFail('INTERNAL_ERROR', 'no managed credential reference is configured');
       }
@@ -111,6 +118,7 @@ export const createHarness = async (options: HarnessOptions = {}): Promise<Harne
         DEEPSEEK_API_KEY: credential,
         FAKE_DSH_MODE: mode,
         FAKE_DSH_INFO_FILE: infoFile,
+        ...options.envOverrides,
       };
       if (options.exitAfterReadyMs !== undefined) {
         extra['FAKE_DSH_EXIT_AFTER_READY_MS'] = String(options.exitAfterReadyMs);

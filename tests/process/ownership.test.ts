@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createPosixProcessProbe, findOwnedProcesses, verifyIdentity } from '@hdsl/runtime';
+import { createPosixProcessProbe, findOwnedProcesses, findOwnedProcessesDetailed, verifyIdentity } from '@hdsl/runtime';
 import type { ProcessIdentity, ProcessProbe } from '@hdsl/runtime';
 
 const identityFor = (overrides: Partial<ProcessIdentity> = {}): ProcessIdentity => ({
@@ -20,6 +20,8 @@ const probeReturning = (value: {
   inspect: (pid) => (pid === value.pid ? value : undefined),
   scan: () => [],
   findIdsByCommandFragment: () => [],
+  tryFindIdsByCommandFragment: () => [],
+  listProcessGroup: () => [],
 });
 
 describe('process ownership verification', () => {
@@ -84,6 +86,8 @@ describe('process ownership verification', () => {
       inspect: () => undefined,
       scan: () => [],
       findIdsByCommandFragment: () => [],
+      tryFindIdsByCommandFragment: () => [],
+      listProcessGroup: () => [],
     };
     const verdict = verifyIdentity(probe, identity);
     expect(verdict.alive).toBe(true);
@@ -97,6 +101,8 @@ describe('identity-free candidate scan', () => {
     inspect: (pid) => ({ pid, pgid: pid, startToken: 'token', command }),
     scan: () => [],
     findIdsByCommandFragment: () => pids,
+    tryFindIdsByCommandFragment: () => pids,
+    listProcessGroup: () => [],
   });
 
   it('never matches a shared command fragment without this generation directory', () => {
@@ -114,6 +120,25 @@ describe('identity-free candidate scan', () => {
       '/data/envA/generations/genA',
     );
     expect(found.map((info) => info.pid)).toEqual([4242]);
+  });
+
+  it('reports an unavailable scan instead of an empty one', () => {
+    const probe: ProcessProbe = {
+      inspect: () => undefined,
+      scan: () => [],
+      findIdsByCommandFragment: () => [],
+      tryFindIdsByCommandFragment: () => undefined,
+      listProcessGroup: () => undefined,
+    };
+    const scan = findOwnedProcessesDetailed(
+      probe,
+      '/shared/fake-dsh.mjs',
+      '/data/envA/generations/genA',
+    );
+    expect(scan.ok).toBe(false);
+    if (!scan.ok) {
+      expect(scan.reason).toBe('scan-failed');
+    }
   });
 });
 

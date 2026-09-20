@@ -11,7 +11,7 @@ import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPosixProcessProbe, isProcessAlive } from '@hdsl/runtime';
-import type { ProcessExitEvent } from '@hdsl/runtime';
+import type { ProcessExitEvent, ProcessProbe } from '@hdsl/runtime';
 import {
   createHarness,
   FAKE_DSH_PATH,
@@ -214,6 +214,8 @@ describe('managed DSH start', () => {
         inspect: () => undefined,
         scan: () => [],
         findIdsByCommandFragment: () => [],
+        tryFindIdsByCommandFragment: () => [],
+        listProcessGroup: () => [],
       },
     });
     const sleeper = await spawnDetachedProcess();
@@ -375,6 +377,8 @@ describe('unexpected exit and close', () => {
         inspect: () => undefined,
         scan: () => [],
         findIdsByCommandFragment: () => [],
+        tryFindIdsByCommandFragment: () => [],
+        listProcessGroup: () => [],
       },
     });
     const sleeper = await spawnDetachedProcess();
@@ -395,5 +399,141 @@ describe('unexpected exit and close', () => {
     } finally {
       sleeper.kill();
     }
+  });
+
+  it('cleans up a crashed parent\'s descendants before reporting close success', async () => {
+    const h = await open();
+    const started = await h.manager.start(h.request());
+    expect(started.ok).toBe(true);
+    const info = await h.waitForInfo();
+    const parentPid = Number(info['pid']);
+    const grandchildPid = Number(info['grandchildPid']);
+    expect(isProcessAlive(grandchildPid)).toBe(true);
+
+    // Simulate a crash of the group leader; the grandchild is orphaned in the
+    // recorded process group and survives until close/reconcile resolves it.
+    process.kill(parentPid, 'SIGKILL');
+    await waitFor(() => !isProcessAlive(parentPid));
+    expect(isProcessAlive(grandchildPid)).toBe(true);
+
+    const closed = await h.manager.close();
+    expect(closed.ok).toBe(true);
+    expect(isProcessAlive(grandchildPid)).toBe(false);
+  });
+
+  it('close fails when the recorded process group cannot be scanned', async () => {
+    const h = await open({
+      probe: {
+        inspect: () => undefined,
+        scan: () => [],
+        findIdsByCommandFragment: () => [],
+        tryFindIdsByCommandFragment: () => undefined,
+        listProcessGroup: () => undefined,
+      },
+    });
+    const sleeper = await spawnDetachedProcess();
+    const identity = sleeper.identity;
+    sleeper.kill();
+    await waitFor(() => !sleeper.isAlive());
+    writeLaunchRecord(
+      h.dataRoot,
+      launchFixture(h.dataRoot, h.environmentId, { state: 'running', identity }),
+    );
+    const closed = await h.manager.close();
+    expect(closed.ok).toBe(false);
+  });
+});
+
+describe('scan availability (review P2-1 / issue #55)', () => {
+  it('fails stop and close when the process scan is unavailable', async () => {
+    const h = await open({ probe: createPosixProcessProbe({ psPath: '/nonexistent/ps-hdsl' }) });
+    writeLaunchRecord(
+      h.dataRoot,
+      launchFixture(h.dataRoot, h.environmentId, {
+        state: 'running',
+        identity: null,
+        commandFragment: '/nonexistent/shared-dsh.js',
+        generationDirectory: h.generationDirectory,
+      }),
+    );
+    const stopped = await h.manager.stop(h.request());
+    expect(stopped.ok).toBe(false);
+    if (!stopped.ok) {
+      expect(stopped.code).toBe('INTERNAL_ERROR');
+    }
+    expect(h.manager.readLaunchRecord(h.environmentId)?.state).not.toBe('stopped');
+    const closed = await h.manager.close();
+    expect(closed.ok).toBe(false);
+  });
+
+  it('treats a verified-empty scan as a legitimate successful stop', async () => {
+    const h = await open();
+    writeLaunchRecord(
+      h.dataRoot,
+      launchFixture(h.dataRoot, h.environmentId, {
+        state: 'running',
+        identity: null,
+        commandFragment: join(h.dataRoot, 'no-such-entry.js'),
+        generationDirectory: h.generationDirectory,
+      }),
+    );
+    const stopped = await h.manager.stop(h.request());
+    expect(stopped.ok).toBe(true);
+    if (stopped.ok) {
+      expect(stopped.value.wasRunning).toBe(false);
+    }
+  });
+});
+
+describe('injected boundary hardening (review P3)', () => {
+  it('rejects a malformed credential result with a controlled error', async () => {
+    for (const credentialRaw of [{ nonsense: true }, { ok: false }]) {
+      const h = await open({ credentialRaw });
+      const outcome = await h.manager.start(h.request());
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) {
+        expect(outcome.code).toBe('INTERNAL_ERROR');
+        expect(outcome.message.length).toBeGreaterThan(0);
+      }
+      await h.manager.close();
+    }
+  });
+
+  it('retries identity capture while the pid is alive but transiently unreadable', async () => {
+    const real = createPosixProcessProbe();
+    let calls = 0;
+    const flaky: ProcessProbe = {
+      inspect: (pid) => {
+        calls += 1;
+        return calls <= 3 ? undefined : real.inspect(pid);
+      },
+      scan: () => real.scan(),
+      findIdsByCommandFragment: (fragment) => real.findIdsByCommandFragment(fragment),
+      tryFindIdsByCommandFragment: (fragment) => real.findIdsByCommandFragment(fragment),
+      listProcessGroup: (pgid) => real.listProcessGroup(pgid),
+    };
+    const h = await open({ probe: flaky });
+    const outcome = await h.manager.start(h.request());
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    await h.manager.stop(h.request());
+  });
+
+  it('rejects a launch env that tries to override the managed HOME', async () => {
+    const h = await open({ envOverrides: { HOME: '/tmp/hdsl-evil-home' } });
+    const outcome = await h.manager.start(h.request());
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.message).toContain('HOME');
+    }
+  });
+
+  it('keeps the managed PATH authoritative over the launch env', async () => {
+    const h = await open({ envOverrides: { PATH: '/evil/bin' } });
+    const outcome = await h.manager.start(h.request());
+    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
+    const info = await h.waitForInfo();
+    expect(String(info['path'])).not.toContain('/evil/bin');
+    expect(String(info['path'])).toContain(join(process.execPath, '..'));
+    await h.manager.stop(h.request());
   });
 });

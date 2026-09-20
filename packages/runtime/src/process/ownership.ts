@@ -69,20 +69,59 @@ export const identityIsGone = (verdict: OwnershipVerdict): boolean =>
  * signal each other. The candidate must also carry the record's unique
  * generation directory in its command line.
  */
+export type OwnedProcessScan =
+  | { readonly ok: true; readonly processes: readonly ProcessInfo[] }
+  | { readonly ok: false; readonly reason: 'scan-failed' | 'unverifiable-candidate' };
+
+/**
+ * Finds live processes that match a launch record whose identity was never
+ * captured (a crash between spawn and record write).
+ *
+ * Matching only the command fragment is not enough: a fixture — or any future
+ * shared entrypoint — can reuse it, and two concurrent environments must never
+ * signal each other. The candidate must also carry the record's unique
+ * generation directory in its command line.
+ *
+ * The result is tri-state on purpose: `ok: false` means the scan or a candidate
+ * could not be read, which must be treated as "unprovable", never as "no
+ * process".
+ */
+export const findOwnedProcessesDetailed = (
+  probe: ProcessProbe,
+  commandFragment: string,
+  generationDirectory: string,
+): OwnedProcessScan => {
+  const ids = probe.tryFindIdsByCommandFragment(commandFragment);
+  if (ids === undefined) {
+    return { ok: false, reason: 'scan-failed' };
+  }
+  const processes: ProcessInfo[] = [];
+  for (const pid of ids) {
+    if (pid === process.pid) {
+      continue;
+    }
+    const info = probe.inspect(pid);
+    if (info === undefined) {
+      return { ok: false, reason: 'unverifiable-candidate' };
+    }
+    if (info.command.includes(generationDirectory)) {
+      processes.push(info);
+    }
+  }
+  return { ok: true, processes };
+};
+
+/**
+ * Legacy convenience wrapper used by tests: returns the matched processes and
+ * collapses an unavailable scan to `[]`. Production cleanup paths must use
+ * {@link findOwnedProcessesDetailed} so a failed scan is never mistaken for an
+ * empty one.
+ */
 export const findOwnedProcesses = (
   probe: ProcessProbe,
   commandFragment: string,
   generationDirectory: string,
 ): readonly ProcessInfo[] => {
-  const found: ProcessInfo[] = [];
-  for (const pid of probe.findIdsByCommandFragment(commandFragment)) {
-    if (pid === process.pid) {
-      continue;
-    }
-    const info = probe.inspect(pid);
-    if (info !== undefined && info.command.includes(generationDirectory)) {
-      found.push(info);
-    }
-  }
-  return found;
+  const scan = findOwnedProcessesDetailed(probe, commandFragment, generationDirectory);
+  return scan.ok ? scan.processes : [];
 };

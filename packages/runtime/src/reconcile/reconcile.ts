@@ -24,7 +24,8 @@ import {
   type LaunchRecordStore,
   type ProcessLaunchRecord,
 } from '../process/records.js';
-import { findOwnedProcesses, identityIsGone, verifyIdentity } from '../process/ownership.js';
+import { findOwnedProcessesDetailed, identityIsGone, verifyIdentity } from '../process/ownership.js';
+import { cleanupLostLeaderTree } from '../process/leftovers.js';
 import type { ProcessProbe } from '../process/probe.js';
 import { probeLoopbackTcp } from '../process/readiness.js';
 import { killProcessTreeSync, signalProcessTree, waitForProcessExit } from '../process/tree.js';
@@ -73,18 +74,27 @@ const reconcileLaunch = async (
   if (identity === null) {
     // The instance crashed between writing the intent and recording an
     // identity. The unique generation directory still identifies our process;
-    // a shared command fragment alone is never enough.
-    const candidates = findOwnedProcesses(
+    // a shared command fragment alone is never enough, and an unavailable scan
+    // is unprovable rather than "no process".
+    const scan = findOwnedProcessesDetailed(
       options.probe,
       record.commandFragment,
       record.generationDirectory,
     );
-    if (candidates.length === 0) {
+    if (!scan.ok) {
+      options.launches.write(transition(record, 'unverifiable'));
+      return {
+        environmentId,
+        resolution: 'unverifiable',
+        detail: 'the managed process scan is unavailable; nothing was proven',
+      };
+    }
+    if (scan.processes.length === 0) {
       options.launches.write(transition(record, 'stopped'));
       return { environmentId, resolution: 'no-process' };
     }
     let stopped = true;
-    for (const info of candidates) {
+    for (const info of scan.processes) {
       stopped = (await stopOwnedTree(options, info.pid, info.pgid)) && stopped;
     }
     options.launches.write(transition(record, stopped ? 'stopped' : 'unverifiable'));
@@ -103,6 +113,22 @@ const reconcileLaunch = async (
 
   const verdict = verifyIdentity(options.probe, identity);
   if (identityIsGone(verdict)) {
+    // The leader is gone, but a crashed DSH can leave descendants behind in the
+    // recorded process group; resolve them before reporting the environment.
+    const cleanup = await cleanupLostLeaderTree({
+      probe: options.probe,
+      pgid: identity.pgid,
+      leaderReason: verdict.reason,
+      confirmMs: options.confirmMs,
+    });
+    if (!cleanup.ok) {
+      options.launches.write(transition(record, 'unverifiable'));
+      return {
+        environmentId,
+        resolution: 'unverifiable',
+        detail: 'a managed descendant tree could not be confirmed exited',
+      };
+    }
     options.launches.write(transition(record, 'stopped'));
     return { environmentId, resolution: 'no-process' };
   }

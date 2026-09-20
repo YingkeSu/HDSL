@@ -64,7 +64,7 @@ interface LaunchCredentialPort {
 - `runtime/src/index.ts` 已导出 `./credentials/index.js`（#44 merge `ead40c1`）；进程侧 `import type` 复用 `LaunchCredentialPort` / `LaunchEnvironmentHandle`，不重复声明，避免同名导出歧义。
 - runtime 在 spawn 前解析；`handle.env` 与受管隔离变量合并为显式子进程 env；`spawn` 同步拷贝后在同一 `try/finally` 中调用 `handle.dispose()`，覆盖成功、隔离校验失败、spawn 抛错与取消。
 - 凭据只走显式 env，绝不进入 argv、`LaunchRecord`、日志或事件；`env` 只在 launch 局部存在，随后清空引用。
-- loader 前置条件（#44 文档）：受管生产绑定必须由 loader 提供完整 `service#account` 引用并强校验；service-only 仅为兼容形式，runtime 不读凭据配置。
+- loader 前置条件（已闭合）：`service#account` 完整引用的强制由凭据端口单点负责（#44 PR #53 `b704cd8`：`createLaunchCredentialPort` 生产路径拒绝 service-only）；loader 由 core（#43 PR #52 `5d8b171`）提供 versioned 引用存储与 `launchCredentialRequest`。runtime 仍不读凭据配置。
 - 互操作证据：`tests/process/credentials-integration.test.ts` 用真实 `createLaunchCredentialPort`（测试内 OS provider）驱动 manager，断言 env 来自适配器、`dispose()` 在成功/spawn 失败/取消三条路径各执行一次。
 
 ## 进程记录
@@ -123,7 +123,7 @@ interface LaunchCredentialPort {
 pnpm install --frozen-lockfile
 pnpm run typecheck     # PASS
 pnpm run build         # PASS
-pnpm run test          # 36 files passed / 3 skipped; 475 passed / 5 skipped（含 tests/process 46 项）
+pnpm run test          # 37 files passed / 3 skipped; 500 passed / 5 skipped（含 tests/process 58 项）
 python3 scripts/check_repository.py   # PASS
 ```
 
@@ -171,13 +171,31 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
 - 测试：每个 harness 把夹具复制到自己的 generation 目录（`<gen>/fake-dsh.mjs`），`commandFragment` 天然唯一。
 - 回归：`tests/process/ownership.test.ts` 的 “identity-free candidate scan”（同 fragment、不同 generation 目录必须不匹配）与 `tests/process/lifecycle.test.ts` 的 “never kills a process that only shares the command fragment …” 锁定该行为。
 
+## Review 修复（PR #48 独立安全/生命周期 review）
+
+reviewed SHA `49b5d599…` → `CHANGES_REQUESTED`（2 P2 + 7 P3）。本轮处置：
+
+| 项 | 处置 | 证据 |
+| --- | --- | --- |
+| P2-1 身份未捕获清理在扫描失败时 fail-open（#55） | 已修：probe 新增 `tryFindIdsByCommandFragment`（`undefined` = 扫描失败）、`listProcessGroup`；`findOwnedProcessesDetailed` 返回 `{ok:true,processes}|{ok:false,reason}`；`stop`/`close`/`reconcile` 不可证时按 `unverifiable` 失败，不再写 `stopped`；`close` 失败则 core 不放锁 | `tests/process/lifecycle.test.ts` “scan availability” 两条（真实坏 `psPath` vs 正常真空扫描）；`tests/process/ownership.test.ts`；QA `PROCESS-SCAN-01` 转绿 |
+| P2-2 崩溃后后代树不被回收、`close()` 误报成功（#57） | 已修：`leftovers.ts` 对记录到的 detached 进程组做 `SIGKILL` + await 清空；`stop`/`close`/`recover` 三层对“leader 已死但组仍有成员”收尾；扫描失败或 pid 被复用（不可证）时保守失败，不强杀且不报成功 | `tests/process/lifecycle.test.ts` “cleans up a crashed parent's descendants …” / “close fails when the recorded process group cannot be scanned”；QA `PROCESS-ORPHAN-01` 转绿 |
+| P3-1 `LaunchRecordStore.write` 未校验 opaque ID | 已修：与 read/remove 一致校验 | `records.ts` |
+| P3-2 凭据响应形状未校验 | 已修：运行时校验 `PortOutcome` 与 handle 形状，映射为受控 `INTERNAL_ERROR`（不再出现 `undefined` code/message） | `lifecycle.test.ts` “rejects a malformed credential result …” |
+| P3-3 `captureIdentity` 条件反向 | 已修：活着的 pid 读不到时在 2s 内重试；进程已死时立即失败 | `lifecycle.test.ts` “retries identity capture …” |
+| P3-4 launch env 可覆盖受管 PATH/TMPDIR | 已修：受管 env 权威（反向合并），并拒绝 launch env 覆盖 `HOME`/`DSH_HOME` | `lifecycle.test.ts` “rejects a launch env that overrides HOME” / “keeps the managed PATH authoritative” |
+| P3-5 startToken 秒级粒度 | 跟踪：#59（低频、需要同秒 pid 复用且命令一致）；本文件如实记录 | — |
+| P3-6 adopt 端点归属 TOCTOU | 跟踪：#59；受 loopback + 唯一 generation 路径约束，不扩大平台声明 | — |
+| P3-7 `run-command` 拼接 OS `error.message` | 已修：只保留 OS error code 的受控文案 | `run-command.ts` |
+
+保留旧 `findOwnedProcesses`/`findIdsByCommandFragment` 返回数组的兼容签名（QA 合成测试与既有消费方使用），但生产清理路径一律使用 `findOwnedProcessesDetailed` / `tryFindIdsByCommandFragment`，因此扫描失败不再可能被误判为空。
+
 ## 未测 / 缺口
 
 - **Windows x64 未测**：`process/**` 使用 POSIX 进程组与 `ps`；`createPosixProcessProbe` 未在 Windows 验证，`detached` 语义不同。未声称支持。
 - **Linux 未实机验收**：CI（ubuntu）只跑 typecheck/build/unit；进程组与 `ps` 在 Linux 可用，但真实 DSH 启停未在 Linux 留证。
 - **跨实例/跨进程 dataRoot 锁**：归 #43（core）；本模块只注入并不自定锁。锁设计仍在审核（目录主锁 + TCP loopback guard），本文件不把该设计当作已安全。
 - **core 整合未完成**：`EnvironmentService` 尚未注入本端口（#43 分支）。凭据适配器（#44，#46 merge `ead40c1`）已接入并由 runtime 根 index 导出。
-- **生产 `service#account` 强制**：未闭合。建议单一 owner：凭据（#44）在其 `createLaunchCredentialPort` 生产路径上要求 `parseKeychainKey(reference.key).account` 非空（测试显式 opt-out），而不是把约束留在 loader 文档；loader（核心/组合根）只负责提供引用。详细方案见本文件对应 PR 评论与发给 #43/#44 的协调消息。
 - **adopted 后 openWebUI 的存活复核**：采用 loopback TCP 可达 + 身份匹配；未覆盖 DSH 进程存活但 HTTP 层挂起的场景（会落到 reconcile 的停止路径）。
+- **进程组 id 复用的残余风险**：崩溃后仅凭记录的 `pgid` 清理后代；`pid-reused` 时不发信号，若组仍有成员则保守失败。pgid 整个被复用且恰好有成员的情形未消除（#57）。
 - **子进程 stdout/stderr 不落盘**：因此没有 DSH 启动诊断文件；T006 的诊断导出需另行设计（不在本切片）。
 - 未在真实“启动后取消”与“就绪后立即停止”的时序上做穷尽并发压测；关键分支由确定性门控覆盖，无 `skip`/`it.fails` 冒充。

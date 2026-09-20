@@ -130,6 +130,9 @@ export class LaunchRecordStore {
   }
 
   write(record: ProcessLaunchRecord): void {
+    if (!OPAQUE_ID_PATTERN.test(record.environmentId)) {
+      throw new Error('environmentId must be an opaque id');
+    }
     writeJsonAtomic(this.#path(record.environmentId), record);
   }
 

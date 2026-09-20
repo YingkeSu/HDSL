@@ -7,6 +7,11 @@
  * time, but the kernel start token differs. T005 therefore never treats a pid
  * alone as ownership evidence.
  *
+ * Scan results are **tri-state**: a successful scan returns entries (possibly
+ * empty), while an unavailable/failed scan returns `undefined`. Callers must
+ * never treat "we could not scan" as "nothing is running" — that would be
+ * fail-open and could let a live managed process be reported as stopped.
+ *
  * The probe is an interface so unit tests can inject deterministic identity
  * transitions (for example: "the recorded pid is now an unrelated process")
  * without having to race the operating system.
@@ -29,9 +34,17 @@ export interface ProcessScanEntry {
 
 export interface ProcessProbe {
   inspect(pid: number): ProcessInfo | undefined;
+  /** Legacy scan; returns `[]` on failure. Prefer the checked variants below. */
   scan(): readonly ProcessScanEntry[];
-  /** Pids whose full command line contains `fragment` (exact substring). */
+  /** Legacy id lookup; returns `[]` on failure. Prefer {@link tryFindIdsByCommandFragment}. */
   findIdsByCommandFragment(fragment: string): readonly number[];
+  /**
+   * Pids whose command line contains `fragment`; `undefined` means the scan
+   * failed and must never be treated as "no match".
+   */
+  tryFindIdsByCommandFragment(fragment: string): readonly number[] | undefined;
+  /** Live members of one process group, or `undefined` when the scan failed. */
+  listProcessGroup(pgid: number): readonly ProcessInfo[] | undefined;
 }
 
 export interface PosixProcessProbeOptions {
@@ -59,8 +72,28 @@ export const createPosixProcessProbe = (
         stdio: ['ignore', 'pipe', 'ignore'],
       });
     } catch {
+      // Covers a missing `ps`, a permission failure and maxBuffer overflow.
+      // All three mean "the scan is unreliable", not "no processes".
       return undefined;
     }
+  };
+
+  const parseInfoLine = (line: string): ProcessInfo | undefined => {
+    const match = LSTART_PATTERN.exec(line.trim());
+    if (match === null) {
+      return undefined;
+    }
+    const pid = Number(match[2]);
+    const pgid = Number(match[4]);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(pgid)) {
+      return undefined;
+    }
+    return {
+      pid,
+      pgid,
+      startToken: (match[1] ?? '').trim(),
+      command: match[5] ?? '',
+    };
   };
 
   const inspect = (pid: number): ProcessInfo | undefined => {
@@ -71,27 +104,14 @@ export const createPosixProcessProbe = (
     if (output === undefined) {
       return undefined;
     }
-    const match = LSTART_PATTERN.exec(output.trim());
-    if (match === null) {
-      return undefined;
-    }
-    const parsedPid = Number(match[2]);
-    const parsedPgid = Number(match[4]);
-    if (parsedPid !== pid || !Number.isInteger(parsedPgid)) {
-      return undefined;
-    }
-    return {
-      pid: parsedPid,
-      pgid: parsedPgid,
-      startToken: (match[1] ?? '').trim(),
-      command: match[5] ?? '',
-    };
+    const info = parseInfoLine(output);
+    return info !== undefined && info.pid === pid ? info : undefined;
   };
 
-  const scan = (): readonly ProcessScanEntry[] => {
+  const tryScan = (): readonly ProcessScanEntry[] | undefined => {
     const output = run(['-ax', '-o', 'pid=,ppid=,command=']);
     if (output === undefined) {
-      return [];
+      return undefined;
     }
     const entries: ProcessScanEntry[] = [];
     for (const line of output.split('\n')) {
@@ -108,14 +128,45 @@ export const createPosixProcessProbe = (
     return entries;
   };
 
+  const scan = (): readonly ProcessScanEntry[] => tryScan() ?? [];
+
+  const tryFindIdsByCommandFragment = (
+    fragment: string,
+  ): readonly number[] | undefined => {
+    if (fragment.length === 0) {
+      return [];
+    }
+    const entries = tryScan();
+    if (entries === undefined) {
+      return undefined;
+    }
+    return entries.filter((entry) => entry.command.includes(fragment)).map((entry) => entry.pid);
+  };
+
+  const listProcessGroup = (pgid: number): readonly ProcessInfo[] | undefined => {
+    if (!Number.isInteger(pgid) || pgid <= 0) {
+      return [];
+    }
+    const output = run(['-ax', '-o', 'lstart=,pid=,ppid=,pgid=,command=']);
+    if (output === undefined) {
+      return undefined;
+    }
+    const members: ProcessInfo[] = [];
+    for (const line of output.split('\n')) {
+      const info = parseInfoLine(line);
+      if (info !== undefined && info.pgid === pgid) {
+        members.push(info);
+      }
+    }
+    return members;
+  };
+
   return {
     inspect,
     scan,
     findIdsByCommandFragment: (fragment: string) =>
-      fragment.length === 0
-        ? []
-        : scan()
-            .filter((entry) => entry.command.includes(fragment))
-            .map((entry) => entry.pid),
+      tryFindIdsByCommandFragment(fragment) ?? [],
+    tryFindIdsByCommandFragment,
+    listProcessGroup,
   };
 };

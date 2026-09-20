@@ -6,6 +6,7 @@ export * from './types.js';
 export * from './records.js';
 export * from './probe.js';
 export * from './ownership.js';
+export * from './leftovers.js';
 export * from './readiness.js';
 export * from './tree.js';
 export * from './manager.js';

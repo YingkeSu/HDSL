@@ -175,9 +175,13 @@ export const runCommand = (
     child.on('error', (error) => {
       termination();
       killTree();
+      const code = (error as NodeJS.ErrnoException).code;
+      // Keep only the OS error code: a spawn error message can embed local
+      // paths, which must not reach InstallFailure/records/logs.
+      const detail = typeof code === 'string' && code.length > 0 ? code : 'spawn-error';
       void releaseJournal().finally(() => {
         reject(
-          new InstallFailure('INTERNAL_ERROR', `could not run the managed command: ${error.message}`),
+          new InstallFailure('INTERNAL_ERROR', `could not run the managed command (${detail})`),
         );
       });
     });
