@@ -247,7 +247,7 @@ export const launchFixture = (
     identity: null,
     endpoint: null,
     exitCode: null,
-    processExitedAt: null,
+    observedSurvivors: null,
     errorCode: null,
     errorDetail: null,
     createdAt: new Date().toISOString(),

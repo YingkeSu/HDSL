@@ -587,7 +587,7 @@ describe('restart over a crashed predecessor (review P2-A / issue #57)', () => {
       h.dataRoot,
       launchFixture(h.dataRoot, h.environmentId, {
         state: 'running',
-        processExitedAt: null,
+        observedSurvivors: null,
         identity: {
           pid: leaderPid,
           pgid: leaderInfo.pgid,

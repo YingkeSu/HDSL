@@ -48,6 +48,7 @@ import {
   type ReadyEndpoint,
 } from './readiness.js';
 import {
+  captureGroupSurvivors,
   cleanupLostLeaderTree,
   readGroupLeftovers,
   type LeftoverCleanupResult,
@@ -88,7 +89,7 @@ interface LaunchPatch {
   readonly identity?: ProcessIdentity | null;
   readonly endpoint?: ProcessEndpoint | null;
   readonly exitCode?: number | null;
-  readonly processExitedAt?: string | null;
+  readonly observedSurvivors?: readonly ProcessIdentity[] | null;
   readonly errorCode?: ErrorCode | null;
   readonly errorDetail?: string | null;
 }
@@ -172,8 +173,8 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     identity: update.identity !== undefined ? update.identity : record.identity,
     endpoint: update.endpoint !== undefined ? update.endpoint : record.endpoint,
     exitCode: update.exitCode !== undefined ? update.exitCode : record.exitCode,
-    processExitedAt:
-      update.processExitedAt !== undefined ? update.processExitedAt : record.processExitedAt,
+    observedSurvivors:
+      update.observedSurvivors !== undefined ? update.observedSurvivors : record.observedSurvivors,
     errorCode: update.errorCode !== undefined ? update.errorCode : record.errorCode,
     errorDetail: update.errorDetail !== undefined ? update.errorDetail : record.errorDetail,
     createdAt: record.createdAt,
@@ -271,9 +272,10 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       probe,
       pgid: identity.pgid,
       leaderReason: verdict.reason,
+      leaderIdentity: identity,
       commandFragment: record.commandFragment,
       generationDirectory: record.generationDirectory,
-      exitedAt: record.processExitedAt,
+      capturedSurvivors: record.observedSurvivors,
       confirmMs,
     });
 
@@ -368,11 +370,19 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       // are resolved by `stop()`, `close()` and `recover()`, which all treat a
       // stopped record with live group members as unfinished cleanup (and fail
       // rather than report success when they cannot prove ownership).
+      // Capture the survivor identities while the group is still observable,
+      // then mark stopped. These captured identities are the only member
+      // evidence a later cleanup may rely on besides the command/generation
+      // link; a member's own start time is never sufficient.
+      const captured =
+        record.identity === null
+          ? null
+          : captureGroupSurvivors(probe, record.identity.pgid, record.commandFragment);
       launches.write(
         patch(current, {
           state: 'stopped',
           exitCode: code,
-          processExitedAt: new Date().toISOString(),
+          observedSurvivors: captured,
           errorCode: 'PROCESS_EXITED',
         }),
       );
@@ -385,9 +395,10 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
           probe,
           pgid: record.identity.pgid,
           leaderReason: 'dead',
+          leaderIdentity: record.identity,
           commandFragment: record.commandFragment,
           generationDirectory: record.generationDirectory,
-          exitedAt: record.processExitedAt,
+          capturedSurvivors: captured,
           confirmMs,
         }).then((result) => {
           if (result.ok) {
@@ -491,7 +502,7 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       identity: null,
       endpoint: null,
       exitCode: null,
-      processExitedAt: null,
+      observedSurvivors: null,
       errorCode: null,
       errorDetail: null,
       createdAt: now,

@@ -109,9 +109,10 @@ const reconcileLaunch = async (
       probe: options.probe,
       pgid: identity.pgid,
       leaderReason: verdict.reason,
+      leaderIdentity: identity,
       commandFragment: record.commandFragment,
       generationDirectory: record.generationDirectory,
-      exitedAt: record.processExitedAt ?? null,
+      capturedSurvivors: record.observedSurvivors ?? null,
       confirmMs: options.confirmMs,
     });
     if (!cleanup.ok) {

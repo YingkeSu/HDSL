@@ -2,23 +2,27 @@
  * Descendant-tree cleanup for a recorded managed process group.
  *
  * When a managed DSH crashes, the group leader dies but descendants it spawned
- * keep running in the same group. Cleanup therefore never signals blindly by
- * group id: every candidate must carry **current ownership evidence** that ties
- * it to the recorded launch.
+ * keep running in the same group. Cleanup never signals blindly by group id:
+ * every candidate must carry **current ownership evidence**, and the evidence
+ * rule is deliberately conservative (review P2-B).
  *
- * Ownership proof for cleanup (review P2-B) is a combination, never one field:
- * - the process is enumerated as a member of the recorded process group (the
- *   group the launcher's detached child created), and
- * - its command line still references the launch's unique command fragment or
- *   its generation directory.
+ * Sufficient evidence to signal a member `M`:
+ * 1. the recorded leader identity is a detached group leader
+ *    (`identity.pgid === identity.pid`), and `M` is enumerated in that group;
+ *    AND
+ * 2. at least one ownership link holds:
+ *    - **captured member identity**: `M.pid` + `M.startToken` exactly match an
+ *      entry the launcher recorded at the leader's exit, or
+ *    - **command evidence**: `M.command` still contains the launch's unique
+ *      command fragment or generation directory.
  *
- * A member that cannot be proven is never signalled. Proven members are killed
- * individually (so an unknown member in the same group is never collateral),
- * and any remaining unproven member makes the whole cleanup fail closed: the
- * record is retained and `close()` refuses to report success.
+ * A member's start time is **never** sufficient on its own (even bounded by the
+ * leader's exit): an unrelated daemon with an old start token must not be
+ * killed. Ambiguity fails closed — no signal, record retained, `close` fails.
  */
 import type { ProcessInfo, ProcessProbe } from './probe.js';
 import type { OwnershipReason } from './ownership.js';
+import type { ProcessIdentity } from './records.js';
 import { delay, signalProcess } from './tree.js';
 
 export type LeftoverCleanupFailure = 'scan-failed' | 'unverifiable-leftovers' | 'cleanup-failed';
@@ -42,11 +46,30 @@ export const readGroupLeftovers = (
   return members.filter((member) => member.pid !== process.pid && member.pid !== pgid);
 };
 
+/** Kernel identities of the group members observed at a leader exit. */
+export const captureGroupSurvivors = (
+  probe: ProcessProbe,
+  pgid: number,
+  commandFragment: string,
+): readonly ProcessIdentity[] | null => {
+  const members = readGroupLeftovers(probe, pgid);
+  if (members === undefined) {
+    return null;
+  }
+  return members.map((member) => ({
+    pid: member.pid,
+    pgid: member.pgid,
+    startToken: member.startToken,
+    commandFragment,
+    createdAt: new Date().toISOString(),
+  }));
+};
+
 const isProvableMember = (
   member: ProcessInfo,
   commandFragment: string,
   generationDirectory: string,
-  exitedAt: string | null,
+  capturedSurvivors: readonly ProcessIdentity[] | null,
 ): boolean => {
   if (commandFragment.length > 0 && member.command.includes(commandFragment)) {
     return true;
@@ -54,40 +77,61 @@ const isProvableMember = (
   if (generationDirectory.length > 0 && member.command.includes(generationDirectory)) {
     return true;
   }
-  // OS process-group evidence: the member already existed at the recorded
-  // leader exit. While the leader was alive the group id was ours, so the group
-  // could not have been freed and reused; a member present then is ours.
-  // `ps -o lstart=` has one-second granularity, hence the small tolerance.
-  if (exitedAt === null) {
+  if (capturedSurvivors === null) {
     return false;
   }
-  const exitAt = Date.parse(exitedAt);
-  const startedAt = Date.parse(member.startToken);
-  return Number.isFinite(exitAt) && Number.isFinite(startedAt) && startedAt <= exitAt + 1_000;
+  return capturedSurvivors.some(
+    (captured) => captured.pid === member.pid && captured.startToken === member.startToken,
+  );
 };
 
 /**
  * Resolves the survivor tree of a launch whose leader is gone.
  *
- * `leaderReason` is accepted for callers/documentation, but cleanup never keys
- * off the dead leader's pid: a reused pid is exactly the case where a blind
- * `kill(-pgid)` could hit an unrelated group. Instead every live member of the
- * recorded group is proven from the launch's own evidence before any signal.
+ * `leaderReason` is informational; cleanup keys off the recorded leader
+ * identity, so a reused pid never broadens the signal set. When the leader
+ * identity is not a detached group leader the result is unverifiable.
  */
 export const cleanupLostLeaderTree = async (options: {
   readonly probe: ProcessProbe;
   readonly pgid: number;
   readonly leaderReason: OwnershipReason;
+  /**
+   * Captured leader identity. When absent the result is unverifiable: without a
+   * detached-leader identity there is no proof the group is ours.
+   */
+  readonly leaderIdentity?: ProcessIdentity;
   readonly commandFragment: string;
   readonly generationDirectory: string;
-  /** ISO time the launcher observed the leader exit, or null. */
-  readonly exitedAt: string | null;
+  /** Members captured at the leader's exit, or null when capture failed. */
+  readonly capturedSurvivors?: readonly ProcessIdentity[] | null;
+  /** @deprecated Ignored: a member's start time is never sufficient evidence. */
+  readonly exitedAt?: string | null;
   readonly confirmMs: number;
 }): Promise<LeftoverCleanupResult> => {
-  const { probe, pgid, commandFragment, generationDirectory, exitedAt, confirmMs } = options;
-  if (!Number.isInteger(pgid) || pgid <= 1 || pgid === process.pid) {
-    return { ok: true, killed: 0 };
+  const {
+    probe,
+    pgid,
+    leaderIdentity,
+    commandFragment,
+    generationDirectory,
+    capturedSurvivors = null,
+    confirmMs,
+  } = options;
+  // Only a detached leader group (pgid === pid) is ours to enumerate; without
+  // the captured leader identity (or when it is not a detached leader) the
+  // result fails closed instead of signalling a possibly unrelated group.
+  if (
+    !Number.isInteger(pgid) ||
+    pgid <= 1 ||
+    pgid === process.pid ||
+    leaderIdentity === undefined ||
+    leaderIdentity.pgid !== leaderIdentity.pid ||
+    leaderIdentity.pid !== pgid
+  ) {
+    return { ok: false, reason: 'unverifiable-leftovers' };
   }
+
   let killed = 0;
   const deadline = Date.now() + Math.max(0, confirmMs);
   for (;;) {
@@ -99,7 +143,7 @@ export const cleanupLostLeaderTree = async (options: {
       return { ok: true, killed };
     }
     const proven = members.filter((member) =>
-      isProvableMember(member, commandFragment, generationDirectory, exitedAt),
+      isProvableMember(member, commandFragment, generationDirectory, capturedSurvivors),
     );
     const unproven = members.length - proven.length;
     if (proven.length === 0) {
@@ -113,10 +157,6 @@ export const cleanupLostLeaderTree = async (options: {
     if (unproven > 0) {
       // Proven members were signalled; unprovable survivors remain, so cleanup
       // is not complete and must not be reported as success.
-      if (Date.now() >= deadline) {
-        return { ok: false, reason: 'unverifiable-leftovers' };
-      }
-      await delay(50);
       return { ok: false, reason: 'unverifiable-leftovers' };
     }
     if (Date.now() >= deadline) {

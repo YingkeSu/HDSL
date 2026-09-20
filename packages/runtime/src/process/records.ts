@@ -101,12 +101,12 @@ export interface ProcessLaunchRecord {
   readonly endpoint: ProcessEndpoint | null;
   readonly exitCode: number | null;
   /**
-   * When the launcher observed the leader exit (ISO). Used as the ownership
-   * boundary for descendant cleanup: a group member that already existed at
-   * the recorded exit time was forked while the leader was alive, so the group
-   * id could not have been freed and reused under it.
+   * Kernel identities of the descendants observed in the recorded process
+   * group at the moment the leader exited (`null` = the capture scan failed).
+   * This is the captured member evidence cleanup may rely on; a member not in
+   * this list still needs command/generation evidence before any signal.
    */
-  readonly processExitedAt: string | null;
+  readonly observedSurvivors: readonly ProcessIdentity[] | null;
   readonly errorCode: ErrorCode | null;
   readonly errorDetail: string | null;
   readonly createdAt: string;

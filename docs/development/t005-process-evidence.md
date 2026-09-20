@@ -91,7 +91,7 @@ interface LaunchCredentialPort {
   "state": "spawning|starting|running|stopping|stopped|failed|unverifiable",
   "identity": { "pid": 1234, "pgid": 1234, "startToken": "Sun Sep 20 ...", "commandFragment": "...", "createdAt": "..." },
   "endpoint": { "origin": "http://127.0.0.1:63059", "host": "127.0.0.1", "port": 63059 },
-  "exitCode": null, "processExitedAt": null, "errorCode": null, "errorDetail": null,
+  "exitCode": null, "observedSurvivors": null, "errorCode": null, "errorDetail": null,
   "createdAt": "...", "updatedAt": "...", "sequence": 3
 }
 ```
@@ -193,7 +193,7 @@ reviewed SHA `49b5d599…` → `CHANGES_REQUESTED`（2 P2 + 7 P3）。本轮处�
 | --- | --- | --- |
 | P2-1 身份未捕获清理在扫描失败时 fail-open（#55） | 已修：probe 新增 `tryFindIdsByCommandFragment`（`undefined` = 扫描失败）、`listProcessGroup`；`findOwnedProcessesDetailed` 返回 `{ok:true,processes}|{ok:false,reason}`；identity-null 路径扫描失败或存在候选（命令/目录匹配不足以证明归属，可能是诱饵）时一律**只读失败、不杀**，不再写 `stopped`；`close` 失败则 core 不放锁 | `tests/process/lifecycle.test.ts` “scan availability” 两条 + “identity-null decoy” 用例；`tests/process/ownership.test.ts`；QA `PROCESS-SCAN-01` / `PROCESS-GROUP-ATTR01` 转绿 |
 | P2-A 重启覆盖旧遗留进程组（#57） | 已修：`start()` 在新 spawn / 覆盖 record 之前，先用**旧 record 的证据**解析旧进程组；解析成功才新启动，不可证则 `INTERNAL_ERROR` 且**不覆盖旧归属记录**，便于后续/人工处理 | `tests/process/lifecycle.test.ts` “restart over a crashed predecessor” 两条；QA `PROCESS-RESTART-01` 转绿 |
-| P2-B 成员级归属与防组复用（#57/#59） | 已修：`cleanupLostLeaderTree` 逐成员证明——组内成员且（命令/生成目录证据 **或** 成员在记录的 leader 退出时间之前已存在，后者为 OS 进程组证据：leader 存活时组号属于我们，未空置不可能被复用）；逐成员 SIGKILL，未知成员不杀；存在不可证成员/扫描失败则 fail-closed、保留 record、`close` 失败不放锁。早期 `watchExit` 收尾也走同一证明 | `tests/process/leftovers.test.ts`（命令证据/退出时间证据/退出后无证据拒杀/扫描失败/真空）；`tests/process/lifecycle.test.ts` “cleans up a crashed parent's descendants…” |
+| P2-B 成员级归属与防组复用（#57） | 已修：`cleanupLostLeaderTree` 逐成员证明，**充分证据布尔规则**：先断言 `leaderIdentity.pgid === leaderIdentity.pid === pgid`（否则 fail-closed），且成员在组内枚举，且至少一条归属链成立：**(a) captured member identity**（pid+startToken 与 leader 退出时捕获的 `observedSurvivors` 完全一致）**或 (b) command evidence**（成员 command 含唯一 `commandFragment`/`generationDirectory`）。**成员 start time 永不单独成立**（即使加上下界/退出窗口）；不确定即 fail-closed（不 signal、保 record、`close` 失败不放锁）。proven 成员逐个 SIGKILL，未知成员不杀。`watchExit` 在退出时捕获 `observedSurvivors`；早期收尾走同一规则 | `tests/process/leftovers.test.ts`（captured 正例/命令证据/再老 startToken 拒杀/同秒拒杀/诱饵拒杀/pgid≠pid 拒杀/scan 失败/真空）；`tests/process/lifecycle.test.ts` “cleans up a crashed parent's descendants…”；QA `PROCESS-RESTART-01`/`PROCESS-GROUP-ATTR01`/`-TIME` 转绿 |
 | P2-C 受管 env 五键映射（#60） | 已修：五键精确映射与 core `#baseLaunchEnvironment` 一致（含 `PATH=join(generationDirectory,"node","bin")+":/usr/bin:/bin:/usr/sbin:/sbin"`）；`handle.env` 任一受管键不一致 → spawn 前受控 `INTERNAL_ERROR` 且 `finally dispose()`；`DSH_TELEMETRY_DISABLED`/`NODE_NO_WARNINGS` 为启动策略键、单列 | `tests/process/core-loader-wiring.test.ts`（真实 core loader→strict port→manager）；`tests/process/lifecycle.test.ts` 三条冲突拒绝；QA `PROCESS-ENV-MAP01`/`-CONFLICT` 转绿 |
 | P3-1 `LaunchRecordStore.write` 未校验 opaque ID | 已修：与 read/remove 一致校验 | `records.ts` |
 | P3-2 凭据响应形状未校验 | 已修：运行时校验 `PortOutcome` 与 handle 形状，映射为受控 `INTERNAL_ERROR`（不再出现 `undefined` code/message） | `lifecycle.test.ts` “rejects a malformed credential result …” |
@@ -212,6 +212,6 @@ reviewed SHA `49b5d599…` → `CHANGES_REQUESTED`（2 P2 + 7 P3）。本轮处�
 - **跨实例/跨进程 dataRoot 锁**：归 #43（core）；本模块只注入并不自定锁。锁设计仍在审核（目录主锁 + TCP loopback guard），本文件不把该设计当作已安全。
 - **core 整合未完成**：`EnvironmentService` 尚未注入本端口（#43 分支）。凭据适配器（#44，#46 merge `ead40c1`）已接入并由 runtime 根 index 导出。
 - **adopted 后 openWebUI 的存活复核**：采用 loopback TCP 可达 + 身份匹配；未覆盖 DSH 进程存活但 HTTP 层挂起的场景（会落到 reconcile 的停止路径）。
-- **进程组归属的 OS 依据与残差**：崩溃后逐成员清理时，除命令/生成目录证据外，使用“成员在记录的 leader 退出时间之前已存在”作为 OS 进程组证据（leader 存活时组号属于我们，组未空置便被复用不成立）。残差：`ps -o lstart=` 为秒级，退出边界有 1s 容忍；完整无歧义需要 supervisor/组级 mark，#57/#59 跟踪并请 #8 确认该 OS 路线。
+- **进程组归属证据（已收口，无时间单独证明）**：成员信号只依据 captured member identity（退出时捕获的 pid+startToken）或 command/generation 证据；start time 永不单独作为充分条件（旧 daemon 与同秒边界均拒杀）。残差：若崩溃时未捕获（应用重启前 leader 已死）且命令无唯一证据，真实旧孤儿无法自动证明，必须保留 record、`close` 失败、人工清理（不降级为误杀）；#57 跟踪。
 - **子进程 stdout/stderr 不落盘**：因此没有 DSH 启动诊断文件；T006 的诊断导出需另行设计（不在本切片）。
 - 未在真实“启动后取消”与“就绪后立即停止”的时序上做穷尽并发压测；关键分支由确定性门控覆盖，无 `skip`/`it.fails` 冒充。

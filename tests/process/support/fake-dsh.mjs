@@ -17,9 +17,6 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 import http from 'node:http';
-import { fileURLToPath } from 'node:url';
-
-const SELF_PATH = fileURLToPath(import.meta.url);
 
 const args = process.argv.slice(2);
 const readFlag = (name, fallback) => {
@@ -31,15 +28,12 @@ const host = readFlag('--host', '127.0.0.1');
 const portArgument = readFlag('--port', '0');
 const mode = process.env.FAKE_DSH_MODE ?? 'ready';
 
-// A grandchild that stays in this process' group. It carries this fixture's
-// absolute path as an argument so the launcher's per-member ownership proof
-// (command fragment) can identify it after a leader crash; the argument is
-// otherwise unused.
-const grandchild = spawn(
-  process.execPath,
-  ['-e', 'setInterval(() => {}, 1 << 30)', SELF_PATH],
-  { stdio: 'ignore' },
-);
+// A grandchild that stays in this process' group. Its command line carries no
+// launch-specific path, so descendant cleanup must rely on the identity
+// captured at the leader's exit (never on start time alone).
+const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {
+  stdio: 'ignore',
+});
 // A failed grandchild spawn (for example EAGAIN under CI load) must not crash
 // the fixture: an unhandled 'error' event would exit this process and turn a
 // readiness-timeout scenario into a spurious early exit.
