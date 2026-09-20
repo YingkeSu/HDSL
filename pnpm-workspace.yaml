@@ -10,3 +10,10 @@ packages:
 #                   printing a warning.
 saveExact: true
 engineStrict: true
+
+# esbuild's postinstall only verifies/downloads a binary already provided by
+# its optional platform package (@esbuild/<platform>), so the install script is
+# explicitly not run. Declaring it keeps `pnpm install --frozen-lockfile`
+# deterministic and non-interactive in CI.
+allowBuilds:
+  esbuild: false
