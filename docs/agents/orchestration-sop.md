@@ -9,12 +9,12 @@
 | 角色 | 职责 | 禁止 |
 | --- | --- | --- |
 | 编排者（orchestrator） | 分诊 issue、写任务契约、分派与回收会话、执行已授权的合并 | 不代写实现、不代替 reviewer 出结论 |
-| 实现 worker | 在所有权范围内实现并自测 | 不自审、不自行合并 |
+| 实现 worker | 在所有权范围内实现并自测 | 不承担任何 PR review、不自行合并 |
 | 专职 reviewer | 针对精确 head SHA 独立复审 | 不改代码、不 claim PR、不合并 |
-| QA / 探针 worker | 复现问题、去重后建 issue、产出可复验证据 | 不把一次通过当作长期保证 |
+| QA / 探针 worker | 复现问题、去重后建 issue、产出可复验证据 | 不承担任何 PR review、不把一次通过当作长期保证 |
 | 经验沉淀 worker | 把已复验经验写入 `docs/` | 不 review 代码、不修改他人所有的文件 |
 
-同一账号可以在不同会话扮演不同角色，但同一 PR 的作者不得作为它的 reviewer。
+角色必须完全分离：只有专职 reviewer 承担 PR review，实现（开发）与 QA / 探针 worker 不承担任何 PR review，**不限于同一 PR**；同一 PR 的作者尤其不得作为它的 reviewer。
 
 ## 1. issue 是状态源
 
@@ -45,7 +45,7 @@
 
 ## 3. 独立审核
 
-- 作者不能审核自己的 PR；必须由独立的专职 reviewer 会话复审。
+- 角色完全分离：只有专职 reviewer 会话承担 PR review；实现（开发）与 QA / 探针 worker 不承担任何 PR review，不限于同一 PR。作者尤其不能审核自己的 PR。
 - 审核对象是精确 head SHA，不是分支名或 PR 编号；审核报告必须写明 reviewed SHA。
 - reviewer 只读：不 claim PR、不改代码、不合并；确需实验时 clone 到工作区外。
 - **修改后旧 approval 失效**：任何新 push 都产生新 head，必须重新审核该 SHA；旧 `APPROVED` 不得用于新 head。
