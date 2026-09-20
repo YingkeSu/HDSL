@@ -23,7 +23,9 @@ Machine counts: all opt-ins `6 passed / 33 tests`; default (gated) `2 passed | 4
 
 `HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a
 real managed install and uses the network, so it is not part of the default `pnpm run test`
-run. The fixture harness is always on. Full results, lanes and blockers:
+run. The default CI runs the engineering checks plus the always-on fixture harness (17)
+and the always-on Electron-binary probe (18 passed total); the 15 opt-in cases are skipped
+there. The fixture harness is always on. Full results, lanes and blockers:
 [`docs/development/desktop-validation.md`](../../docs/development/desktop-validation.md).
 
 ## Layout

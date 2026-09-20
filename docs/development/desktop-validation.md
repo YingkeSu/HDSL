@@ -47,7 +47,7 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 - 全部 opt-in：`6 passed / 33 tests`。
 - 默认（gated）：`2 passed | 4 skipped; 18 passed | 15 skipped`。
 
-`HDSL_E2E_DESKTOP=1` / `HDSL_E2E_BROWSER=1` / `HDSL_E2E_GUI=1` 是显式 opt-in 门（同 T004/T005 真实证据测试的模式）：真实矩阵不进入 `pnpm run test` 默认集，CI 保持只跑夹具自检。真实矩阵用注册的 `hdsl-e2e-run-*` 临时 base 下的 dataRoot/user-data/profile，不读个人 keychain、不调用模型、不碰用户 `~/.dsh` 或浏览器 profile。
+`HDSL_E2E_DESKTOP=1` / `HDSL_E2E_BROWSER=1` / `HDSL_E2E_GUI=1` 是显式 opt-in 门（同 T004/T005 真实证据测试的模式）：真实矩阵不进入 `pnpm run test` 默认集。默认 CI 跑工程检查 + always-on 夹具自检（17 条）与 always-on 的 Electron binary 探测（共 18 passed），**不含** opt-in 的 15 条。真实矩阵用注册的 `hdsl-e2e-run-*` 临时 base 下的 dataRoot/user-data/profile，不读个人 keychain、不调用模型、不碰用户 `~/.dsh` 或浏览器 profile。
 
 ## 红证据（9b52364）与修复复验
 
