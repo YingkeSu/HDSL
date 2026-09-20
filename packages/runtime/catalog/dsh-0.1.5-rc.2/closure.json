@@ -1,0 +1,13 @@
+{
+  "dshVersion": "0.1.5-rc.2",
+  "dshSha256": "f4c54839d69e82bf1c3a5a41a910c3ce1405cd9e9d97d753c0c04f406c7d7480",
+  "lockSha256": "da075539c04f9f521b9886585b6287a5a25b60a9954341865bb9cb4970c9a5cd",
+  "packageCount": 585,
+  "rootResolved": "https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.5-rc.2.tgz",
+  "rootIntegritySha512": "sha512-8Xc8hCQHcIWRmTCVU/xZdp6/qMsWMeAd2ObChKDEsfhUPJFXx6H0lgeb1DxUMD86HZrrVN+1bCvn1ppjZ/fOxw==",
+  "generatedWith": {
+    "node": "v24.21.0",
+    "npm": "11.19.0"
+  },
+  "catalogRevision": "t004-2026-09-20.1"
+}
