@@ -4,7 +4,8 @@
  * `load` stands in for the process module's environment-store lookup, so these
  * tests prove the mapping without depending on `@hdsl/core`: success returns the
  * explicit merged env, every failure is a contract `PortOutcome` failure with a
- * value-free message, and an unsupported platform is `UNSUPPORTED_COMBINATION`.
+ * value-free message, an unsupported platform is `UNSUPPORTED_COMBINATION`, and
+ * a production keychain binding must carry a complete `service#account`.
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -12,6 +13,7 @@ import {
   credentialFailureCode,
   createCredentialInjection,
   createLaunchCredentialPort,
+  requireCompleteKeychainReference,
   type LaunchCredentialRequest,
 } from '../../packages/runtime/src/credentials/index.js';
 import { createFakeProvider, makeReference } from './support/fakes.js';
@@ -25,9 +27,9 @@ const request = (key: string): LaunchCredentialRequest => ({
 
 describe('createLaunchCredentialPort', () => {
   it('returns an explicit merged launch handle with an idempotent dispose', async () => {
-    const provider = createFakeProvider({ values: { 'hdsl.deepseek': CANARY } });
+    const provider = createFakeProvider({ values: { 'hdsl.deepseek#user': CANARY } });
     const port = createLaunchCredentialPort({
-      load: () => Promise.resolve(request('hdsl.deepseek')),
+      load: () => Promise.resolve(request('hdsl.deepseek#user')),
       injection: createCredentialInjection({ provider }),
     });
     const outcome = await port.resolveLaunchEnvironment('env-1');
@@ -66,7 +68,7 @@ describe('createLaunchCredentialPort', () => {
   it('fails without leaking a value when the item is missing', async () => {
     const provider = createFakeProvider({});
     const port = createLaunchCredentialPort({
-      load: () => Promise.resolve(request('missing')),
+      load: () => Promise.resolve(request('missing#user')),
       injection: createCredentialInjection({ provider }),
     });
     const outcome = await port.resolveLaunchEnvironment('env-1');
@@ -79,7 +81,7 @@ describe('createLaunchCredentialPort', () => {
 
   it('maps an unsupported platform to UNSUPPORTED_COMBINATION', async () => {
     const port = createLaunchCredentialPort({
-      load: () => Promise.resolve(request('hdsl.deepseek')),
+      load: () => Promise.resolve(request('hdsl.deepseek#user')),
       platform: 'win32',
     });
     const outcome = await port.resolveLaunchEnvironment('env-1');
@@ -101,6 +103,87 @@ describe('createLaunchCredentialPort', () => {
       code: 'INTERNAL_ERROR',
       message: 'could not load the environment credential binding',
     });
+  });
+});
+
+describe('production keychain reference completeness', () => {
+  it('rejects a service-only keychain binding before any provider read', async () => {
+    const provider = createFakeProvider({ values: { 'hdsl.deepseek#user': CANARY } });
+    const port = createLaunchCredentialPort({
+      load: () => Promise.resolve(request('hdsl.deepseek')),
+      injection: createCredentialInjection({ provider }),
+    });
+    const outcome = await port.resolveLaunchEnvironment('env-1');
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('INTERNAL_ERROR');
+      expect(outcome.message).not.toContain(CANARY);
+    }
+    // Fail-closed before touching the store: the provider was never asked.
+    expect(provider.reads).toHaveLength(0);
+  });
+
+  it('rejects a service-only binding even when an explicit injection would succeed', async () => {
+    let injectionCalls = 0;
+    const port = createLaunchCredentialPort({
+      load: () => Promise.resolve(request('hdsl.deepseek')),
+      injection: {
+        store: 'keychain',
+        resolveLaunchEnvironment: () => {
+          injectionCalls += 1;
+          return Promise.reject(new Error('must not be called'));
+        },
+      },
+    });
+    const outcome = await port.resolveLaunchEnvironment('env-1');
+    expect(outcome.ok).toBe(false);
+    expect(injectionCalls).toBe(0);
+  });
+
+  it('rejects a malformed keychain key before any provider read', async () => {
+    const provider = createFakeProvider({});
+    const port = createLaunchCredentialPort({
+      load: () => Promise.resolve(request('hdsl.deepseek#')),
+      injection: createCredentialInjection({ provider }),
+    });
+    const outcome = await port.resolveLaunchEnvironment('env-1');
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('INTERNAL_ERROR');
+    }
+    expect(provider.reads).toHaveLength(0);
+  });
+
+  it('accepts a complete service#account binding', async () => {
+    const provider = createFakeProvider({ values: { 'hdsl.deepseek#user': CANARY } });
+    const port = createLaunchCredentialPort({
+      load: () => Promise.resolve(request('hdsl.deepseek#user')),
+      injection: createCredentialInjection({ provider }),
+    });
+    const outcome = await port.resolveLaunchEnvironment('env-1');
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error('expected a successful outcome');
+    }
+    expect(outcome.value.env['DEEPSEEK_API_KEY']).toBe(CANARY);
+    expect(provider.reads).toEqual(['hdsl.deepseek#user']);
+    outcome.value.dispose();
+    expect(outcome.value.env['DEEPSEEK_API_KEY']).toBe('');
+  });
+
+  it('requireCompleteKeychainReference passes complete and non-keychain stores', () => {
+    expect(() => requireCompleteKeychainReference({
+      name: 'DEEPSEEK_API_KEY',
+      reference: makeReference('svc#user'),
+    })).not.toThrow();
+    expect(() => requireCompleteKeychainReference({
+      name: 'DEEPSEEK_API_KEY',
+      reference: makeReference('svc', 'secret-service'),
+    })).not.toThrow();
+    expect(() => requireCompleteKeychainReference({
+      name: 'DEEPSEEK_API_KEY',
+      reference: makeReference('svc'),
+    })).toThrow(CredentialFailure);
   });
 });
 
