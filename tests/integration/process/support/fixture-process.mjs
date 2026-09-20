@@ -35,7 +35,9 @@
  */
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { createServer as createHttpServer } from 'node:http';
 import { createServer } from 'node:net';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -63,10 +65,15 @@ const parseArgs = (argv) => {
 };
 
 const args = parseArgs(process.argv.slice(2));
+// A managed-DSH invocation (`node <entrypoint> web --no-open ...`) does not
+// receive the QA token from the launcher; identity for those scenarios comes
+// from the launcher's own record (pid + kernel start token + fragment).
+const isDshWeb = process.argv.includes('web');
 // The token appears in argv as well as the environment: `ps` exposes the
 // command line but not the environment, and identity verification needs a
 // value an unrelated process cannot accidentally share.
-const token = args.token ?? process.env.HDSL_QA_PROC_TOKEN;
+const token =
+  args.token ?? process.env.HDSL_QA_PROC_TOKEN ?? (isDshWeb ? `hdsl-qa-dsh-${String(process.pid)}` : undefined);
 if (!token) {
   process.stderr.write('HDSL_QA_PROC_TOKEN (or --token) is required\n');
   process.exit(64);
@@ -128,7 +135,11 @@ if (recordEnv) {
 }
 
 const persistRecord = () => writeAtomic(recordPath, `${JSON.stringify(record, null, 2)}\n`);
-persistRecord();
+// DSH-mode children are spawned by the launcher with cwd under the managed
+// root; they must not drop a non-DSH record into the current directory.
+if (!isDshWeb) {
+  persistRecord();
+}
 
 const waitForFile = async (path, timeoutMs) => {
   const deadline = Date.now() + timeoutMs;
@@ -253,6 +264,127 @@ const installTermination = (ignore) => {
   process.on('SIGINT', () => onSignal('SIGINT'));
 };
 
+const readDshFlag = (name, fallback) => {
+  const index = process.argv.indexOf(name);
+  return index >= 0 && process.argv[index + 1] !== undefined ? process.argv[index + 1] : fallback;
+};
+
+/**
+ * DSH-compatible managed mode: mirrors the observable contract the launcher's
+ * process manager depends on (`dsh web: http://127.0.0.1:<port>/?token=...` on
+ * stdout, loopback bind, SIGTERM shutdown, EADDRINUSE, grandchild). It is a QA
+ * fixture and is never cited as evidence that real DSH ran.
+ */
+const runDshWeb = async () => {
+  const host = readDshFlag('--host', '127.0.0.1');
+  const portArgument = Number(readDshFlag('--port', '0'));
+  const generation = readDshFlag('--generation', undefined);
+  const dshMode = process.env.HDSL_QA_DSH_MODE ?? 'ready';
+  const noGrandchild = process.env.HDSL_QA_NO_GRANDCHILD === '1';
+  // The launcher's credential port never lets us pick a path, so default the
+  // info file under the managed HOME when no explicit path was injected.
+  const infoFile =
+    process.env.HDSL_QA_INFO_FILE ??
+    (process.env.HOME !== undefined ? join(process.env.HOME, '.hdsl-qa-fixture.json') : undefined);
+
+  let grandchild;
+  if (!noGrandchild) {
+    grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], { stdio: 'ignore' });
+  }
+
+  const info = {
+    pid: process.pid,
+    grandchildPid: grandchild?.pid ?? null,
+    home: process.env.HOME ?? null,
+    dshHome: process.env.DSH_HOME ?? null,
+    mode: dshMode,
+    generation: generation ?? null,
+    receivedTerm: false,
+    canary: {
+      name: 'DSH_QA_CANARY',
+      present: (process.env.DSH_QA_CANARY ?? '').length > 0,
+      sha256:
+        (process.env.DSH_QA_CANARY ?? '').length > 0
+          ? createHash('sha256').update(process.env.DSH_QA_CANARY ?? '').digest('hex')
+          : null,
+    },
+    hostLeak: process.env.__HDSL_HOST_LEAK__ ?? null,
+    managedEnv: {
+      HOME: process.env.HOME ?? null,
+      DSH_HOME: process.env.DSH_HOME ?? null,
+      DSH_AGENTS_HOME: process.env.DSH_AGENTS_HOME ?? null,
+      PATH: process.env.PATH ?? null,
+      TMPDIR: process.env.TMPDIR ?? null,
+    },
+  };
+  const writeInfo = (extra = {}) => {
+    if (infoFile === undefined) {
+      return;
+    }
+    try {
+      writeFileSync(infoFile, `${JSON.stringify({ ...info, ...extra }, null, 2)}\n`);
+    } catch {
+      // best effort
+    }
+  };
+  writeInfo();
+
+  const stopGrandchild = () => {
+    try {
+      grandchild?.kill('SIGKILL');
+    } catch {
+      // already gone
+    }
+  };
+
+  const server = createHttpServer((request, response) => {
+    response.statusCode = 200;
+    response.end('ok');
+  });
+  server.on('error', (error) => {
+    process.stderr.write(`${error.code ?? 'ERROR'}: ${error.message}\n`);
+    process.exit(40);
+  });
+
+  const onReady = () => {
+    const address = server.address();
+    const port = typeof address === 'object' && address !== null ? address.port : 0;
+    writeInfo({ boundPort: port });
+    if (dshMode === 'never-ready') {
+      return;
+    }
+    process.stdout.write(`dsh web: http://${host}:${port}/?token=hdsl-qa-${String(process.pid)}\n`);
+    if (dshMode === 'crash') {
+      // `HDSL_QA_DSH_CRASH_ORPHAN=1` abandons the grandchild (the real crash
+      // shape the launcher must reap); without it the fixture cleans up first.
+      if (process.env.HDSL_QA_DSH_CRASH_ORPHAN !== '1') {
+        stopGrandchild();
+      }
+      process.exit(Number(process.env.HDSL_QA_DSH_EXIT ?? '3'));
+    }
+  };
+
+  const shutdown = (signal) => ({
+    close: () => {
+      writeInfo({ receivedTerm: true });
+      stopGrandchild();
+      server.close();
+      process.exit(signal === 'SIGTERM' ? 0 : 130);
+    },
+  });
+  if (dshMode === 'stubborn') {
+    process.on('SIGTERM', () => {
+      writeInfo({ receivedTerm: true, stubborn: true });
+    });
+  } else {
+    process.on('SIGTERM', () => shutdown('SIGTERM').close());
+    process.on('SIGINT', () => shutdown('SIGINT').close());
+  }
+
+  server.listen(portArgument, host, onReady);
+  setInterval(() => {}, 1_000);
+};
+
 const main = async () => {
   if (role === 'grandchild') {
     // A grandchild never nests further and never writes a ready file of its
@@ -293,7 +425,14 @@ const main = async () => {
   setInterval(() => {}, 1_000);
 };
 
-main().catch((error) => {
-  process.stderr.write(`fixture failure: ${error instanceof Error ? error.stack : String(error)}\n`);
-  process.exit(70);
-});
+if (isDshWeb) {
+  runDshWeb().catch((error) => {
+    process.stderr.write(`fixture failure: ${error instanceof Error ? error.stack : String(error)}\n`);
+    process.exit(70);
+  });
+} else {
+  main().catch((error) => {
+    process.stderr.write(`fixture failure: ${error instanceof Error ? error.stack : String(error)}\n`);
+    process.exit(70);
+  });
+}
