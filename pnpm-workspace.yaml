@@ -1,3 +1,12 @@
 packages:
   - apps/*
   - packages/*
+
+# pnpm 11 does not read these two keys from `.npmrc`; they only take effect
+# here (verified by tests/engineering/pnpm-config.test.ts). The repository
+# previously declared them in `.npmrc`, where pnpm silently ignored them:
+#   - saveExact:    `pnpm add` writes an exact version instead of a ^/~ range.
+#   - engineStrict: an unsupported Node version fails install instead of only
+#                   printing a warning.
+saveExact: true
+engineStrict: true

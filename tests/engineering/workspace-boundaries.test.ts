@@ -113,12 +113,6 @@ describe('version locking', () => {
     }
   });
 
-  it('requires exact writes and engine-strict installs', () => {
-    const npmrc = readFileSync(join(root, '.npmrc'), 'utf8');
-    expect(npmrc).toMatch(/^save-exact=true$/m);
-    expect(npmrc).toMatch(/^engine-strict=true$/m);
-  });
-
   it('pins pnpm and Node consistently in CI', () => {
     const workflow = readFileSync(
       join(root, '.github/workflows/engineering-checks.yml'),

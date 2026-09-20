@@ -23,7 +23,7 @@ HDSL 面向 DeepSeek Harness（DSH），借鉴 PCL 的简洁操作层次和 HMCL
 
 ## 开发入口
 
-工程 workspace 使用 pnpm + TypeScript，工具与依赖版本锁定在 `package.json`、`pnpm-workspace.yaml`、`.nvmrc` 与 `pnpm-lock.yaml`（精确版本见[工具链初始化记录](docs/development/tooling.md)）：
+工程 workspace 使用 pnpm + TypeScript，工具与依赖版本锁定在 `package.json`、`pnpm-workspace.yaml`（`saveExact`/`engineStrict` 在此生效）、`.nvmrc` 与 `pnpm-lock.yaml`（精确版本见[工具链初始化记录](docs/development/tooling.md)）：
 
 ```bash
 node --version                          # 24.21.0（.nvmrc）
