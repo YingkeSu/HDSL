@@ -375,6 +375,19 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     status: 'blocked',
     blocker: NOT_WIRED,
   },
+  {
+    id: 'E2E-BROWSER-01',
+    title: '注入 opener：真实浏览器完成认证并落到可用页面（去 query canonical origin）',
+    requirements: ['FR-004', 'FR-007'],
+    lane: 'real-dsh',
+    evidence: 'real',
+    realUi: true,
+    determinismGate: '真实 Chrome 临时 profile + CDP；bootstrap URL 只经 Page.navigate；有界等最终 location 等于去 query canonical origin',
+    negativeControl: 'Page.navigate 返回不算认证成功：若最终 URL 仍带 token query、或认证后 DOM 为空，断言失败；不开 Network 域、不 dump cookie',
+    requires: ['webui.native-open', 'webui.auth-bootstrap', 'dsh.managed'],
+    status: 'executed',
+    observation: '已执行 2026-09-20 @33bfd1e（注入 opener 列）：真实受管 DSH 启动后 bootstrap 经 Page.navigate，最终 href 为去 query loopback origin，认证 DOM 非空（outerHTML>1000），DSH 页面无 window.hdsl；自建随机 keychain canary finally 删除。不等于真实 shell.openExternal 原生打开',
+  },
 ];
 
 export interface PlanViolation {

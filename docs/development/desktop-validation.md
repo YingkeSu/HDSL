@@ -24,6 +24,7 @@
 | E2E-QAENTRY-DIAG-01 | ✅ 通过（注入列） | `qa-entry --hdsl-qa-export-path`：导出返回 `{exportId,exported:true,redacted:true}`；文件不含 canary/`.credentials.yaml`/`credentials.json`/dataRoot 原文；同 `requestId` 重放不重写文件；不返回路径 |
 | E2E-QAENTRY-CRED-01 | ✅ 通过（注入列） | `qa-entry --hdsl-qa-import-path/--hdsl-qa-import-environment`：stderr `credential-import: applied`；`credentials.json` 权限 `0600`、含引用 id/key、无 secret 值 |
 | E2E-QAENTRY-CRED-02 | ✅ 通过（注入列） | 含 `value` 字段的文档 `rejected at parse`；`credentials.json` 未生成；secret 不入 stderr |
+| E2E-BROWSER-01 | ✅ 通过（注入 opener 列） | 真实 Chrome（临时 profile + CDP）作为注入 opener：`createDesktopComposition({openWebUi})` 启动真实受管 DSH，bootstrap URL 仅交给 `Page.navigate`；最终文档为去 query 的 canonical loopback origin，认证后 DOM 有内容（`outerHTML > 1000`），DSH 页面无 `window.hdsl`；自建随机 keychain canary（stdin 写入，finally 删除） |
 | harness 自检 | ✅ 17/17 | 夹具安全自检（登记清理/宿主守卫可失败/canary oracle/gate/候选探测器/隔离 dataRoot/计划校验，含 symlink 识别与负向控制） |
 
 命令（真实矩阵，opt-in）：
@@ -35,6 +36,7 @@ pnpm run build:desktop
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.real.test.ts
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.findings.real.test.ts
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.injected.real.test.ts
+HDSL_E2E_BROWSER=1 pnpm exec vitest run tests/e2e/desktop.browser.real.test.ts
 pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 ```
 
@@ -57,9 +59,9 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 ## 未验证 / blocked（保留，不重试）
 
 - **原生应用菜单与原生 NSOpenPanel/NSSavePanel**：CDP 到不了渲染树。hdsl-24 的有界核查（AXPress 可按下菜单、真实 `openAndSavePanelService` 出现；`osascript` 发送按键 `error 1002`（Input Monitoring 未授权）、AX `windows 0`）已记录，属能力/权限边界 → **blocked/manual**，本切片不再试权限，也不自行改系统授权。
-- **隔离真实浏览器 + opener 注入**（真实浏览器 + 临时 profile + `Page.navigate(bootstrap)` → 断言去 query 的 canonical origin 与认证后 DOM）：接口已存在（`createDesktopComposition({ openWebUi })` → `VerifiedWebUiContext{ environmentId, loopbackOrigin, processPort, webUiBootstrap? }` → `ctx.webUiBootstrap.consumeWebUIBootstrap(envId, async url => …)`，回调 URL 即 token bootstrap）。**尚未执行**：需要有运行中的受管 DSH 且 `consumeWebUIBootstrap` 存在（keychain 引用解析成功）才能取得 bootstrap URL；本阶段未做该前置。若后续执行：token 不进 argv/日志/协议 trace，profile 登记后清理，cookie 不 dump，`Page.navigate` 返回不等于认证成功，需有界等最终去 query canonical origin + 认证后 DOM/可用元素，并保留无 cookie 负向。真实 `shell.openExternal` 与注入 opener 分栏，互不替代。
-- **GUI 认证后可用页**：composition 级 303→200 不替代 GUI，保留未验证。
-- **真实 DSH 经 UI 启停**：`environments.start` 对无凭据环境会弹原生提示，headless 下阻塞 → 归 manual；composition 级启停见 hdsl-24 证据。
+- **隔离真实浏览器 + opener 注入**（✅ 已执行，`E2E-BROWSER-01`）：真实 Chrome（`/Applications/Google Chrome.app`，注册的临时 profile + CDP，`--remote-debugging-port` 由空闲端口分配）作为注入 opener。真实受管 DSH 经 `createDesktopComposition({ openWebUi: createVerifiedWebUiOpener(async url => browser.send('Page.navigate',{url})) })` 启动；bootstrap URL **只**进入 `Page.navigate`，不打印/不落盘/不开 Network 域/不 dump cookie。断言：最终 `location.href` 是**去 query** 的 canonical loopback origin，认证后 DOM 非空（`textContent > 50`、`outerHTML > 1000`），且 DSH 页面 `window.hdsl === undefined`。keychain 用自建随机 `hdsl-qa-24-browser-*`（secret 经 stdin），`finally` 删除并确认无残留。**分栏**：这是**注入 opener** 证据，不等于真实 `shell.openExternal` 原生打开；后者未在本切片执行。
+- **GUI 认证后可用页**：composition 级 303→200（hdsl-24）与本切片的**注入 opener 真实浏览器**已分别记录；真实 `shell.openExternal` 系统浏览器打开仍未验证，保留未验证。
+- **真实 DSH 经 UI 启停**：`environments.start` 对无凭据环境会弹原生提示，headless 下阻塞 → 归 manual；composition 级启停与真实浏览器认证页见上。
 - Windows x64：未测（T008b）。
 - 其余计划场景（`tests/e2e/scenarios/desktop-e2e-scenario-plan.ts`）保持 `blocked`。
 
@@ -73,6 +75,6 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 
 ## 残留
 
-- 12 条真实/注入场景已执行通过；其中 `CRED-01/CRED-02` 只覆盖注入列，真实原生菜单仍未验证。
-- 浏览器认证列、GUI 启停、Windows 未测，均显式保留。
+- 12 条真实/注入场景 + 1 条注入 opener 真实浏览器场景已执行通过；`CRED-01/CRED-02` 只覆盖注入列，真实原生菜单仍未验证。
+- 真实 `shell.openExternal` 系统浏览器打开、GUI 启停、Windows 未测，均显式保留。
 - 本文件与场景计划中的 observation 只对候选 `33bfd1e` 有效；候选变更后需重新复验。

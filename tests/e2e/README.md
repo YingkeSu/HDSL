@@ -15,7 +15,8 @@ QA only — no production changes, no `apps/desktop/**` edits, no root config or
 | Authorization exactness + production hook removal | **Verified on `33bfd1e`**; the old prefix-authorization red is recorded for `9b52364` |
 | Test-injection lane (`qa-entry`) diagnostics/credential | **Executed and passing** (injection lane, not the native menu/dialog) |
 | Fixture harness | **17/17 green**, always on |
-| Isolated real-browser authenticated page / native menu+dialogs / GUI start-stop | **Blocked / manual** — see the validation doc |
+| Isolated real-browser authenticated page (injected opener) | **Executed and passing on `33bfd1e`** — real Chrome + temp profile + CDP |
+| Native menu+dialogs / real `shell.openExternal` / GUI start-stop | **Blocked / manual** — see the validation doc |
 
 `HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a
 real managed install and uses the network, so it is not part of the default `pnpm run test`
@@ -30,6 +31,7 @@ tests/e2e/
   desktop.real.test.ts                   # real window/IPC/guards/locks/keyboard create (opt-in)
   desktop.findings.real.test.ts          # auth exactness + production-hook removal (opt-in)
   desktop.injected.real.test.ts          # qa-entry test-injection lane (opt-in)
+  desktop.browser.real.test.ts           # isolated real-browser authenticated page (opt-in)
   scenarios/
     desktop-e2e-scenario-plan.ts         # 24 planned QA cases with lanes and observations
   support/
