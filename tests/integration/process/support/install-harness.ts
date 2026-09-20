@@ -9,7 +9,7 @@
  * observed deterministically. The process port is a QA-owned fake with
  * controllable start/close outcomes; it is never presented as a real DSH.
  */
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -170,8 +170,7 @@ export const freshQaRoot = (prefix: string): string => {
 
 export const cleanupQaRoots = (): void => {
   for (const root of roots.splice(0)) {
-    // Best-effort; tests remove their own roots too.
-    void root;
+    rmSync(root, { recursive: true, force: true });
   }
 };
 

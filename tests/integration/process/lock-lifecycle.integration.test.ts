@@ -19,6 +19,7 @@ import { canonicalizeDataRoot, DataRootLock } from '@hdsl/core';
 
 import {
   buildLockHarness,
+  cleanupQaRoots,
   createEnvironment,
   createEnvironmentInput,
   operationRef,
@@ -45,6 +46,8 @@ afterEach(async () => {
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
+  // Remove the harness-owned artifact/data roots too (QA-owned cleanup).
+  cleanupQaRoots();
 });
 
 /** Canonical state of every environment, via the real contract dispatch. */
