@@ -57,7 +57,7 @@ HDSL 受管用户凭据（如模型 API key）只保存为 OS 凭据存储**引�
 - `key = "<service>"`：只按 service 查找；
 - `key = "<service>#<account>"`：按 service + account 查找；
 - service 不得为空/含 `#`/控制字符；`#` 后 account 不得为空；**account 也不得含 `#`**；总长 ≤ 256（与冻结 DTO 一致）。编码器与解析器对同一组非法输入一致拒绝，不生成读不回来的引用。
-- 受管生产绑定**必须**使用带 account 的完整形式（`service#account`）；`service`-only 可能命中首个同名条目，仅保留为兼容/测试便捷形式（见第 9 节 P3-4）。
+- 受管生产绑定**必须**使用带 account 的完整形式（`service#account`）；`service`-only 可能命中首个同名条目，仅保留为兼容/测试便捷形式。`createLaunchCredentialPort` 的生产默认路径已在 provider 读取前强制拒绝 service-only（见第 5 节与第 9 节 P3-4，issue #51）。
 
 辅助函数：`keychainKey({ service, account? })`、`parseKeychainKey(key)`（均在 `packages/runtime/src/credentials/reference.ts`）。
 
@@ -92,6 +92,7 @@ interface LaunchCredentialPort {
 - 成功返回 `portOk({ env, dispose })`：`env` 是 `baseEnv` 合并凭据变量后的**显式子进程环境**（不继承宿主 `process.env`）。
 - **释放时序（必须）**：`spawn` 同步拷贝 `env`，所以 `try { child = spawn(command, { env: handle.env }) } finally { handle.dispose() }`；覆盖成功、spawn 抛错、隔离校验失败与取消分支。**不得先 dispose 再 spawn**（否则子进程拿到空值），也不得保留 `handle`/`env` 引用、不写 record/日志。
 - 失败返回 `portFail(code, message)`：`message` 已是无值消息。错误码映射：`UNSUPPORTED_PLATFORM → UNSUPPORTED_COMBINATION`，其余 → `INTERNAL_ERROR`（冻结契约无凭据专用码）。
+- **生产完整性强制（#51）**：`createLaunchCredentialPort` 在构建 provider 与任何存储读取之前，对每个 `store === 'keychain'` 绑定要求完整 `service#account`；service-only（或 malformed key）直接返回失败且 provider 调用次数为 0。机制层 `createCredentialInjection` 保留 service-only 兼容，不为测试引入生产放行开关。
 - 常量 `DEFAULT_MODEL_API_KEY_VARIABLE = 'DEEPSEEK_API_KEY'` 供双方复用，避免二次硬编码。
 
 ## 6. 校验规则（全部在读取存储前完成）
@@ -146,7 +147,7 @@ HDSL_KEYCHAIN_CANARY_EVIDENCE {"platform":"darwin","service":"hdsl.canary.creden
 - **GUI 认证 UI 无法被可靠检测**：只能用超时终止；若用户在超时内取消，映射为 `CREDENTIAL_ACCESS_CANCELLED`。不使用任何绕过 ACL 的手段。
 - **ACL 提示**：用户自建、且 ACL 不信任 `security` 工具的条目仍可能触发一次系统授权；HDSL 不静默处理，超时即失败并报告。
 - **`dispose()` 是尽力擦除**：JS 字符串不可变，引擎/GC 内可能短期留存副本；真正保证是“不持久化 + 不跨进程传播 + 端口返回可调用的幂等释放句柄”，不是内存擦除。
-- **service-only 引用歧义（P3-4）**：`security find-generic-password -s <svc> -w` 在同一 service 有多个 account 时命中“首个”条目。凭据模块不读环境配置；受管生产绑定的 loader/环境配置**必须提供完整 `service` + `account` 引用**（`service#account`）。`service`-only 仅保留为兼容/测试便捷形式，不用于受管生产绑定（已与 #20 确认：loader 归环境配置侧，runtime 进程模块只调 `resolveLaunchEnvironment(environmentId)`，不读凭据配置）。
+- **service-only 引用歧义（P3-4）**：`security find-generic-password -s <svc> -w` 在同一 service 有多个 account 时命中“首个”条目。受管生产绑定的 loader/环境配置**必须提供完整 `service` + `account` 引用**（`service#account`）；此外 `createLaunchCredentialPort` 生产默认路径已在 provider 读取前强制拒绝 service-only（issue #51），失败且 provider 调用 0。`service`-only 仅保留为机制层兼容/测试便捷形式，不用于受管生产绑定。loader 归环境配置/core 侧（#21），runtime 进程模块只调 `resolveLaunchEnvironment(environmentId)`，不读凭据配置。
 - **locale 分类差异（P3-5）**：取消/未找到的归类依赖 `security` 的英文 stderr（`User cancel`/`could not be found`）；非英文 locale 下可能落到 `CREDENTIAL_ACCESS_DENIED`，仍是失败闭合，仅分类不同。
 - 未做真实的“有 key 的模型请求”验证；本切片不调用付费模型 API。
 - 未验证锁定钥匙串、无登录会话（SSH/CI）下的行为；这些在 CI 上会被跳过。
