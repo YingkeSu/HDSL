@@ -19,7 +19,7 @@ QA only — no production changes, no `apps/desktop/**` edits, no root config or
 | Isolated real-browser authenticated page (injected opener) | **Executed and passing on `2cdea54`** — real Chrome + temp profile + CDP |
 | Native menu+dialogs / real `shell.openExternal` / Windows x64 | **Blocked / manual** — see the validation doc |
 
-Machine counts: all opt-ins `7 passed / 34 tests`; default (gated) `2 passed | 5 skipped; 18 passed | 16 skipped`.
+Machine counts: all opt-ins `7 passed / 35 tests`; default (gated) `3 passed | 4 skipped; 19 passed | 16 skipped`.
 
 `HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a
 real managed install and uses the network, so it is not part of the default `pnpm run test`
@@ -38,7 +38,7 @@ tests/e2e/
   desktop.injected.real.test.ts          # qa-entry test-injection lane (opt-in)
   desktop.browser.real.test.ts           # isolated real-browser authenticated page (opt-in)
   desktop.gui.real.test.ts               # production GUI start/stop (opt-in, injected credential setup)
-  desktop.iframe.real.test.ts            # real-window iframe boundary, CSP vs sender layers (opt-in)
+  desktop.iframe.real.test.ts            # real-window iframe boundary + always-on layer-classifier negative control (opt-in real case)
   scenarios/
     desktop-e2e-scenario-plan.ts         # 24 planned QA cases with lanes and observations
   support/

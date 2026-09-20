@@ -26,7 +26,8 @@
 | E2E-QAENTRY-CRED-01 | ✅ 通过（注入列） | `qa-entry --hdsl-qa-import-path/--hdsl-qa-import-environment`：stderr `credential-import: applied`；`credentials.json` 权限 `0600`、含引用 id/key、无 secret 值 |
 | E2E-QAENTRY-CRED-02 | ✅ 通过（注入列） | 含 `value` 字段的文档 `rejected at parse`；`credentials.json` 未生成；secret 不入 stderr |
 | E2E-BROWSER-01 | ✅ 通过（注入 opener 列） | 真实 Chrome（临时 profile + CDP）作为注入 opener：`createDesktopComposition({openWebUi})` 启动真实受管 DSH，bootstrap URL 仅交给 `Page.navigate`；**认证断言为 rc2 应用身份**（`title=DeepSeek Harness` + `#root [data-slot="root"]` + `新会话`），并有**无 cookie 第二 profile 的负向对照**（不出现该 shell）；自建随机 keychain canary（stdin 写入，删除后复检不存在） |
-| E2E-IFRAME-01 | ✅ 通过（真实窗口子 frame） | 生产窗口内构造真实 `<iframe>`：`srcdoc` 子 frame **实际执行**（`about:srcdoc`，内容渲染）且其上下文 `window.hdsl`/`require`/`process`/`ipcRenderer`/`hdsl.call` **全部 undefined**；`data:` 子 frame 导航被 **CSP** 拒绝（落到 `chrome-error://`，控制台有 CSP refusal）；主 frame 调用前后均正常（对照）。**分层**：CSP 阻断层与 main `senderFrame`/`isMainFrame` 拒绝层分开；带桥子 frame 的真实 IPC 拒绝仍**未覆盖**（生产 preload 不注入子 frame） |
+| E2E-IFRAME-01 | ✅ 通过（真实窗口子 frame，断言层） | 生产窗口内构造真实 `<iframe>`：`srcdoc` 子 frame **实际执行**且断言 `URL === about:srcdoc` 与可见文本含 `qa-frame`，其上下文 `window.hdsl`/`require`/`process`/`ipcRenderer`/`hdsl.call` **全部 undefined**；`data:` 子 frame 断言实际落到 `chrome-error://chromewebdata/`、不含 `qa-data`，且**归因**于该 frame 自身 `data:` src（不靠日志正则）；主 frame `catalog.list` 前后正控。**分层**：CSP 层已验；带桥子 frame 的真实 `senderFrame` 拒绝仍**未覆盖** |
+| E2E-IFRAME-02 | ✅ 通过（always-on 负控） | 纯分类器负控：无渲染（`about:blank`/空文本）、无 `data:` src 归因、以及 `data:` 文档真渲染出 `qa-data` 三种情况都**不通过**；正例才通过。不启动 Electron，进入默认 CI |
 | E2E-GUI-STARTSTOP-01 | ✅ 通过（setup 注入凭据） | production 真实 React UI：CDP 真实鼠标点击「启动」→ 操作面板显示启动 → 状态标签 `运行中`；点击「停止」→ `已停止`；契约确认 stopped。凭据经已受审 core 接口 setup 注入 + 自建 keychain canary，**不冒充原生菜单导入** |
 | harness 自检 | ✅ 17/17 | 夹具安全自检（登记清理/宿主守卫可失败/canary oracle/gate/候选探测器/隔离 dataRoot/计划校验，含 symlink 识别与负向控制） |
 
@@ -45,8 +46,8 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 ```
 
 机器计数（本机 macOS 26.3 arm64，Node 24.21.0）：
-- 全部 opt-in：`7 files / 34 tests`（本批新增 `E2E-IFRAME-01`；其余 33 条已在 `2cdea54` 复跑全绿）。
-- 默认（gated）：`2 passed | 5 skipped; 18 passed | 16 skipped`。
+- 全部 opt-in：`7 files / 35 tests`（本批新增 `E2E-IFRAME-01` 与 always-on 负控 `E2E-IFRAME-02`；其余 33 条已在 `2cdea54` 复跑全绿）。
+- 默认（gated）：`3 passed | 4 skipped; 19 passed | 16 skipped`。
 
 `HDSL_E2E_DESKTOP=1` / `HDSL_E2E_BROWSER=1` / `HDSL_E2E_GUI=1` 是显式 opt-in 门（同 T004/T005 真实证据测试的模式）：真实矩阵不进入 `pnpm run test` 默认集。默认 CI 跑工程检查 + always-on 夹具自检（17 条）与 always-on 的 Electron binary 探测（共 18 passed），**不含** opt-in 的 15 条。真实矩阵用注册的 `hdsl-e2e-run-*` 临时 base 下的 dataRoot/user-data/profile，不读个人 keychain、不调用模型、不碰用户 `~/.dsh` 或浏览器 profile。
 
@@ -92,7 +93,7 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 
 ## 残留
 
-- 真实/注入矩阵：14 条场景（含 `E2E-IFRAME-01`）+ 17 条夹具自检，opt-in 合计 `7 files / 34 tests`（iframe 本批执行，其余 33 条在 `2cdea54` 复跑）。
+- 真实/注入矩阵：14 条场景（含 `E2E-IFRAME-01`）+ 17 条夹具自检 + 1 条 always-on iframe 层分类器负控，opt-in 合计 `7 files / 35 tests`（iframe 本批执行，其余 33 条在 `2cdea54` 复跑）。
 - `CRED-01/CRED-02` 只覆盖 qa-entry 测试注入列；真实原生菜单/对话框仍未验证。
 - 真实 `shell.openExternal` 系统浏览器打开未测（注入 opener 列已验，两者不互代）。
 - LOCK-02 的机器可读拒绝信号缺口保持登记（见上）。
