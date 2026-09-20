@@ -14,3 +14,6 @@
 export * from './catalog/index.js';
 export * from './composition/index.js';
 export * from './install/index.js';
+export * from './credentials/index.js';
+export * from './process/index.js';
+export * from './reconcile/index.js';
