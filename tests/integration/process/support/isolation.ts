@@ -2,11 +2,13 @@
  * Process-owned temporary roots and host-HOME isolation.
  *
  * Process QA never writes inside the repository or the developer's HOME. Every
- * scenario runs under `mkdtemp`, and the child environment has HOME/DSH_HOME/XDG
- * roots redirected into that sandbox for the duration of the scenario. The
- * host-guard snapshots the real `~/.dsh` (and the conventional HDSL app-data
- * locations) so a launcher or fixture that ignores the managed root is caught
- * instead of quietly writing into the host home.
+ * scenario runs under `mkdtemp`. Fixture processes are spawned with a minimal
+ * environment (`HOME`/`DSH_HOME` unset, not redirected); scenarios that need an
+ * isolated root opt in through {@link withIsolatedEnv}, which redirects
+ * HOME/DSH_HOME/XDG into the sandbox for the duration. The host-guard snapshots
+ * the real `~/.dsh` (and the conventional HDSL app-data locations) so a launcher
+ * or fixture that ignores the managed root is caught instead of quietly writing
+ * into the host home.
  *
  * This mirrors the isolation contract of `tests/integration/install`, but is
  * kept inside `tests/integration/process` because the two QA slices own

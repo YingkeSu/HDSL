@@ -159,7 +159,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '两个真实子进程用文件 contentionGate 固定进入接管顺序，不使用 sleep/stale 时间赌时序',
     requires: ['dataRoot.lock', 'process.start'],
     status: 'blocked',
-    blocker: 'core 锁生命周期可观测接口未冻结（#20/#21 无候选 PR）',
+    blocker: 'core 锁生命周期可观测接口未冻结（会话 hdsl-20/hdsl-21 无候选 PR）',
   },
   {
     id: 'PROC-LOCK-04',
@@ -169,7 +169,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: 'gate 保证接管完成后再触发旧 owner release；断言 epoch/owner 不变，旧 release 幂等失败',
     requires: ['dataRoot.lock'],
     status: 'blocked',
-    blocker: 'core 锁生命周期可观测接口未冻结（#20/#21 无候选 PR）',
+    blocker: 'core 锁生命周期可观测接口未冻结（会话 hdsl-20/hdsl-21 无候选 PR）',
   },
   {
     id: 'PROC-LOCK-05',
@@ -179,7 +179,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '注入器在写任务持有期间调用 close；断言新实例被有界拒绝，写任务按序收尾',
     requires: ['dataRoot.lock', 'install.managed', 'process.start'],
     status: 'blocked',
-    blocker: 'core 锁/close 生命周期可观测接口未冻结（#20/#21 无候选 PR）',
+    blocker: 'core 锁/close 生命周期可观测接口未冻结（会话 hdsl-20/hdsl-21 无候选 PR）',
   },
   {
     id: 'PROC-LOCK-06',
@@ -189,7 +189,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: 'LockFixture 制造 stale/foreign/pid-reuse/corrupt 输入；PID-reuse 用真实存活对照进程，身份校验拒绝且进程存活',
     requires: ['dataRoot.lock', 'process.ownership'],
     status: 'blocked',
-    blocker: 'core 锁生命周期可观测接口未冻结（#20/#21 无候选 PR）',
+    blocker: 'core 锁生命周期可观测接口未冻结（会话 hdsl-20/hdsl-21 无候选 PR）',
   },
   {
     id: 'PROC-LOCK-07',
@@ -199,7 +199,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '三方 contentionGate 固定 A/B/C 交错；OrderingLedger 记录 writer-enter/exit 并 assertNoConcurrentWriters 失败于任何重叠',
     requires: ['dataRoot.lock', 'process.start', 'process.ownership'],
     status: 'blocked',
-    blocker: 'rename 后校验/link 还原非 CAS，锁方案待 #21 修订；#5 专职设计审未完成',
+    blocker: 'rename 后校验/link 还原非 CAS，锁方案待会话 hdsl-21 修订；#5 专职设计审未完成',
   },
   {
     id: 'PROC-LOCK-08',
@@ -209,7 +209,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '新 owner 建立后写入旧 owner heartbeat/lease；断言被拒或无副作用，新 owner epoch/身份不变',
     requires: ['dataRoot.lock'],
     status: 'blocked',
-    blocker: '锁 fencing/epoch 语义待 #21 修订后冻结（#5 专职设计审未完成）',
+    blocker: '锁 fencing/epoch 语义待会话 hdsl-21 修订后冻结（#5 专职设计审未完成）',
   },
   {
     id: 'PROC-CLOSE-01',
@@ -219,7 +219,7 @@ export const PROCESS_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '真实 writer 子进程与 close/下一实例向 OrderingLedger 写 writer-exit/lock-release/next-acquire，断言严格顺序；无关对照进程存活',
     requires: ['dataRoot.lock', 'process.stop', 'process.ownership'],
     status: 'blocked',
-    blocker: 'core 锁/close 生命周期可观测接口未冻结（#20/#21 无候选 PR）',
+    blocker: 'core 锁/close 生命周期可观测接口未冻结（会话 hdsl-20/hdsl-21 无候选 PR）',
   },
   {
     id: 'PROC-CRED-01',

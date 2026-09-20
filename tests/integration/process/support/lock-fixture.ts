@@ -12,7 +12,7 @@
  * The exact lock root path, file name and record schema are **not** assumed
  * here: every record is a plain value plus a helper that writes it under a
  * caller-supplied directory. Wiring it to the real lock root waits for the
- * T005a/#20/#21 observable interface (see `docs/development/process-validation.md`).
+ * T005a/hdsl-20/hdsl-21 observable interface (see `docs/development/process-validation.md`).
  */
 import { randomUUID } from 'node:crypto';
 import { mkdirSync, writeFileSync } from 'node:fs';

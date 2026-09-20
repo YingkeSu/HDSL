@@ -11,9 +11,9 @@ QA only — no production changes, no PR review.
 | Item | State |
 | --- | --- |
 | T005 public interface (#5) | **Absent** — no `packages/runtime/src/{process,reconcile,credentials}`, no PR |
-| dataRoot lock interface (#43 / #20 / #21) | **Not frozen** — non-CAS three-party risk awaiting #21 revision + #5 design review |
-| Credential resolver (#44) | **Absent** — no PR |
-| Fixture harness | **Done** — 11 self-checks green |
+| dataRoot lock interface (#43 / 会话 hdsl-20 / hdsl-21) | **Not frozen** — non-CAS three-party risk awaiting hdsl-21 revision + #5 design review |
+| Credential resolver (#44) | **Candidate open** — mechanism layer PR #46 (session hdsl-22, OPEN, head `e67e114`, 2026-09-20), not merged; end-to-end still needs #5 |
+| Fixture harness | **Done** — 13 self-checks green |
 | Scenario suite | **Not registered** — 23 planned cases, all `blocked` |
 
 The fixture harness proves the QA fixtures are real, deterministic and safe. It

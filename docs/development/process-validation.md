@@ -1,7 +1,7 @@
 # 独立进程生命周期与所有权验收（T007b / issue #45）
 
 状态：**准备资产阶段，候选接口未就绪，场景套件未注册（本切片不构成 T005/T007 验收）**。
-父任务 #7；依赖 #5 候选接口，并与 #43（T005a dataRoot 独占）、#44（T005b 凭据）、#20/#21（core 锁生命周期接口）约定可观测面。QA 只测不改生产，不做 review。
+父任务 #7；依赖 #5 候选接口，并与 #43（T005a dataRoot 独占）、#44（T005b 凭据）、会话 hdsl-20/hdsl-21（core 锁生命周期接口）约定可观测面。QA 只测不改生产，不做 review。
 
 本文件与 `tests/integration/process/**` 由 issue #45 独占。夹具自检 13 项全绿只说明“夹具可信”，**不**说明进程启停/所有权/锁/凭据已通过。
 
@@ -13,7 +13,7 @@
 | 基线 main | `7fbdc1e2607f4f695e6389296f56b3ba2600fa43` |
 | QA 分支 | `ao/hdsl-23/root`（QA 场景套件尚未派生） |
 | 文件所有权 | `tests/integration/process/**`、`docs/development/process-validation.md` |
-| 依赖接口 | #5（`packages/runtime/src/{process,reconcile}`）、#43 T005a（dataRoot 独占）、#44 T005b（凭据）、#20/#21（core 锁生命周期可观测面） |
+| 依赖接口 | #5（`packages/runtime/src/{process,reconcile}`）、#43 T005a（dataRoot 独占）、#44 T005b（凭据）、会话 hdsl-20/hdsl-21（core 锁生命周期可观测面） |
 | 执行平台 | macOS 26.3（Darwin 25.3.0 arm64），Node `v24.21.0`，pnpm `11.7.0` |
 | Windows | **未测**，本切片不声明支持 |
 | 不在本切片 | UI/导出（T006）、真实模型调用、API 额度消费 |
@@ -25,12 +25,12 @@
 - **代码层面**：`packages/runtime/src/{process,reconcile,credentials}` 仍未出现在任何已推送 ref；process 候选尚未推送分支/PR，凭据候选为 [PR #46](https://github.com/YingkeSu/HDSL/pull/46)（`ao/hdsl-22/credentials`，未合入）。
 - `packages/core/src/ports.ts` 的占位 `ProcessLifecyclePort`（`start`/`stop`/`openWebUI`）仍无 runtime 实现。
 - **已公布的候选可观测面（QA 注册依据，最终以合入版本为准）**：
-  - **#20 T005 进程**：`createProcessManager({ dataRoot, credentials, probe?, readinessTimeoutMs=60000, stopGraceMs=5000, closeConfirmMs=5000, onProcessExit?, isRecoveryPermitted? })`；端口 `start`/`stop`/`openWebUI`/`recover`/`close`。身份查询 `launchesDirectory`、`readLaunchRecord(environmentId)`、`listLaunchRecords()`；`ProcessLaunchRecord.identity = { pid, pgid, startToken, commandFragment, createdAt }`（`startToken` 为 kernel `lstart`，**非 PID 即身份**）。错误码映射用现有冻结码（`START_TIMEOUT`/`PORT_UNAVAILABLE`/`PROCESS_EXITED`/`WEBUI_UNAVAILABLE`/`ENVIRONMENT_BUSY`）。`close` 必须停并 `await` 全部 owned/adopted 运行 DSH 与安装/预检子树，成功才允许 core 释放 dataRoot 锁。#43 已同意该形状；但 `rename` 后校验/`link` 还原非 CAS，锁方案与接口待 #21 修订 + #5 专职设计审后冻结。**代码分支/PR 尚未推送。**
-  - **#22 T005b 凭据**：`packages/runtime/src/credentials/index.js` 的 `createCredentialInjection`（机制层）与 `createLaunchCredentialPort`（环境作用域 port）；成功返回 `baseEnv + 凭据` 的完整显式 env。测试必须**显式**传 `provider`/`injection`，生产 factory 不允许替身默认注入；非 darwin 的 `UNSUPPORTED_PLATFORM` **不回退 mock**。
+  - **会话 hdsl-20 T005 进程**：`createProcessManager({ dataRoot, credentials, probe?, readinessTimeoutMs=60000, stopGraceMs=5000, closeConfirmMs=5000, onProcessExit?, isRecoveryPermitted? })`；端口 `start`/`stop`/`openWebUI`/`recover`/`close`。身份查询 `launchesDirectory`、`readLaunchRecord(environmentId)`、`listLaunchRecords()`；`ProcessLaunchRecord.identity = { pid, pgid, startToken, commandFragment, createdAt }`（`startToken` 为 kernel `lstart`，**非 PID 即身份**）。错误码映射用现有冻结码（`START_TIMEOUT`/`PORT_UNAVAILABLE`/`PROCESS_EXITED`/`WEBUI_UNAVAILABLE`/`ENVIRONMENT_BUSY`）。`close` 必须停并 `await` 全部 owned/adopted 运行 DSH 与安装/预检子树，成功才允许 core 释放 dataRoot 锁。#43 已同意该形状；但 `rename` 后校验/`link` 还原非 CAS，锁方案与接口待会话 hdsl-21 修订 + #5 专职设计审后冻结。**代码分支/PR 尚未推送。**
+  - **PR #46（会话 hdsl-22，OPEN，head `e67e114`，2026-09-20 时点）T005b 凭据**：`packages/runtime/src/credentials/index.js` 的 `createCredentialInjection`（机制层）与 `createLaunchCredentialPort`（环境作用域 port）；成功返回 `baseEnv + 凭据` 的完整显式 env。测试必须**显式**传 `provider`/`injection`，生产 factory 不允许替身默认注入；非 darwin 的 `UNSUPPORTED_PLATFORM` **不回退 mock**。
 
 场景注册需要上述代码在可 fetch 的 ref 上；在此之前按 issue #45 的阶段化要求，**先交付夹具与准备 PR 后停止**。禁止用 mock 冒充真实接口、禁止 `it.skip`/`it.fails` 把缺口变绿。
 
-## 需要与 #5 / #43 / #44 / #20/#21 对齐的可观测行为
+## 需要与 #5 / #43 / #44 及会话 hdsl-20/hdsl-21 对齐的可观测行为
 
 以下是 **QA 的测试需求，不是另定契约**：不要求作者新增 DTO/API 字段，也不强制下列内部字段名。终态必须映射到已冻结的 [本地 API 错误码](../../specs/001-environment-lifecycle/contracts/local-api.md)（如 `START_TIMEOUT`、`PORT_UNAVAILABLE`、`PROCESS_EXITED`、`WEBUI_UNAVAILABLE`、`ENVIRONMENT_BUSY`），QA 只通过公开可观察面断言。若候选的内部 owner/identity 模型不同，用公开可观察适配层表达即可；但 **ABA 与身份判据不得降低**。
 
@@ -41,7 +41,7 @@
    - `stop`/`close` 仅终止**自己拥有**的进程；重复 stop 幂等；`close` 成功（含子树确认退出）才允许释放锁。
    - 就绪门控：`running` 只在 loopback endpoint 可探测后出现；就绪超时为 `START_TIMEOUT`，端口冲突为 `PORT_UNAVAILABLE`，意外退出为 `PROCESS_EXITED`。
    - `recover` 暴露“未结束进程”的对账入口，可观测每条 `resolution`（如 `stopped`/`adopted`/`no-process`/`unverifiable`）。
-2. **dataRoot 独占与锁生命周期**（#43 + #20/#21）
+2. **dataRoot 独占与锁生命周期**（#43 + 会话 hdsl-20/hdsl-21）
    - 可观测 owner 记录：`ownerId`、`host`、`pid`、`startTime`、`heartbeat`、`epoch`。
    - acquire/release/takeover 各自的可观测结果；release 必须带 owner/epoch 身份，旧 owner release 不得删除替代锁（ABA）。
    - `close` 在仍有安装/进程写任务时的语义（拒绝、等待或有界超时），不得在新实例并发写时释放 dataRoot。
@@ -139,10 +139,19 @@ pnpm exec vitest run tests/integration/process/harness.test.ts   # 13 passed
 
 ## 解除阻塞后如何继续
 
-1. 与 #5/#43/#44/#20/#21 确认上节可观测接口并记录其候选 SHA。
+1. 与 #5/#43/#44 及会话 hdsl-20/hdsl-21 确认上节可观测接口并记录其候选 SHA。
 2. 将 `process-scenario-plan.ts` 中对应场景 `status` 置 `ready`，派生 `tests/integration/process/process.integration.test.ts`，用真实公开接口驱动夹具。
 3. 先跑旧候选（负向对照）证明断言可失败，再跑新候选证明修复；结果与 SHA 记入本文件。
 4. 真实 DSH 组按 `PROC-REAL-01` 独立记录；不因夹具 CI 绿而关闭父任务 #7。
+
+## 审核反馈待办（#45 执行阶段，非本批）
+
+PR #47 独立审核（hdsl-11，对 head `3d64ac5`）提出的非阻塞改进项，记录待夹具解阻、注册真实场景时一并处理：
+
+- **F5**：`support/identity.ts` 的 `command` 解析起点为 `tokens[5]`（实为 `lstart` 年份），非真实命令行起点；当前身份判定用 `.includes(token)` 仍正确，但若后续需前缀/精确匹配，先改用 `tokens.slice(6)` 或 `trimmed.indexOf(tokens[6])`。
+- **F6a**：`FixtureProcess.cleanup()` 会返回因身份不可证而故意跳过的记录，harness 尚未断言该列表为空；注册场景时在 `finally` 后显式断言空列表（出现问题应红，不应只靠 `ps` 观察）。
+- **F6b**：宿主 HOME 保护只有 `equal===true` 用例，无“能检测到写入”的负向对照；补一个临时目录级负向对照或参数化 `diffHostDefaults`。
+- **F6c**：`support/isolation.ts` 的 `snapshotHome` 用 `statSync`（跟随符号链接），`isSymbolicLink()` 分支不可达；后续改用 `lstatSync` 并处理深度上限。
 
 ## 未验证声明
 
