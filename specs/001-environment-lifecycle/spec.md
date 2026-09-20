@@ -38,7 +38,7 @@
 
 ### Edge Cases
 
-磁盘不足、中文和带空格路径、进程意外退出、并发请求、应用重启留下子进程、未知上游版本、不支持平台、就绪超时、敏感信息出现在上游日志。
+磁盘不足、中文和带空格路径、进程意外退出、并发请求、应用重启留下子进程、未知上游版本、不支持平台、就绪超时、敏感信息出现在上游日志、上游在环境 home 写入本地凭据产物（如 `.credentials.yaml` 与启动诊断）。
 
 ## Requirements
 
@@ -48,7 +48,7 @@
 - **FR-004**: 系统 MUST 在有限超时内完成就绪检测，失败给出错误；WebUI 仅使用已验证的 loopback 地址。
 - **FR-005**: 系统 MUST 对重复启动/停止保持幂等，并跟踪进程退出；不得仅凭过期 PID 终止进程。
 - **FR-006**: 系统 MUST 以 operation 表示耗时操作，暴露阶段、最终结果与可重试状态。
-- **FR-007**: 系统 MUST 脱敏日志与错误详情，凭据只保存系统凭据引用。
+- **FR-007**: 系统 MUST 脱敏日志与错误详情。受管用户凭据 MUST 只以系统凭据存储引用保存，并按引用注入显式进程环境；上游生成的本地凭据产物（如环境 home 的 `.credentials.yaml` Web grant secret 与启动诊断日志）MUST 视为含密数据，排除出整合包、诊断导出、普通日志与 Git，不跨环境复制，且 MUST NOT 要求其由 OS 凭据存储引用。范围依据见 [ADR 0002](../../docs/adr/0002-credential-boundary.md)。
 - **FR-008**: 系统 MUST 保留创建失败的诊断状态；应用重启检查未结束操作及自己拥有的进程。
 
 ### Key Entities
@@ -64,4 +64,4 @@ Environment、CompositionLock、RuntimeArtifact、Operation；字段草案见 da
 
 ## Assumptions
 
-首版目标 macOS ARM64 与 Windows x64；具体 OS 最低版本、DSH 与 Node 组合由 research 决定。网络和用户凭据是启动前置条件。插件编辑、升级/恢复和包分享不在此切片内，但在产品 MVP 内。
+首版目标 macOS ARM64 与 Windows x64；具体 OS 最低版本、DSH 与 Node 组合由 research 决定。网络和用户凭据是启动前置条件。FR-007 的上游落盘行为（`.credentials.yaml` 0600）依据 PR #14 探针（固定 commit c092f67），仍需 T001 在 `docs/research/dsh-compatibility.md` 复核转正；在复核前按待验证处理，不据此声称支持。插件编辑、升级/恢复和包分享不在此切片内，但在产品 MVP 内。

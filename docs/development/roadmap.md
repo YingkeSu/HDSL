@@ -5,7 +5,7 @@
 | 阶段 | 内容 | 依赖 | 完成门槛 |
 | --- | --- | --- | --- |
 | M0 证据 | 上游 DSH 参数、版本矩阵、隔离能力、授权核验 | 无 | research R001–R006 可追溯 |
-| M1 环境闭环 | 001 创建、安装、启停、状态、错误 | M0 | 两环境真实隔离与双平台验证 |
+| M1 环境闭环 | 001 创建、安装、启停、状态、错误（硬前置仅 R001–R004；R005/R006 属 M2） | M0 | 两环境真实隔离与双平台验证 |
 | M2 事务与插件 | 002 变更预览、插件增减、代际升级与恢复 | M1 | 每个提交边界故障注入可恢复 |
 | M3 整合包 | 003 Schema、导入导出、精确重建 | M2 | 无凭据泄漏、拒绝恶意包、重建成功 |
 | M4 发布验证 | 打包、签名/更新研究、用户可用性验收 | M1–M3 | MVP 门槛及明确支持矩阵 |
@@ -34,12 +34,14 @@ GitHub Issues 将保存阶段任务，文档保留稳定的需求/任务 ID；�
 | T001 | [#1 核验 DSH 上游接口与最小支持矩阵](https://github.com/YingkeSu/HDSL/issues/1) | 无 |
 | T002 | [#2 建立 TypeScript 桌面 workspace 与工程 CI](https://github.com/YingkeSu/HDSL/issues/2) | T001 |
 | T003 | [#3 实现本地契约与边界输入校验](https://github.com/YingkeSu/HDSL/issues/3) | T002 |
+| T003.1 | 属 T003 交付物：契约冻结与版本标签 | T003 |
 | T004 | [#4 实现受管安装与隔离环境创建](https://github.com/YingkeSu/HDSL/issues/4) | T003 |
 | T005 | [#5 实现真实 DSH 启停与进程所有权管理](https://github.com/YingkeSu/HDSL/issues/5) | T004 |
 | T006 | [#6 实现简洁环境界面与脱敏诊断](https://github.com/YingkeSu/HDSL/issues/6) | T005 |
 | T007 | [#7 补齐首条切片的集成与主流程验收](https://github.com/YingkeSu/HDSL/issues/7) | T006 |
-| T008 | [#8 记录 macOS 与 Windows 实机验证](https://github.com/YingkeSu/HDSL/issues/8) | T007 |
-| M2 | [#9 设计并实现插件事务、升级与代际恢复](https://github.com/YingkeSu/HDSL/issues/9) | T008 |
+| T008a | [#8 记录 macOS ARM64 实机验证](https://github.com/YingkeSu/HDSL/issues/8) | T007 |
+| T008b | [#8 记录 Windows x64 实机验证（外部主机，未测前保持未测）](https://github.com/YingkeSu/HDSL/issues/8) | T007 / 外部 Windows 主机 |
+| M2 | [#9 设计并实现插件事务、升级与代际恢复](https://github.com/YingkeSu/HDSL/issues/9) | T008a/T008b |
 | M3 | [#10 设计并实现整合包导入导出与精确重建](https://github.com/YingkeSu/HDSL/issues/10) | M2 |
 | M4 | [#11 完成 MVP 打包、发布策略与用户验收](https://github.com/YingkeSu/HDSL/issues/11) | M3 |
 | M5 | [#12 验证社区需求并设计论坛与 Registry](https://github.com/YingkeSu/HDSL/issues/12) | M4 |

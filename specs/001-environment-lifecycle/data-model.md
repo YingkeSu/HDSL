@@ -9,10 +9,11 @@
 | Environment | id, name, revision, stateVersion, activeGenerationId, state | id 为不透明内部 ID；name 不作为路径；见下方修订语义 |
 | EnvironmentSummary | id, name, revision, stateVersion, state, activeGenerationId, compositionDigest | `environments.list` 的只读视图；不含秘密、token 或本地路径 |
 | Generation | id, environmentId, compositionDigest, createdAt | 只属于一个环境；组成固定 |
-| CompositionLock | schemaVersion, node, dsh, plugins | node/dsh 为 RuntimeArtifact 引用；精确版本、来源、摘要、平台；plugins 在首切片为空 |
-| RuntimeCombination | id, platform, arch, node, dsh, compatibility | `catalog.list` 的返回项；compatibility 至少含 status 与 evidenceRef，未核验组合不入列表 |
-| RuntimeArtifact | version, platform, arch, url, sha256 | URL 来自受审 catalog；sha256 为 64 个十六进制字符（256 位，小写） |
-| Operation | id, environmentId, kind, phase, status, sequence, error | 状态 queued/running/succeeded/failed/cancelled，终态不可回退；sequence 单调递增 |
+| CompositionLock | schemaVersion, node, dsh, plugins | node/dsh 为 RuntimeArtifactRef（不含 url）；精确版本、来源、摘要、平台；plugins 在首切片为空 |
+| RuntimeCombination | id, platform, arch, node, dsh, compatibility, artifactLocations | node/dsh 为 RuntimeArtifactRef；`catalog.list` 的返回项；compatibility 至少含 status 与 evidenceRef，未核验组合不入列表；artifactLocations 并列记录下载 URL，不进入组成摘要 |
+| RuntimeArtifactRef | version, platform, arch, sha256 | 进入 CompositionLock 与组成摘要的字段子集；sha256 为 64 个十六进制字符（256 位，小写）；**不含 url** |
+| RuntimeArtifact | version, platform, arch, url, sha256 | 受审 catalog 的完整产物记录；url 仅作并列位置，不参与摘要 |
+| Operation | id, environmentId, kind, phase, status, sequence, error | 状态 queued/running/succeeded/failed/cancelled，终态不可回退；`sequence` 为**每 operation** 单调递增计数 |
 | LaunchRecord | operationId, environmentId, processIdentity, endpoint, createdAt | processIdentity 为所有权标识，不等同 PID；endpoint 只允许 loopback，且必须归属该环境当前受管进程 |
 | CredentialReference | id, store, key | 仅指向 OS 凭据存储；不含凭据值，不进入任何导出/打包实体 |
 
@@ -20,7 +21,8 @@
 
 - `catalogCombinationId` 是 RuntimeCombination.id。`environments.create` 用它选定组合，并在创建时将其解析为一个不可变 CompositionLock 写入新 Generation；后续启动、摘要计算都以 CompositionLock 为准，不再重新解析 catalog。
 - `EnvironmentSummary.compositionDigest` 等于 `activeGenerationId` 对应 Generation.compositionDigest；无活动代际时为 null。
-- `OperationRef` 为 `{ operationId }`；`OperationSnapshot` 在 Operation 基础上含最终 `error` 与 `progress?`；`SubscriptionRef` 为 `{ subscriptionId }`；`ExportResult` 为 `{ exported: boolean, redacted: true }`，不含导出路径。
+- `OperationRef` 为 `{ operationId }`；`OperationSnapshot` 在 Operation 基础上含最终 `error`、`sequence` 与 `progress?`；`SubscriptionRef` 为 `{ subscriptionId }`；`ExportResult` 为 `{ exportId, exported: true, redacted: true }`，不含导出路径；相同 requestId+参数重复请求返回原 ExportResult 且不重做副作用。
+- `sequence` 域为**每 operation**：`Operation.sequence`、`OperationSnapshot.sequence` 与 `operation.updated` 事件的 `sequence` 同属该 operation 的计数；多操作订阅时按 operationId 分组递增。
 
 ## 修订语义（revision / stateVersion）
 
@@ -31,18 +33,22 @@
 
 ## 组成摘要（compositionDigest）规范
 
-- 输入是 CompositionLock 的**规范化 JSON**：键按 UTF-8 字节序升序、无多余空白、字符串 UTF-8、数组保持语义顺序（插件按已定义排序键排序）、包含 `schemaVersion`。
+- 输入是 CompositionLock 的**规范化 JSON**，且只包含定义字段子集：`schemaVersion`、`node`/`dsh`（各为 RuntimeArtifactRef 的 `version/platform/arch/sha256`）与排序后的 `plugins`。键按 UTF-8 字节序升序、无多余空白、字符串 UTF-8、数组保持语义顺序（插件按已定义排序键排序）。
 - 摘要在平台无关的规范化字节上计算：`SHA-256`，输出 64 个小写十六进制字符。
-- 相同语义输入跨平台必须得到同一摘要；T004 必须包含跨平台稳定性测试。来源 URL 与摘要一并记录，但摘要只覆盖组成内容，不覆盖下载位置。
+- 相同语义输入跨平台必须得到同一摘要；T004 必须包含跨平台稳定性测试。下载 `url` 属于 RuntimeArtifact/RuntimeCombination 的并列记录，**不进入** CompositionLock 的摘要字段子集。
 
 ## 状态机与运行数据
 
 Environment 状态：creating → stopped → starting → running → stopping → stopped；失败进入 error，重启先 reconcile 再给出 stopped/running/error。操作失败与环境失败独立，下载失败不可伪造 running。
 
+创建/安装阶段的未完成操作也要有持久化 journal 与重启对账：T004 负责创建/安装事务的 journal 与恢复入口，T005 的 `reconcile/**` 统一覆盖“未完成创建”与“未结束进程”两类，所有权约定见 [tasks.md](tasks.md)。
+
 ## 凭据边界
 
+范围决策见 [ADR 0002](../../docs/adr/0002-credential-boundary.md)。
+
 - 受管用户 API 凭据只以 CredentialReference 形式存储，由启动时解析并注入显式进程环境，不写入上述任何可导出实体。
-- 上游 DSH 会在环境 home 生成 `.credentials.yaml`（0600，Web 会话 grant secret）与 `logs/` 诊断。环境 home 因此整体视为含密目录：不进入整合包、导出、普通日志与 Git，不跨环境复制。数据模型不假设上游从不写凭据文件。
+- 上游 DSH 据 PR #14 探针（未合并，固定 commit [c092f67](https://github.com/YingkeSu/HDSL/blob/c092f67b25f7233bd49e0c1452bdd0df2cd3516a/docs/research/dsh-behavior-probes.md)）会在环境 home 生成 `.credentials.yaml`（0600，Web 会话 grant secret）与 `logs/` 诊断。环境 home 因此整体视为含密目录：不进入整合包、导出、普通日志与 Git，不跨环境复制。该项**待 T001 复核转正**，复核前按待验证处理；数据模型不假设上游从不写凭据文件，也不要求该产物改由 OS 凭据存储引用。
 
 ## 未来
 

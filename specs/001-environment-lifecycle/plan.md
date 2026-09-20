@@ -14,7 +14,8 @@
 - 测试：领域单元、文件/进程集成、有限 UI E2E；候选 Vitest/Playwright。
 - 平台：macOS ARM64、Windows x64 目标；最低版本待上游验证。Windows 目前无实机证据，只称目标平台。
 - 约束：启动就绪默认上限拟定 60 秒，可配置；下载有取消与有限重试，实际阈值验证后锁定。无远程管理、无后台遥测。
-- 契约：`API_VERSION = "1.0"`（major.minor），包络携带 apiVersion；DTO 见 [data-model.md](data-model.md)，方法见 [contracts/local-api.md](contracts/local-api.md)。
+- 契约：`API_VERSION = "1.0"`（major.minor，**完全匹配**），包络携带 apiVersion；DTO 见 [data-model.md](data-model.md)，方法见 [contracts/local-api.md](contracts/local-api.md)。
+- 凭据边界：见 [ADR 0002](../../docs/adr/0002-credential-boundary.md)；受管用户凭据按 OS store 引用，上游本地凭据产物按含密数据处理。
 
 ## Constitution Check
 
@@ -52,20 +53,22 @@ T003 完成契约冻结后，可按子目录并行：
 - S1 T004：`packages/core/src/**`、`packages/runtime/src/{catalog,install,composition}/**`。
 - S2 T006a renderer 列表/创建/启停 UI：`apps/desktop/src/renderer/**`，对冻结契约 + stub main。
 - S3 T007a 创建/隔离/摘要/磁盘集成测试：`tests/integration/install/**`。
-- S1 后：T005 `packages/runtime/src/{process,reconcile,credentials}/**` ∥ T007b `tests/integration/process/**`。
+- S1 后：T005 `packages/runtime/src/{process,reconcile,credentials}/**` ∥ T007b `tests/integration/process/**`；`reconcile/**` 统一对账“未完成创建”（T004 写 journal）与“未结束进程”。
 - 再后：T006b 接真实 operation + 诊断；T008a macOS 本地可并行，T008b Windows 依赖外部主机。
 
 并发前置：契约（[contracts/local-api.md](contracts/local-api.md) 方法/错误/DTO）冻结、测试替身与「mock 不得标为实机」边界明确（见 [testing.md](../../docs/development/testing.md)）。
 
 ## 规格修订理由（2026-09-20，实施前）
 
-本轮只改规格与契约，不开始业务工程，T001 仍是 T002 前的硬门槛：
+本轮只改规格、契约、领域上下文与 ADR，不开始业务工程，T001 仍是 T002 前的硬门槛：
 
-- 凭据：DSH 真实行为已在环境 home 生成 `.credentials.yaml` 与启动诊断，因此把凭据责任拆成“受管用户 API 凭据引用注入”与“上游生成短期 Web secret 排除/脱敏”两类，不承诺上游不落盘（见 [data-model.md](data-model.md)、[contracts/local-api.md](contracts/local-api.md)）。
+- 凭据：上游据 PR #14 探针（固定 commit `c092f67`，未合并）会在环境 home 生成 `.credentials.yaml` 与启动诊断；据此新增 [ADR 0002](../../docs/adr/0002-credential-boundary.md)，把凭据责任拆成“受管用户 API 凭据引用注入”与“上游生成本地凭据产物排除/脱敏”两类，不承诺上游不落盘；FR-007 与 CONTEXT 不变量已同步。该上游事实**待 T001 复核转正**，复核前按待验证处理。
 - WebUI：renderer 不接收携带 token 的 URL，改由 main 校验 loopback 且属于当前受管进程后原生打开。
-- 契约面：补齐 RuntimeCombination / EnvironmentSummary DTO、幂等冲突、未知 ID、平台不支持、版本与订阅语义。
+- 契约面：补齐 RuntimeCombination / EnvironmentSummary / RuntimeArtifactRef DTO、幂等冲突、未知 ID、平台不支持、完全匹配的版本规则与每 operation sequence、订阅语义；导出幂等不重做副作用，不新增 reveal 接口。
 - 前置收敛：T001 的 M1 完成条件收敛为 R001–R004；R005/R006 记录已知边界后转入 M2，M1 不证明未来 M2 功能完成。
+- 验收倒挂与恢复归属：T005 不再包含导出排除（归 T006）；创建/安装期 journal 与重启对账归 T004 与 T005 的 `reconcile/**` 共同覆盖。
 - 平台：Windows x64 拆为依赖外部主机的独立验收项，未实测前标记未测。
+- 映射同步：roadmap 任务索引与 issue #3/#5/#8 验收已同步；`research.md` 的 R005/R006 标注属 hdsl-3，通过 AO 协调，不直接改。
 - 以上为缺口修正，不代表任何前置证据已通过；T001 证据仍未合并，Windows 仍无实机数据。
 
 ## Complexity Tracking
