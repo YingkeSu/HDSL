@@ -49,29 +49,42 @@ export const markerContent = (spec: ArtifactSpec): string =>
 
 const entriesFor = (spec: ArtifactSpec): TarEntry[] => {
   const marker = Buffer.from(markerContent(spec), 'utf8');
-  const common: TarEntry[] = [{ path: MARKER_PATH, data: marker }];
   if (spec.kind === 'node') {
+    // Mirrors the official Node distribution: one top-level
+    // `node-v<version>-<platform>-<arch>/` directory, which the installer
+    // strips before expecting `bin/node`.
+    const top = `node-v${spec.version}-${spec.platform}-${spec.arch}`;
     return [
-      ...common,
+      { path: `${top}/${MARKER_PATH}`, data: marker },
       {
-        path: 'bin/node',
+        path: `${top}/bin/node`,
         mode: 0o755,
         data: Buffer.from(`#!/bin/sh\n# HDSL QA fixture node ${spec.version}\necho fixture-node\n`),
       },
-      { path: 'LICENSE', data: Buffer.from('HDSL QA fixture; not a real runtime.\n') },
+      {
+        path: `${top}/LICENSE`,
+        data: Buffer.from('HDSL QA fixture; not a real runtime.\n'),
+      },
     ];
   }
+  // Mirrors an npm package tarball: one top-level `package/` directory. The
+  // installer strips it and maps the remainder under
+  // `node_modules/@deepseek-ai/dsh/` for the artifacts-only path.
   return [
-    ...common,
+    { path: `package/${MARKER_PATH}`, data: marker },
     {
-      path: 'node_modules/@deepseek-ai/dsh/package.json',
+      path: 'package/package.json',
       data: Buffer.from(
         `${JSON.stringify({ name: '@deepseek-ai/dsh', version: spec.version, hdslQaFixture: true }, null, 2)}\n`,
       ),
     },
     {
-      path: 'node_modules/@deepseek-ai/dsh/lib/bin.js',
+      path: 'package/lib/bin.js',
       data: Buffer.from(`// HDSL QA fixture dsh ${spec.version}\nconsole.log('fixture-dsh');\n`),
+    },
+    {
+      path: 'package/node_modules/@deepseek-ai/dsh-dependency/package.json',
+      data: Buffer.from('{"name":"@deepseek-ai/dsh-dependency","version":"1.0.0"}\n'),
     },
   ];
 };
@@ -100,14 +113,15 @@ export const buildArtifactWithEntries = (
 ): ArtifactFixture => fixtureOf(spec, createTarGz(entries));
 
 /**
- * Absolute-escaping artifact: archive entries target `../../` outside the
- * extraction root. A correct installer must not write those paths.
+ * Absolute-escaping artifact: after the installer strips the single top-level
+ * directory, these entries resolve to `../../` outside the extraction root. A
+ * correct installer must not write those paths.
  */
 export const buildPathTraversalArtifact = (spec: ArtifactSpec): ArtifactFixture =>
   buildArtifactWithEntries(spec, [
-    { path: MARKER_PATH, data: Buffer.from(markerContent(spec), 'utf8') },
-    { path: '../hdsl-qa-escape.txt', data: Buffer.from('escaped-one-level\n') },
-    { path: '../../hdsl-qa-escape.txt', data: Buffer.from('escaped-two-levels\n') },
+    { path: `package/${MARKER_PATH}`, data: Buffer.from(markerContent(spec), 'utf8') },
+    { path: 'package/../hdsl-qa-escape.txt', data: Buffer.from('escaped-one-level\n') },
+    { path: 'package/../../hdsl-qa-escape.txt', data: Buffer.from('escaped-two-levels\n') },
     { path: '/tmp/hdsl-qa-absolute-escape.txt', data: Buffer.from('absolute\n') },
   ]);
 

@@ -1,136 +1,156 @@
 # 安装创建真实文件边界验证（T007a / issue #31）
 
-状态：**夹具与用例方案已完成；真实安装执行被 T004 实现阻塞。**
-本文档不声称任何安装行为已通过；`tests/integration/install/harness.test.ts`
-的 9 项绿色只证明夹具本身可信，不代表启动器可用。
+状态：**已在 T004 候选 `ccaaeb9` 上接入并真实执行**。合成边界 16 项全绿；两项真实闭包
+opt-in 全绿；共 290 passed / 3 skipped（全仓）。9fb42d2 的旧红证据保留分栏。本文档不把
+合成夹具当成真实 DSH 可运行证据。
 
 ## 元数据
 
 | 项 | 值 |
 | --- | --- |
 | 任务 | [#31 [T007a] 独立验证安装创建的真实文件边界](https://github.com/YingkeSu/HDSL/issues/31)，父任务 #7 |
-| 冻结契约基线 | `3e76a49694f8dcf4c8bba5d32196a6665a2f394e`（`contracts-v1.0.0`） |
-| QA 会话 / 角色 | `ao/hdsl-18/root`；QA，非 reviewer，不做任何 PR review |
-| 文件所有权 | 仅 `tests/integration/install/**`、`docs/development/install-validation.md` |
+| 冻结契约基线 | `3e76a49694f8dcf4c8bba5d32196a6665a2f394e`（`contracts-v1.0.0`）；QA 夹具已合入 `6da541d` |
+| T004 候选（复验） | `ccaaeb94a691ac943adf7a0ba471285349d1953f`（PR [#35](https://github.com/YingkeSu/HDSL/pull/35)，base `6da541d`，父 `9fb42d2`） |
+| 前一候选（旧证据） | `9fb42d2fd78ea2bcb3cc4aacb629851476624175`（#37/#39 复现基线） |
+| QA 分支 / 角色 | `ao/hdsl-18/t004-install-qa`；QA，非 reviewer，不做 PR review；不改生产 |
+| 文件所有权 | `tests/integration/install/**`、`docs/development/install-validation.md` |
 | 执行平台 | macOS 26.3（Darwin 25.3.0 arm64），Node `v24.21.0`，pnpm `11.7.0` |
-| 受测依赖 | T004（[#4](https://github.com/YingkeSu/HDSL/issues/4)），实现会话 hdsl-15 |
 | 不在本切片 | 进程启停/就绪/凭据（T005）、UI/导出（T006）、Windows（T008b） |
 
-## 结论（当前）
+## 已确认并核对的公开调用面
 
-- 公开调用面已与 T004 作者（hdsl-15）书面确认，见 `tests/integration/install/support/managed-install-api.ts`。
-- 夹具已完成并通过自检：真实临时目录、真实 loopback 下载端点、有效/截断/摘要错误产物、真实 HFS+ 小卷 ENOSPC、按冻结规则计算的组成摘要、宿主 HOME 快照。
-- **实际创建验收未执行**：`@hdsl/core` 与 `@hdsl/runtime` 现阶段只有空入口，没有 `createManagedInstall` / `createRuntimePort` 候选 SHA。按 #31 停止条件交付夹具与方案后停止，不无限轮询；有候选再恢复运行。
+`@hdsl/runtime`：`createRuntimePort({ host, fetch, faults, urlRewrites,
+localArtifactDirectory, diskFreeBytes, limits, closureInstall, precheck,
+npmRegistry, clock, commandTimeoutMs })`、`VERIFIED_COMBINATIONS`。
+`@hdsl/core`：`createManagedInstall({ dataRoot, catalog, runtime, host, clock,
+faults, process, exportDiagnostics, operationTimeoutMs, allowArtifactsOnly,
+fixtures })`，返回 `{ port, service, recover(), waitForOperation(), close() }`；
+`service.readInstallManifest(environmentId, { generationId? })` 直接返回 manifest。
+类型在 `tests/integration/install/support/managed-install-api.ts` 从真实包
+re-export，导出消失会编译失败而不是跳过。
 
-## 已确认的公开调用面
+真实产物布局（QA 夹具据此修正）：Node 归档为 `node-v<ver>-<os>-<arch>/bin/node`
+（`stripComponents:1`）；DSH 归档为 npm 包 `package/...`（stripped 后映射到
+`dsh/node_modules/@deepseek-ai/dsh/`）。
 
-```ts
-// @hdsl/runtime
-const runtime = createRuntimePort({
-  host, fetch, faults, urlRewrites, localArtifactDirectory,
-  diskFreeBytes, limits, closureInstall, precheck,
-});
-// @hdsl/core
-const install = await createManagedInstall({
-  dataRoot, catalog, runtime, host, clock, faults, limits, fixtures,
-});
-const api = createContractRuntime({ port: install.port }); // 只走 dispatch
-```
+## 合成边界组结果（候选 ccaaeb9）
 
-关键语义（hdsl-15 书面确认，2026-09-20）：
+`pnpm exec vitest run tests/integration/install/install.integration.test.ts`
+（全部真执行、无 skip）：
 
-- create 异步：`dispatch` 立即返回 `{ operationId }`，QA 以有限超时轮询 `operations.get` / `environments.list`；phase 顺序 `queued → downloading → extracting → installing-dependencies → preflight → committing → succeeded|failed`。
-- 下载按 `catalog.artifactLocations.{node,dsh}.url` 流式校验 64 位小写 sha256；中断 → `DOWNLOAD_FAILED`，字节不符 → `DIGEST_MISMATCH`；两者终态 failed、环境 `state=error`、`activeGenerationId=null`。
-- 真实安装用受管 Node 执行 `npm ci --ignore-scripts`，输入随 catalog 入库的精确 `package-lock.json`，写 `<generation>/install-manifest.json`；公开读取 `service.readInstallManifest(environmentId)`。
-- manifest 字段：`schemaVersion`、`installMode: "npm-ci" | "artifacts-only"`、`node{version,sha256,executable}`、`dsh{version,sha256,entrypoint}`、`closure{lockSha256,packageCount,npmVersion}`、`preflight{checks[{name,exitCode,stdout}],passed,skipped?}`、`installedAt`。
-- **artifacts-only 提交门**：默认生产 create 读到 `installMode !== "npm-ci"` 或 preflight 跳过即失败 `INTERNAL_ERROR`，不写 active 指针、`state=error`。仅显式 `fixtures:{allowArtifactsOnly:true}` + `createRuntimePort({closureInstall:false, precheck:'none'})` 允许提交，且 manifest 如实记 `artifacts-only` / `preflight.skipped=true`。T005 的 start 时再校验属纵深，不在本切片。
-- `faults`：T004 侧 `{failBeforeCommit,pauseBeforeCommit}`；T005 无关。runtime 侧 `{failDownloadAfterBytes,corruptDownload,forceDiskFull,failExtraction}`。
+| 用例 | 9fb42d2 | ccaaeb9 | 说明 |
+| --- | --- | --- | --- |
+| INST-ISO-01F 两组成隔离（fixtures） | PASS | PASS | 两 env 独立、digest=冻结规则、manifest `artifacts-only`+`preflight.skipped` |
+| INST-AO-GATE-01 artifacts-only 提交门 | PASS | PASS | 默认生产门拒绝，`state=error`、无 active 指针 |
+| INST-DIG-01 摘要错误终态 | PASS | PASS | `DIGEST_MISMATCH`、`retryable=false`、`state=error` |
+| INST-CAT-01 目录不一致拒绝 | PASS | PASS | 目录 ref 与来源 sha 不一致 → dispatch `INTERNAL_ERROR`，无 operation/env |
+| INST-DL-01 下载中断终态 | PASS | PASS | `DOWNLOAD_FAILED`、响应未完成、`state=error` |
+| INST-DISK-01 磁盘不足（注入） | PASS | PASS | `forceDiskFull` → `DISK_FULL` |
+| INST-DISK-02 磁盘不足（真实小卷） | PASS | PASS | macOS 2MB HFS+ 小卷 + `minFreeBytes`（真实 statfs）→ `DISK_FULL` |
+| INST-PATH-01 路径安全 | PASS | PASS | 中文+空格 dataRoot；`../`/绝对路径条目被拒，外部无写入 |
+| INST-HOME-01 宿主 HOME 无副作用 | PASS | PASS | 成功安装后 `~/.dsh` 与候选 app-data 快照逐字节一致 |
+| INST-JRN-01 journal 恢复（同实例暂停） | PASS | PASS | `pauseBeforeCommit` → `recover()` → `state=error`、journal 清空 |
+| INST-JRN-02 journal 恢复（真实重启） | PASS | PASS | 关闭后新 service `recover()`：`rolledBack=1`、journal 清空 |
+| INST-IDEM-01 requestId 重放（同实例） | PASS | PASS | 返回原 operationId、下载请求数不增 |
+| INST-IDEM-02 requestId 跨重启重放 | PASS | PASS | 新 service 重放同 requestId 仍不重复下载 |
+| INST-CONC-01 同组合并发（慢速交错） | **FAIL**（#37） | **PASS** | 两 create 均成功、缓存最终文件 sha256==catalog、无 `.part`、staging 清空 |
+| INST-CONC-02 同组合并发（一方传输失败） | PASS | PASS | 失败方 `DOWNLOAD_FAILED`、成功方缓存摘要正确、无 `.part` |
+| INST-RECOVER-01 recover 在途调用 | **FAIL**（#39） | **PASS** | recover 不打断在途安装，`operation=succeeded` 与 `environment=stopped+active` 一致 |
 
-## 用例目录
+`INST-DISK-02` 通过 `it.skipIf(process.platform !== 'darwin')` 平台门（Linux CI 无
+非特权小卷；注入版 INST-DISK-01 在所有平台执行）。
 
-用例函数位于 `tests/integration/install/scenarios/install-scenarios.ts`，当前是**可执行就绪但未接入 vitest 的 async 函数**（不是 `*.test.ts`）。
+## 真实闭包组结果（候选 ccaaeb9，`HDSL_QA_REAL_INSTALL=1`）
 
-| 用例 ID | 覆盖 | 夹具 | 故障标注 | 公开断言 |
-| --- | --- | --- | --- | --- |
-| QA-HARNESS-01..09 | 夹具自检 | 本地 | 无 | tar/端点/临时目录/ENOSPC/摘要 —— **已绿** |
-| INST-ISO-01 | 两组成隔离、digest 绑定 | 真实产物 | 无 | 两个 env 独立、`state=stopped`、digest=冻结规则、manifest `npm-ci` |
-| INST-ISO-01F | 两组成隔离（夹具路径） | 合成 tar | 无 | 同上但 manifest `artifacts-only`+`preflight.skipped` |
-| INST-COMP-REAL-01 | 完整依赖安装与本切片真实 version/help 预检 | 真实产物（需网络） | 无 | manifest `npm-ci`、`closure.packageCount>0`、`preflight.passed`、各 check `exitCode=0` 且 stdout 含锁定 Node/DSH 版本 |
-| INST-DIG-01 | 摘要错误终态 | 合成 tar | 篡改 catalog sha | `DIGEST_MISMATCH`、`retryable=false`、`state=error`、无 active 指针 |
-| INST-DL-01 | 下载中断终态 | 合成 tar（truncate） | 注入传输截断 | `DOWNLOAD_FAILED`、环境 `error`、响应未完成 |
-| INST-DISK-01 | 磁盘不足终态（注入） | 合成 tar | `forceDiskFull` **注入** | `DISK_FULL`、`state=error` |
-| INST-DISK-02 | 磁盘不足终态（真实小卷） | 合成 tar + 2MB HFS+ | 真实卷 + `minFreeBytes` 阈值（真实 statfs） | `DISK_FULL`、`state=error` |
-| INST-AO-GATE-01 | artifacts-only 提交门 | 合成 tar | 无（默认门） | 不得出现 artifacts-only 且完整成功/可用 active；失败则 `state=error`、无 active 指针 |
-| INST-JRN-01 | journal 重启恢复 | 合成 tar | `pauseBeforeCommit` **注入** | 未提交 journal 存在 → `recover()` 后环境 `error`、无 active、journal 清空 |
-| INST-IDEM-01 | requestId 跨重启重放不重复副作用 | 真实/夹具 | 无 | 返回原 operationId、下载请求数不增 |
-| INST-PATH-01 | 中文+空格路径；恶意解压路径 | 合成 tar（`../`、绝对路径） | 无 | create 失败；dataRoot 之外无写入 |
-| INST-HOME-01 | 宿主 HOME/`~/.dsh` 无副作用 | 合成 tar | 无 | 快照前后逐字节一致 |
+| 用例 | 结果 | 说明 |
+| --- | --- | --- |
+| INST-ISO-01 真实两组成隔离（npm-ci） | PASS（55.7s） | 真实 `VERIFIED_COMBINATIONS` 两组合顺序安装；digest/manifest 绑定、HOME 不变 |
+| INST-COMP-REAL-01 真实闭包 manifest/锁/预检 | PASS（58.1s） | `npm-ci`、`packageCount=585`、`lockSha256` 64hex、preflight 各 check `exitCode=0` 且 stdout 含锁定 Node/DSH 版本、`treeDigest` 64hex、宿主 HOME 不变 |
 
-所有用例都在场景内把 `HOME`、`DSH_HOME`、`XDG_*`、`TMPDIR` 重定向到临时根，并断言宿主 `~/.dsh` 与候选 app-data 路径无变化。
+独立复核作者 opt-in 证据 `tests/install/real-install.evidence.test.ts`
+（`HDSL_REAL_INSTALL=1`，QA **自己的临时 dataRoot**，未覆盖作者保留数据）：PASS，
+两组合 `npm-ci`、`packageCount=585`、preflight `node v22.19.0/v24.21.0` +
+`dsh 0.1.5-rc.2` + `--help` 全 `exit 0`、`treeDigest` 一致、宿主 `~/.dsh` 不变
+（在 9fb42d2 执行；作者在 ccaaeb9 重跑自报，QA 自身场景在 ccaaeb9 通过）。
+
+## 缺陷复验（精确 SHA，不关闭）
+
+| ID | 摘要 | 9fb42d2 | ccaaeb9 |
+| --- | --- | --- | --- |
+| [#37](https://github.com/YingkeSu/HDSL/issues/37) | 同组合并发 create 共享 `<sha256>.part`，rename 时序污染缓存 | 独立复现（INST-CONC-01 红：一个 create `INTERNAL_ERROR`） | **通过** INST-CONC-01；断言未弱化，无 `.part`、缓存摘要正确 |
+| [#39](https://github.com/YingkeSu/HDSL/issues/39) | `recover()` 在安装途中回滚活跃事务造成分裂状态 | 独立复现（INST-RECOVER-01 红：`operation=failed` 且 `environment=stopped+active`） | **通过** INST-RECOVER-01；recover 跳过活跃事务 |
+
+按编排要求不关闭 issue；合并前 #37/#39 保持 OPEN。
+
+## 故障标注（真实 / 注入分栏）
+
+- **真实**：`INST-DISK-02`（挂载 2MB HFS+ 小卷 + 真实 `statfs` 阈值）；`INST-ISO-01`、`INST-COMP-REAL-01` 与作者证据（真实 Node/DSH 产物 + 真实 `npm ci` + 受管 Node 预检）。
+- **注入**：`INST-DISK-01`（`forceDiskFull`）；`INST-DL-01`/`INST-CONC-02`（端点截断传输）；`INST-JRN-01/02`、`INST-RECOVER-01`（`pauseBeforeCommit` 崩溃边界 + 慢速传输）。
+- **合成夹具**：`tests/integration/install/support/artifacts.ts` 的 tar。只证明下载/摘要/journal/隔离/路径/HOME 边界，**不推断真实 DSH 可运行**。
 
 ## FR → 用例映射（本切片）
 
 | 需求 | 用例 |
 | --- | --- |
-| FR-001 独立环境 ID/名称/数据根，禁止写其他环境或默认 home | INST-ISO-01/01F、INST-HOME-01、INST-PATH-01 |
-| FR-002 精确运行时版本/平台/来源/SHA-256，拒绝不支持组成 | INST-ISO-01/01F、INST-COMP-REAL-01、INST-DIG-01、INST-DL-01、INST-AO-GATE-01 |
-| FR-006 operation 阶段/终态/可重试 | 全部用例的终态断言；phase 顺序为文档判据（未单独断言字符串） |
-| FR-008 失败诊断保留、重启对账 | INST-JRN-01、INST-IDEM-01 |
+| FR-001 独立环境 ID/名称/数据根，禁止写其他环境或默认 home | INST-ISO-01F/ISO-01、INST-HOME-01、INST-PATH-01 |
+| FR-002 精确运行时版本/平台/来源/SHA-256，拒绝不支持组成 | INST-ISO-01F/ISO-01、INST-COMP-REAL-01、INST-DIG-01、INST-CAT-01、INST-DL-01、INST-AO-GATE-01 |
+| FR-006 operation 阶段/终态/可重试 | 全部用例终态断言；phase 顺序为文档判据 |
+| FR-008 失败诊断保留、重启对账 | INST-JRN-01、INST-JRN-02、INST-IDEM-01/02、INST-RECOVER-01 |
 | 边界：磁盘不足 | INST-DISK-01（注入）、INST-DISK-02（真实小卷） |
 | 边界：中文/空格路径、路径穿越 | INST-PATH-01 |
-| SC-001 两组成可分别启动/隔离实测 | 本切片只到 `state=stopped`+digest+manifest 绑定；真实启停归 T005/T008 |
-| SC-003 失败有可查询终态、不无限等待 | 全部轮询均有有限超时 |
+| SC-001 两组成可分别启动/隔离实测 | 本切片到 `state=stopped`+digest+manifest 绑定；真实启停归 T005/T008 |
+| SC-003 失败有可查询终态、不无限等待 | 全部轮询有限超时 |
 
-## 真实证据与合成夹具分栏
+## 原 P3 清单处置
 
-| 结论 | 合成夹具（synthetic tar） | 真实产物（npm-ci 闭包） |
-| --- | --- | --- |
-| 下载/摘要/中断/磁盘/journal/隔离/路径/HOME 边界 | **可判** | 可判（需网络与时间） |
-| 受管 Node/DSH 真实 `--version` / `--help` 可运行性 | **不可判**；synthetic 的 `bin/node` 是占位脚本 | **唯一来源**：INST-COMP-REAL-01 |
-| 两个 Node 组合（22.19.0 / 24.21.0）真实闭包 | 不可判 | 由 T004 作者实证后并入证据；QA 未实证前标 **未测** |
+| 项 | 处置 |
+| --- | --- |
+| P3-1 `TMPDIR` 未建目录 | 已修：`withIsolatedEnv` 预先 `mkdir` sandbox home/dsh-home/tmp |
+| P3-2 `diffHostDefaults` 漏报差异 | 已修：完整返回 snapshot 级 added/removed/changed |
+| P3-3 隔离用例注释与 fixture 分支矛盾 | 已修：注释明确 fixtures/real 两种模式 |
+| P3-4 `writeUntilEnospc` 上限过大 | 已修：默认上限降到 8MB 并注明仅用于挂载小卷 |
+| P3-5 `host` 硬编码 | 已修：`HarnessOptions.host`/`openInstall.host` 可覆盖，默认唯一已核验主机 |
+| P3-6 文档 head 记录 | 本文件已更新 |
 
-规则：不得因合成 tar 顶层解压成功或文件存在就推断真实 DSH 可运行；真实 `version`/`help` 证据只在真实闭包列记录。
+## skip 说明
+
+仅两处条件执行，均为真实条件而非掩盖缺陷：
+
+1. `INST-DISK-02`：`it.skipIf(process.platform !== 'darwin')`——真实小卷需 macOS `hdiutil`；注入版在所有平台执行。
+2. `install real closure (opt-in, network)` 组：`describe.skipIf(HDSL_QA_REAL_INSTALL !== '1')`——真实下载 + `npm ci`（网络、~1GB、数分钟），不适合默认单测；已在 macOS ARM64 显式执行，结果见上。默认 `pnpm run test` 中该组显示为 skipped，属预期。
 
 ## 未测 / 出切片 / 移交
 
-- **T004 未实现**：无 `createManagedInstall` / `createRuntimePort` 候选 SHA，全部 INST-* 用例未执行。
-- **真实闭包未跑**：INST-COMP-REAL-01 需要网络，本切片未执行；两个 Node 组合标未测。
-- **T005**：真实启停、就绪、端口、进程树、`start` 时按 manifest 拒绝 artifacts-only 的纵深门 —— 移交，未测。
-- **T006**：诊断导出与渲染侧秘密边界 —— 出切片。
-- **Windows x64 / Linux**：无实机，标未测；不在本切片。
-- **并发创建/锁冲突**：契约与 T004 归口，本切片未覆盖。
+- **T005**：真实启停、就绪、端口、进程树、start 时按 manifest 拒绝 artifacts-only 的纵深门；跨进程 dataRoot 锁 / recover 隔离、安装期 npm 进程树（编排已派 #5）——移交，未测。
+- **T006**：诊断导出与渲染侧秘密边界、组合根门（编排已派 #6）——出切片。
+- **Windows x64 / Linux**：无实机，标未测；真实闭包仅在 macOS ARM64 执行。
+- 两个 Node 组合真实闭包：QA 两个真实场景在 ccaaeb9 通过；仍以作者实证为准。
+- 未覆盖多进程产品行为（本批不扩）。
 
 ## 复现命令
 
 ```sh
-# 夹具自检（当前唯一可执行）
 pnpm install --frozen-lockfile
+pnpm run typecheck
+
+# 合成边界组（默认；16 项全绿）
+pnpm exec vitest run tests/integration/install/install.integration.test.ts
+
+# 真实闭包组（opt-in，网络 + npm ci）
+HDSL_QA_REAL_INSTALL=1 pnpm exec vitest run tests/integration/install/install.integration.test.ts -t "install real closure"
+
+# 夹具自检
 pnpm exec vitest run tests/integration/install/harness.test.ts
 
-# 类型与全量单测（不得因夹具变红）
-pnpm run typecheck
-pnpm run test
+# 作者 opt-in 真实证据（独立临时 dataRoot）
+HDSL_REAL_INSTALL=1 pnpm exec vitest run tests/install/real-install.evidence.test.ts --reporter=verbose
 ```
 
-T004 落地后，新增 `tests/integration/install/install.integration.test.ts` 通过
-`loadCoreModule()` / `loadRuntimeModule()` 接线；接口缺失时必须**显式失败并报告**，
-不得用 mock 端口替代或 `skip`/`it.fails` 变绿。
+## 完成报告
 
-## 缺陷记录
-
-按 #31：去重后建 issue，记录 SHA/平台/命令/期望/实际；可复用回归用正确行为断言。
-当前无新缺陷（未执行真实安装）。
-
-| ID | 摘要 | 状态 |
-| --- | --- | --- |
-| — | 暂无（实现未就绪） | — |
-
-## 完成报告（本阶段）
-
-- PR：https://github.com/YingkeSu/HDSL/pull/33（独立 QA 测试 PR，需专职 reviewer 审核；作者 hdsl-15 不可 review）
-- head（夹具提交）：`c164420ff18c32e4a1c6b8771dffdf987ceb58e9`（`ao/hdsl-18/install-qa-fixtures`，基线 `3e76a49`）；PR #33 的 CI 对 PR head 运行，后续 doc-only 提交不改变夹具内容
-- checks（GitHub Actions，2026-09-20）：`repository`（两次）pass；`typecheck / build / unit (ubuntu-latest)`（两次）pass；无失败 check（在夹具提交 `c164420` 上）
-- 本地检查：`python3 scripts/check_repository.py` PASS；`pnpm run typecheck` PASS；`pnpm run test` 13 files / 236 tests passed（含 9 项夹具自检）
-- 交付：`tests/integration/install/**`（夹具 + 9 项自检 + 场景函数）、本文件
-- 阻塞：等待 #4 提供稳定接口/精确候选 SHA；到位后恢复 INST-* 运行并回报
-- 局限：未执行真实安装；不声称 Windows 或 DSH 实机支持
+- 复验候选 head：`ccaaeb94a691ac943adf7a0ba471285349d1953f`（base `6da541d`，PR #35）
+- QA 分支：`ao/hdsl-18/t004-install-qa`（堆叠在候选上；scope 仅 `tests/integration/install/**` + 本文件，未改生产）
+- 注册场景：合成边界 16（含平台门 1）+ 真实闭包 2 = 18；另 9 项夹具自检（`harness.test.ts`）
+- 结果：`ccaaeb9` 合成 16 PASS、真实 2 PASS；全仓 `pnpm run test` 290 passed / 3 skipped
+- 缺陷：#37、#39 均已在 `ccaaeb9` 由同一正确行为断言复验通过；不关闭 issue
+- 局限：未执行真实启停/就绪/凭据；不声称 Windows 或真实 DSH 可运行（仅真实闭包用例与作者证据支持该结论）

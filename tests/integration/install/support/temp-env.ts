@@ -9,7 +9,7 @@
  * (and the candidate app-data locations) were not touched.
  */
 import { createHash } from 'node:crypto';
-import { mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, readlinkSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, relative, sep } from 'node:path';
 
@@ -172,7 +172,9 @@ export const captureHostDefaults = (): HostDefaults => ({
 });
 
 export const diffHostDefaults = (before: HostDefaults, after: HostDefaults): SnapshotDiff => {
-  const differences: TreeEntry[] = [];
+  const added: TreeEntry[] = [];
+  const removed: TreeEntry[] = [];
+  const changed: TreeEntry[] = [];
   for (let index = 0; index < before.snapshots.length; index += 1) {
     const left = before.snapshots[index];
     const right = after.snapshots[index];
@@ -180,11 +182,13 @@ export const diffHostDefaults = (before: HostDefaults, after: HostDefaults): Sna
       continue;
     }
     const diff = diffSnapshots(left, right);
-    differences.push(...diff.added, ...diff.removed, ...diff.changed);
+    added.push(...diff.added);
+    removed.push(...diff.removed);
+    changed.push(...diff.changed);
   }
   const newTopLevel = after.homeTopLevel.filter((name) => !before.homeTopLevel.includes(name));
   for (const name of newTopLevel) {
-    differences.push({
+    added.push({
       relPath: `HOME/${name}`,
       kind: 'file',
       size: 0,
@@ -192,18 +196,7 @@ export const diffHostDefaults = (before: HostDefaults, after: HostDefaults): Sna
       detail: 'new host HOME entry',
     });
   }
-  return {
-    equal: differences.length === 0,
-    added: newTopLevel.map((name) => ({
-      relPath: `HOME/${name}`,
-      kind: 'file' as const,
-      size: 0,
-      mtimeMs: 0,
-      detail: '',
-    })),
-    removed: [],
-    changed: [],
-  };
+  return { equal: added.length === 0 && removed.length === 0 && changed.length === 0, added, removed, changed };
 };
 
 /**
@@ -213,6 +206,11 @@ export const diffHostDefaults = (before: HostDefaults, after: HostDefaults): Sna
  */
 export const withIsolatedEnv = async <T>(root: string, fn: () => Promise<T>): Promise<T> => {
   const sandboxHome = join(root, 'home');
+  // P3-1: the TMPDIR override must exist, or isolated code calling os.tmpdir()
+  // would fail with ENOENT through no fault of its own.
+  for (const directory of [sandboxHome, join(root, 'dsh-home'), join(root, 'tmp')]) {
+    mkdirSync(directory, { recursive: true });
+  }
   const overrides: Record<string, string> = {
     HOME: sandboxHome,
     DSH_HOME: join(root, 'dsh-home'),

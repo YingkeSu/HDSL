@@ -20,7 +20,11 @@ export type ServeMode =
   /** Announce the full length, send half, then reset the socket. */
   | 'truncate'
   /** Accept the request and reset the socket before sending a body. */
-  | 'reset';
+  | 'reset'
+  /** Send the full body in two delayed halves, to force interleaving. */
+  | 'slow'
+  /** Truncate only the first request to this path; serve full afterwards. */
+  | 'fail-first';
 
 export interface RouteFixture {
   readonly path: string;
@@ -46,6 +50,8 @@ export const startLocalEndpoint = async (
 ): Promise<LocalEndpoint> => {
   const byPath = new Map(routes.map((route) => [route.path, route]));
   const requests: RequestLog[] = [];
+  const failFirstSeen = new Set<string>();
+  const delayMs = 60;
 
   const server: Server = createServer((request, response) => {
     const path = (request.url ?? '').split('?')[0] ?? '';
@@ -57,7 +63,11 @@ export const startLocalEndpoint = async (
       response.end('not found');
       return;
     }
-    const mode = route.mode ?? 'full';
+    let mode = route.mode ?? 'full';
+    if (mode === 'fail-first') {
+      mode = failFirstSeen.has(path) ? 'full' : 'truncate';
+      failFirstSeen.add(path);
+    }
     if (mode === 'reset') {
       response.destroy();
       return;
@@ -74,6 +84,19 @@ export const startLocalEndpoint = async (
       // Destroy instead of end(): the client sees a premature close while the
       // advertised Content-Length promises more bytes.
       response.destroy();
+      return;
+    }
+    if (mode === 'slow') {
+      const half = Math.floor(route.body.length / 2);
+      log.bytesSent += half;
+      response.write(route.body.subarray(0, half));
+      setTimeout(() => {
+        const rest = route.body.subarray(half);
+        log.bytesSent += rest.length;
+        response.end(rest, () => {
+          log.completed = true;
+        });
+      }, delayMs);
       return;
     }
     log.bytesSent += route.body.length;
