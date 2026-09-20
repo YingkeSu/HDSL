@@ -363,18 +363,30 @@ export class RendererController implements RendererActions {
   }
 
   /**
-   * Explicit recovery entry shown after polling exhausted its bounded retries.
-   * It only resumes observing the current operation; it never re-issues the
-   * original command.
+   * Explicit recovery entry shown after polling exhausted its bounded retries,
+   * or after the **first** `operations.get` failed and no snapshot exists yet.
+   * It only resumes observing the same operation (read + subscribe); it never
+   * re-issues the original create/start command or its side effect.
    */
   retryTracking(): void {
     const tracked = this.#state.trackedOperation;
-    if (tracked === null || isOperationTerminal(tracked.status)) {
+    if (tracked !== null) {
+      if (isOperationTerminal(tracked.status)) {
+        return;
+      }
+      this.#pollFailures = 0;
+      this.#update({ trackingError: null, trackingPaused: false });
+      this.#schedulePoll(this.#trackingEpoch);
       return;
     }
-    this.#pollFailures = 0;
-    this.#update({ trackingError: null, trackingPaused: false });
-    this.#schedulePoll(this.#trackingEpoch);
+    const pendingOperationId = this.#state.pendingOperationId;
+    if (pendingOperationId === null || this.#state.trackingError === null) {
+      return;
+    }
+    // No snapshot: re-run only the first read/subscribe for the same real
+    // operationId. `#trackOperation` bumps the epoch, so a concurrent newer
+    // track or a dispose still wins over this late retry.
+    void this.#trackOperation(pendingOperationId);
   }
 
   /**
@@ -463,12 +475,29 @@ export class RendererController implements RendererActions {
     const epoch = this.#invalidateTracking();
     this.#clearPollTimer();
     this.#pollFailures = 0;
-    this.#update({ trackedOperation: null, trackingError: null, trackingPaused: false });
+    this.#update({
+      trackedOperation: null,
+      // The real operationId stays visible even before a snapshot arrives, so a
+      // failed first `operations.get` is not silently lost.
+      pendingOperationId: operationId,
+      trackingError: null,
+      trackingPaused: false,
+    });
     await this.#releaseAllSubscriptions();
     if (!this.#isCurrent(epoch)) {
       return;
     }
+    await this.#fetchInitialSnapshot(operationId, epoch);
+  }
 
+  /**
+   * First observation of a freshly dispatched operation.
+   *
+   * On failure it keeps `pendingOperationId` and records `trackingError`
+   * instead of fabricating a snapshot; `retryTracking` can then re-observe the
+   * same operation. Success clears the pending id and starts normal tracking.
+   */
+  async #fetchInitialSnapshot(operationId: string, epoch: number): Promise<void> {
     const snapshot = await this.#call('operations.get', { operationId }, operationSnapshotSchema);
     if (!this.#isCurrent(epoch)) {
       return;
@@ -477,7 +506,12 @@ export class RendererController implements RendererActions {
       this.#update({ trackingError: snapshot.error });
       return;
     }
-    this.#update({ trackedOperation: toTrackedOperation(snapshot.value) });
+    this.#update({
+      trackedOperation: toTrackedOperation(snapshot.value),
+      pendingOperationId: null,
+      trackingError: null,
+      trackingPaused: false,
+    });
 
     await this.#subscribeTo(operationId, epoch);
     if (!this.#isCurrent(epoch)) {
