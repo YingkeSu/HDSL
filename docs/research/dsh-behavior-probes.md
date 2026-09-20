@@ -1,36 +1,42 @@
 # DSH 行为探针证据（真实官方 DSH）
 
-状态：已执行。范围仅限真实官方 DeepSeek Harness（DSH）上游运行时行为；HDSL 应用尚未实现，本文不构成 001 的 macOS/Windows 实机验收，也不代替 T007/T008。可复现脚本：[tests/probes/dsh_behavior_probes.sh](../../tests/probes/dsh_behavior_probes.sh)。
+状态：已执行。范围仅限真实官方 DeepSeek Harness（DSH）上游运行时行为；HDSL 应用尚未实现，本文不构成 001 的 macOS/Windows 实机验收，也不代替 T007/T008。
+
+**本文按精确版本分节，禁止跨版本混用结论。** 两台可复现脚本：
+
+- [tests/probes/dsh_behavior_probes.sh](../../tests/probes/dsh_behavior_probes.sh)：单安装/单版本的行为探针（S0–S6）。
+- [tests/probes/dsh_install_anchor_probes.sh](../../tests/probes/dsh_install_anchor_probes.sh)：两个安装之间的模块回退锚点与隔离对比。
 
 相关文档：[上游验证计划](../../specs/001-environment-lifecycle/research.md)（R001–R006）、[001 规格](../../specs/001-environment-lifecycle/spec.md)、[来源与缺口](provenance.md)、[环境生命周期契约](../../specs/001-environment-lifecycle/contracts/local-api.md)。
 
 ## 1. 目的与边界
 
-回答 001 直接依赖的上游问题：DSH 如何解析 home、如何隔离环境、WebUI 如何绑定与就绪、端口冲突如何失败、如何停止自有进程。产出是**上游行为证据**，用于 T001 支持矩阵与后续适配器设计；没有 HDSL 代码，因此不宣称任何 HDSL 功能完成。
+回答 001 直接依赖的上游问题：DSH 如何解析 home、如何隔离环境、WebUI 如何绑定与就绪、端口冲突如何失败、如何停止自有进程，以及两个必须由启动器管理的文件系统边界——`$DSH_HOME/profiles/node_modules` 模块回退与 `$DSH_HOME/.credentials.yaml` 凭据文档。产出是**上游行为证据**，不是 HDSL 实现或验收。
 
 ## 2. 官方来源与版本核验（R001 部分）
 
 | 项 | 结论 | 证据 |
 | --- | --- | --- |
 | 官方仓库 | `https://github.com/deepseek-ai/deepseek-harness`（PUBLIC） | `gh repo view deepseek-ai/deepseek-harness --json visibility,licenseInfo,defaultBranchRef` |
-| 许可证 | MIT | 仓库 `licenseInfo.key=mit`；本地 `LICENSE` 首行 `MIT License / Copyright (c) 2026 DeepSeek` |
+| 许可证 | MIT | `licenseInfo.key=mit`；本地 `LICENSE` 首行 `MIT License / Copyright (c) 2026 DeepSeek` |
 | 默认分支 | `master` | 同上 |
-| 最新发布 | `v0.1.6-alpha.2`（Pre-release，2026-09-17T13:30:16Z） | `gh release list --repo deepseek-ai/deepseek-harness` |
-| 精确提交 | tag `dsh-v0.1.6-alpha.2` = `ddefc45fbc7f8e46dd73185e68295696d1297887` | `git ls-remote --tags origin 'dsh-v0.1.6*'` 与本地 `git rev-parse HEAD` 一致 |
-| npm 包 | `@deepseek-ai/dsh@0.1.6-alpha.2`，`bin: {dsh: lib/bin.js}` | `npm view @deepseek-ai/dsh@0.1.6-alpha.2 version dist.integrity bin` |
-| npm 完整性 | `sha512-PHR/3ZHpJNWXlDQ3U9weFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==` | 同上；`dist.shasum=37d635377c9807c47d49d662ca00d6d5ea5792de` |
+| hdsl-3 候选版本 | tag `dsh-v0.1.5-rc.2` = `fb2c4b9e698e30edb738bca4cf0618587db7d203` | `git ls-remote --tags origin 'dsh-v0.1.5-rc.2'`，与 hdsl-3 提供一致 |
+| 本机已构建版本 | tag `dsh-v0.1.6-alpha.2` = `ddefc45fbc7f8e46dd73185e68295696d1297887` | `git rev-parse HEAD` 与 `git ls-remote --tags` 一致；GitHub Release 2026-09-17 Pre-release |
 | npm dist-tags | `latest=0.1.5-rc.2`，`alpha=0.1.6-alpha.2`，`next=0.1.5-rc.2` | `npm view @deepseek-ai/dsh dist-tags` |
+| npm 完整性（rc.2） | `sha512-PHR/3ZHpJNWXlDQ3UweFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==` | `npm view @deepseek-ai/dsh@0.1.5-rc.2 dist.integrity`（`shasum=37d635377c9807c47d49d662ca00d6d5ea5792de`） |
 | Node engine | `^22.19.0 \|\| >=24.0.0` | 仓库根 `package.json` `engines.node` |
 
-本机探针使用的二进制来自 checkout 构建产物 `apps/cli/lib/bin.js`，`git describe` 为 `dsh-v0.1.6-alpha.2`，`git status --porcelain` 无已跟踪改动。**注意**：npm `latest` 仍指向 `0.1.5-rc.2`，HDSL 若按“默认 latest”安装会得到更旧版本；精确锁定必须显式写 `0.1.6-alpha.2` 或提交 SHA。
+**注意**：npm `latest` 会随发布变动；T001 支持矩阵必须写显式版本 + tag SHA + 完整性，不要写 `latest`。本次两个版本均从 npm 安装到独立目录，安装命令见第 12 节。
 
 ## 3. 方法与安全约束
 
-- 脚本仅使用仓库已有依赖：POSIX shell、Node（DSH 运行时）、`python3`（仅用于占端口）、`curl`/`lsof`/`pgrep`。
-- 每次运行都用 `env -i` 清空环境，仅注入：位于临时目录的 `HOME`、`DSH_HOME`、`DSH_AGENTS_HOME`，`DSH_TELEMETRY_DISABLED=1`，占位 `DEEPSEEK_API_KEY=keyless-probe-no-call`，`NODE_NO_WARNINGS=1`。
-- 不读取、不写入操作者真实 `~/.dsh`、settings 或凭据；不发起模型请求；只对自己 `spawn` 的进程发信号。
-- 所有临时目录在退出时清理；URL 中的 `?token=` 与 `dsh-auth-*` cookie 在输出中脱敏。
-- 未覆盖 Windows：没有 Windows 主机，也未在 WSL 或虚拟机中执行，因此不产生任何 Windows 结论。
+- 依赖：POSIX shell、Node（DSH 运行时）、`python3`（占端口/遍历 symlink/HTTP）、`curl`、`lsof`、`pgrep`。
+- 每次运行用 `env -i` 清空环境，仅注入临时 `HOME`、`DSH_HOME`、`DSH_AGENTS_HOME`、`DSH_TELEMETRY_DISABLED=1`、占位 `DEEPSEEK_API_KEY=keyless-probe-no-call`、`NODE_NO_WARNINGS=1`。
+- 不读写操作者真实 `~/.dsh`、settings 或凭据；每次启动都在临时 CWD；不发起模型请求；输出中 `?token=` 与 `dsh-auth-*` cookie 脱敏。
+- 进程只对自己 `spawn` 且未被 `wait` 回收的 PID 发信号：`wait` 成功后立即移出存活集合，`cleanup` 不会向陈旧 PID 发信号。
+- 硬断言版本（`DSH_EXPECT_VERSION`）、来源 commit 与干净树（`DSH_EXPECT_COMMIT`）、Node（`DSH_EXPECT_NODE`）；自动累计并打印 `assertions: N/M passed`；`curl`/`lsof`/`pgrep` 缺失即 FATAL，不会假通过。
+- 临时目录在退出时清理，**SIGINT/SIGTERM 中断也会清理**；需保留现场请先复制工作目录。
+- 未覆盖 Windows：没有 Windows 主机，未在 WSL/虚拟机执行，不产生任何 Windows 结论。
 
 ## 4. 运行环境
 
@@ -39,123 +45,154 @@
 | 运行时间 | 2026-09-20（本机时区 UTC+8） |
 | 平台 | `Darwin 25.3.0 arm64`（macOS，Apple Silicon） |
 | Node | `v25.6.1` |
-| DSH CLI | `0.1.6-alpha.2` @ `ddefc45fbc7f8e46dd73185e68295696d1297887` |
-| Web 构建产物 | 存在 `apps/cli/lib/bin.js` 与 `apps/web/dist/index.html` |
+| 版本实例 1 | `0.1.5-rc.2`，npm 安装于 `/tmp/dsh-015`（同版本副本人 `/tmp/dsh-015b`） |
+| 版本实例 2 | `0.1.6-alpha.2`，npm 安装于 `/tmp/dsh-016`；另有本机 checkout 构建 `/Users/suyingke/labs/ds/deepseek-harness/apps/cli/lib/bin.js` |
 
-## 5. 结果总览
+## 5. 分版本结果摘要
 
-脚本一次完整运行 26 条断言全部通过（`SCRIPT_EXIT=0`）。
+两次**独立完整运行**均 `EXIT=0`（脚本自动计数）：rc.2 `38/38`，alpha.2 `40/40`。不要合并解读两个版本的结论。
+
+### 5.1 0.1.5-rc.2（install root `/tmp/dsh-015`，label `0.1.5-rc.2`，`assertions: 38/38 passed, 0 failed`）
 
 | 编号 | 场景 | 结果 |
 | --- | --- | --- |
-| S0 | 来源/版本/平台 | PASS |
-| S1 | `DSH_HOME` 未设 → 默认 `$HOME/.dsh` | PASS |
-| S2 | 显式 `DSH_HOME` 生效；A/B 两环境隔离；宿主默认 home 无改动；空白 `DSH_HOME` 被忽略 | PASS |
-| S3 | loopback 就绪、token/cookie 鉴权、仅绑定 `127.0.0.1`、`--host 0.0.0.0` 拒绝 | PASS |
-| S4 | 端口占用 → 非零退出、无就绪 URL、写诊断报告、点名 required 插件 | PASS |
-| S5 | `SIGTERM` 退出 0、`SIGINT` 退出 130、自有端口释放、无关进程存活、无残留子进程 | PASS |
+| S0 | 版本/平台/安装根 | PASS（`cli --version` = 0.1.5-rc.2） |
+| S1 | 默认 `$HOME/.dsh`；含 `profiles/node_modules` | PASS |
+| S2 | 显式 `DSH_HOME`；两环境隔离；宿主默认 home 无改动 | PASS |
+| S2b | 空白 `DSH_HOME` 被忽略，不在 CWD 建 `.dsh` | PASS（dump-config 529 行） |
+| S3 | loopback 就绪、token/cookie 鉴权、仅 `127.0.0.1`、`0.0.0.0` 拒绝 | PASS（200 HTML 27,660 字节） |
+| S4 | 端口占用 → exit 1 + `EADDRINUSE`；**无结构化诊断文件** | PASS（见 7.2 差异） |
+| S5 | `SIGTERM`→0、`SIGINT`→130、端口释放、无关进程存活 | PASS |
+| S6 | 回退 symlink 全部锚定安装根；凭据 0600/每环境独立 | PASS（646 链接，0 越界） |
 
-## 6. 详细发现
+### 5.2 0.1.6-alpha.2（install root 本机 checkout，label `0.1.6-alpha.2`，`assertions: 40/40 passed, 0 failed`）
 
-### S1 默认 home 解析
+| 编号 | 场景 | 结果 |
+| --- | --- | --- |
+| S0 | 版本/平台/安装根 | PASS（`cli --version` = 0.1.6-alpha.2，`git describe` = `dsh-v0.1.6-alpha.2`） |
+| S1 | 默认 `$HOME/.dsh`；**不含** `profiles/node_modules` | PASS |
+| S2 | 显式 `DSH_HOME`；两环境隔离；宿主默认 home 无改动 | PASS |
+| S2b | 空白 `DSH_HOME` 被忽略，不在 CWD 建 `.dsh` | PASS（dump-config 558 行） |
+| S3 | loopback 就绪、token/cookie 鉴权、仅 `127.0.0.1`、`0.0.0.0` 拒绝 | PASS（200 HTML 31,187 字节） |
+| S4 | 端口占用 → exit 1 + 结构化 `startup failed` + `logs/startup-*.log` | PASS |
+| S5 | `SIGTERM`→0、`SIGINT`→130、端口释放、无关进程存活 | PASS |
+| S6 | **未创建** `profiles/node_modules`（runtime resolution）；凭据 0600/每环境独立 | PASS（fallback 记为 NOTE） |
 
-命令（脚本内等价形式，`DSH_HOME` 未设置）：
+## 6. 两个版本一致的行为（各自独立复验）
 
-```sh
-env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin HOME="$FAKE_HOME" DSH_AGENTS_HOME="$FAKE_AGENTS" \
-  DSH_TELEMETRY_DISABLED=1 DEEPSEEK_API_KEY=keyless-probe-no-call NODE_NO_WARNINGS=1 \
-  node apps/cli/lib/bin.js --profile web --host 127.0.0.1 --port 0 --no-open
-# stdout: dsh web: http://127.0.0.1:<port>/?token=<redacted>
-```
+- 默认 home = `~/.dsh`，可被显式 `DSH_HOME` 覆盖，也可被 `HOME` 重定向。
+- 显式 `DSH_HOME` 下不写宿主默认 home；两个环境各自独立端口、独立 profile，且各自持有 DSH 生成的独立 `profiles/web` manifest；两次启动生成的凭据 secret 不同（用 DSH 产物作为隔离证据，不用探针自写的标记文件）。
+- 仅含空白的 `DSH_HOME="   "` 被忽略，不会解析为 CWD。
+- 就绪信号为 stdout 的 `dsh web: http://127.0.0.1:<port>/?token=<opaque>`；本机热构建约 1–3 秒。
+- `GET /?token=…` → `303` + `Set-Cookie: dsh-auth-…; HttpOnly; SameSite=Strict; Max-Age=2592000; Path=/`；无 cookie `GET /` → `401`；带 cookie → `200` HTML。token 是**进程作用域**的引导 token（同一进程生命周期内可重复使用，实测同一 URL 连续两次都返回 303），认证由 cookie 承担，不是一次性 token。
+- 监听仅 `127.0.0.1`；`--host 0.0.0.0` 被安全拒绝，exit 1。
+- 端口占用：exit 1，`EADDRINUSE`，不打印就绪 URL。
+- `SIGTERM` → exit 0；`SIGINT` → exit 130；停止后端口释放；无关进程存活；`web` 运行期未观察到子进程。
+- `$DSH_HOME/.credentials.yaml` 权限 `0600`，含 `client-connection/browser-session` grant，secret 每环境不同；不写到安装根、CWD 或 `HOME`。
+- `--host 0.0.0.0` 被拒时**仍已写入** `$DSH_HOME/profiles/web/`（首次初始化先于 app 参数校验，两版本一致）。
 
-结果：`$HOME/.dsh/` 被创建，含 `profiles/web/{package.json,cordis.yml,cordis.patch.yml,pnpm-workspace.yaml}`、`storages/workspace.json`、`.credentials.yaml`。确认默认 home 为 `~/.dsh`，且能被 `HOME` 重定向（`resolveDshHome` 用 OS home）。
+## 7. 版本差异（必须分版本处理）
 
-### S2 显式 `DSH_HOME` 与两环境隔离
+### 7.1 `$DSH_HOME/profiles/node_modules` 模块回退
 
-- 两个 `DSH_HOME`（A、B）同时启动 `web`，各自绑定独立临时端口（脚本实测如 `59689`/`59690`），各自持有独立 `profiles/web` 与 `.credentials.yaml`。
-- 在 A、B 分别写入互斥标记文件后，对方 home 不可见，未发现交叉读取。
-- 记录运行前后宿主默认 home（`$HOME/.dsh`）的递归文件 mtime/size 列表，A/B 运行期间**完全一致**，证明显式 `DSH_HOME` 下不写宿主默认 home。
-- 仅含空白的 `DSH_HOME="   "` 被忽略：`--profile web --dump-config` 退出 0，且**未**在当前工作目录创建 `.dsh`（未把空白解析为 CWD）；dump 输出 558 行组合树。
+| | 0.1.5-rc.2 | 0.1.6-alpha.2 |
+| --- | --- | --- |
+| 首次 `web` 启动是否创建 | **是** | **否** |
+| 内容 | 646 个包 symlink（含 `@scope/` 下嵌套），递归全部指向安装根 | 无 |
+| 解析方式 | 磁盘 symlink 回退（`healProfilesModuleFallback`） | runtime resolution（`resolutionMode` 默认 `runtime`，只计算不落盘） |
+| `--dump-config` 是否创建 | 否 | 否 |
 
-### S3 loopback 就绪与鉴权
+rc.2 实测 `$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh-base` → `/private/tmp/dsh-015/node_modules/@deepseek-ai/dsh-base`，版本 `0.1.5-rc.2`。alpha.2 启动后该目录不存在。
 
-就绪信号是 stdout 的 `dsh web: <url>`，其中 `<url>` 为 `http://127.0.0.1:<port>/?token=<opaque>`。启动到就绪在本机约 1–3 秒（`--port 0` 取临时端口）。
+### 7.2 端口占用时的诊断产物
 
-首次带 token 请求：
+- **0.1.5-rc.2**：stderr 是原始 Node 异常栈（多层 `[cause]`，含 `EADDRINUSE`），**不写** `$DSH_HOME/logs/startup-*.log`，无 `startup failed` 汇总，也未点名 `webserver (required)`。
+- **0.1.6-alpha.2**：stderr 为 `dsh: startup failed: 2 required plugins did not activate` + `Failed plugins (1): webserver (required)` + `Full diagnostics: $DSH_HOME/logs/startup-*.log`，诊断文件真实落盘。
 
-```text
-GET /?token=<redacted>            → HTTP 303 See Other
-  location: /
-  set-cookie: dsh-auth-<...>=<redacted>; Max-Age=2592000; Path=/; HttpOnly; SameSite=Strict
-GET /  （无 cookie）               → HTTP 401
-GET /  （带上述 cookie，跟随重定向）→ HTTP 200，约 31 KB HTML（`<html ...>`，Web SPA）
-```
+含义：HDSL 不能假设“失败必有结构化诊断文件或友好错误”。若按候选 rc.2 交付，需要自行捕获原始栈并在适配层生成可读错误与诊断。
 
-即：token 是引导用途，认证由 `dsh-auth-*` cookie 承担；`HttpOnly; SameSite=Strict; Path=/`，有效期 30 天。HDSL 若要嵌入或探测 WebUI，必须按此流程处理 cookie，不能只抓一次带 token 的 URL。
+### 7.3 其他小差异
 
-绑定检查：`lsof -nP -a -p <pid> -iTCP:<port> -sTCP:LISTEN` 仅显示 `127.0.0.1:<port>`，未发现 `0.0.0.0`/通配地址。
+- `--profile web --dump-config` 组合树：rc.2 529 行，alpha.2 558 行（组合不同，非缺陷）。
+- 认证后首页 HTML：rc.2 27,660 字节，alpha.2 31,187 字节。
 
-`--host 0.0.0.0` 被安全拒绝：
+## 8. 受管安装隔离：回退 symlink 与安装锚点
 
-```text
-exit=1
-error: --host 0.0.0.0 is intentionally not supported yet for safety: it would expose remote code execution to the network; use 127.0.0.1 instead
-```
+用 [dsh_install_anchor_probes.sh](../../tests/probes/dsh_install_anchor_probes.sh) 对比两个独立安装（两次运行，结果见下）。
 
-### S4 端口占用
+### 8.1 同一版本、两个安装目录（A=`/tmp/dsh-015`，B=`/tmp/dsh-015b`，均 0.1.5-rc.2）
 
-用受控 `python3` 监听 `127.0.0.1:<port>` 后，以 `--port <port>` 启动 `web`：
+- 独立环境：home A 的 646 链接全部锚定 A，home B 全部锚定 B → 每环境独立安装即可独立解析。
+- 共享安装：两个 home C/D 都由 A 启动，二者核心模块都锚定 A → **共享一个安装时，核心 bundle 模块不按环境隔离**。
+- 重新指向：已由 A 初始化的 home A 再用 B 启动后，链接**重新锚定**到 B（`@deepseek-ai/dsh-base` 变为 B 路径）→ 回退是**可变状态，跟随最后一次启动所用的安装**，不是环境自己 pin 的。
+- 凭据：四个 home 各自 `0600`，无越界。
 
-```text
-exit=1
-dsh: startup failed: 2 required plugins did not activate
-  Failed plugins (1):
-    webserver (required)  Package: @deepseek-ai/dsh-host-webserver
-  Plugins waiting for services (...): connection (required) ... webRuntime
-  EADDRINUSE
-Full diagnostics: $DSH_HOME/logs/startup-<ts>-<uuid>.log
-```
+### 8.2 不同版本（A=`/tmp/dsh-015` 0.1.5-rc.2，B=`/tmp/dsh-016` 0.1.6-alpha.2）
 
-- 未打印任何就绪 URL（不存在“假就绪”）。
-- 失败诊断写入 `$DSH_HOME/logs/`；本机文件名如 `startup-2026-09-20T09-05-42.434Z-9510e934-....log`。
-- 退出码 1，可被上层作为可重试/可展示错误捕获。
+- home B 无回退链接（alpha.2 行为）。
+- home A 用 alpha.2 重新启动后，磁盘上**遗留** rc.2 的旧链接（仍指向 `/tmp/dsh-015`）；alpha.2 不重写。alpha.2 采用 runtime resolution，该遗留是否被实际采用未验证（见第 11 节）。
 
-### S5 停止自有进程
+### 8.3 对 HDSL 的结论
 
-- `SIGTERM` 给 `dsh web` 主进程：退出码 `0`；停止后原监听端口不再 `LISTEN`。
-- `SIGINT`：退出码 `130`。
-- 本次构建的 `web` 运行期**未观察到子进程**（`pgrep -P` 递归为空），因此“进程树停止”在当前场景等价于停止主进程本身；这**不能**外推到执行工具/子 agent 的场景，需在 T005 单独验证。
-- 停止 `dsh` 期间，探针自己启动的无关 `sleep` 进程存活，未被误杀。
+1. 环境隔离只覆盖“每环境一个 `DSH_HOME` + profile + 数据”，**不覆盖受管安装**；核心 bundle 来自运行中的安装锚点。
+2. 若 HDSL 让多个环境共用一个 DSH 安装，则这些环境共享同一份核心运行时模块；要隔离受管安装版本，必须**每环境独立安装目录**（独立 `installAnchor`）。
+3. 回退可被“换个安装启动同一 home”改写（rc.2 会 re-heal）。HDSL 必须显式决定并记录“哪个环境用哪个安装启动”，不能依赖 home 自带的固定指向。
+4. 升级/切换安装时需处理遗留回退链接，尤其是 rc.2↔alpha.2 之间的机制变化。
 
-### 其他观察（不作为 bug）
+## 9. 凭据文件边界
 
-1. `--host 0.0.0.0` 虽被拒绝，但 `$DSH_HOME/profiles/web/` 已在此之前被自动初始化并留在磁盘（该次未生成 `storages/`/`.credentials.yaml`）。即“参数被拒”不代表 home 无副作用；HDSL 的失败清理与幂等需把“首次初始化”视为已完成步骤。
-2. 全新 `DSH_HOME` 首次 `web` 启动会生成 `$DSH_HOME/.credentials.yaml`，内含自动生成的 `client-connection/browser-session` grant secret，文件权限 `0600`；`$DSH_HOME` 目录本身为 `0755`（由 DSH 创建）。该文件是本地机密，必须被 HDSL 排除在整合包、导出与普通日志之外（对应 FR-007）。
-3. 未知 profile（`--profile does-not-exist`）退出 1，stderr 打印带完整 Node 栈的诊断与创建提示；HDSL 需自行收敛为用户可读错误。
+- 位置：`$DSH_HOME/.credentials.yaml`，权限 `0600`（上游强制）。`$DSH_HOME` 目录本次在 umask `022` 下观察到为 `0755`，这是 `0777 & ~umask` 的结果，**不是上游文档化保证**（凭据层另有请求 `0700` 的路径）；探针只打印观察值，不断言固定 mode。
+- 内容键：`client-connection/browser-session`（`kind: grant`，含自动生成的 secret，即 WebUI cookie 的凭据来源）。
+- 每环境独立生成，secret 不同；不出现在安装根、CWD、`$HOME`，也不因 `--host 0.0.0.0` 被拒而产生（未完整启动）。
+- HDSL 必须把该文件视为本地机密：排除在整合包、导出、普通日志之外（FR-007）。
 
-## 7. 对 001 适配契约的含义（证据，不是实现）
+## 10. 对 001 适配契约的含义
 
-- FR-001 / FR-004：上游已支持“每环境一个 `DSH_HOME`”的目录隔离；host 默认 `~/.dsh` 会被显式 `DSH_HOME` 覆盖，亦可由 `HOME` 重定向。但这是**目录与进程隔离，不是 OS 沙箱**，与 CONTEXT 不变量一致。
-- FR-002：可精确锁定的上游标识已存在：npm `@deepseek-ai/dsh@<ver>` + `dist.integrity`（sha512）、Git tag + commit SHA、Node engine 约束。锁版本不要信任 npm `latest`。
-- FR-004：就绪判定应解析 stdout 的 `dsh web: http://127.0.0.1:<port>/?token=...` 或做带 cookie 的 HTTP 探测；绑定地址应校验为 loopback。
-- FR-005：`SIGTERM`→0、`SIGINT`→130 是可用约定；但由于 web 进程当前无子进程，进程树与 PID 复用问题必须在真实工具执行/T005 场景复验。
-- FR-007 / FR-008：`$DSH_HOME/.credentials.yaml` 与 `$DSH_HOME/logs/startup-*.log` 是两个需要脱敏/排除的产物；失败诊断真实存在且路径可预测。
+- FR-001/FR-004：每环境一个 `DSH_HOME` 的目录隔离成立；但这是目录/进程隔离，不是 OS 沙箱。
+- FR-002：可锁定的上游标识 = npm 版本 + `dist.integrity`(sha512) + Git tag/commit + Node engine；不要信任 `latest`。受管安装必须每环境独立（第 8 节）。
+- FR-004：就绪判定解析 `dsh web: http://127.0.0.1:<port>/?token=…` 或做带 cookie 的 HTTP 探测；校验 loopback 绑定。
+- FR-005：`SIGTERM`→0、`SIGINT`→130 可用；`web` 当前无子进程，进程树/PID 复用仍需在真实工具执行场景复验。
+- FR-006/FR-008：**rc.2 与 alpha.2 的诊断能力不同**（7.2）。按 rc.2 交付需自建可读错误与诊断；不要把 alpha.2 的 `logs/startup-*.log` 当作 rc.2 的既有能力。
+- FR-007：`.credentials.yaml` 必须脱敏/排除。
 
-## 8. 未测与局限
+## 11. 未测与局限
 
 - **Windows x64 完全未测**（无主机），不得据此声称 T008 或跨平台支持。
 - 未测 R005（插件/bundle 锁版本与隔离安装）与 R006（升级迁移/恢复）。
-- 未执行任何模型 API 调用；未验证需凭据的会话、工具执行、子进程、sandbox backend（bwrap/Landlock/Seatbelt）。
-- 未测其他 profile（`headless`、`sdk`、`sdk-minimal`、`acp`）与 Electron desktop host。
-- 未测 HDSL 层面的并发启动/停止幂等、应用重启后的 reconciliation、磁盘不足、中文/空格路径、长时运行内存与日志增长。
-- 就绪时延（约 1–3 秒）只反映本机热构建产物；冷启动或首次初始化会更慢，不能当作验收阈值。
-- 本机 checkout 含用户未跟踪文件，探针未修改任何已跟踪文件；npm/仓库可达性核验发生在当天，未来 tag 可能变化。
+- 未执行模型 API 调用；未验证需凭据的会话、工具执行、子进程、sandbox backend。
+- 未验证 alpha.2 是否会在 runtime resolution 中采用 rc.2 遗留的磁盘回退链接；只观察到遗留链接存在。
+- 未测其他 profile（`headless`/`sdk`/`sdk-minimal`/`acp`）与 Electron desktop host（其 `healIsolatedProfileModuleFallback` 路径未验证）。
+- 未测 HDSL 层并发幂等、应用重启 reconciliation、磁盘不足、中文/空格路径、长时运行。
+- 就绪时延（约 1–3 秒）仅反映本机热构建，不是验收阈值。
+- 本机 checkout 含用户未跟踪文件；探针未修改任何已跟踪文件。版本/npm 可达性核验发生在当天，未来可能变化。
 
-## 9. 复现方法
+## 12. 复现方法
 
 ```sh
-DSH_REPO=/path/to/deepseek-harness tests/probes/dsh_behavior_probes.sh
-# 可选：DSH_NODE=/path/to/node DSH_PYTHON=/path/to/python3
+# 安装两个精确版本到独立目录（非破坏性，使用临时 npm cache）
+mkdir -p /tmp/dsh-015 /tmp/dsh-016
+( cd /tmp/dsh-015 && printf '{"private":true}\n' > package.json && \
+  npm_config_cache=/tmp/dsh-npm-cache npm install --no-save @deepseek-ai/dsh@0.1.5-rc.2 )
+( cd /tmp/dsh-016 && printf '{"private":true}\n' > package.json && \
+  npm_config_cache=/tmp/dsh-npm-cache npm install --no-save @deepseek-ai/dsh@0.1.6-alpha.2 )
+
+# 单版本行为探针（每个版本单独运行，不要混用输出）
+# 来源 checkout 版本须同时绑定 commit 与 Node；npm 版本无 .git 时跳过 commit 断言
+DSH_BIN=/tmp/dsh-015/node_modules/@deepseek-ai/dsh/lib/bin.js DSH_INSTALL_ROOT=/tmp/dsh-015 \
+DSH_LABEL=0.1.5-rc.2 DSH_EXPECT_VERSION=0.1.5-rc.2 DSH_EXPECT_NODE=v25.6.1 \
+  tests/probes/dsh_behavior_probes.sh
+
+DSH_REPO="${DSH_REPO:-/path/to/deepseek-harness}" \
+DSH_LABEL=0.1.6-alpha.2 DSH_EXPECT_VERSION=0.1.6-alpha.2 \
+DSH_EXPECT_COMMIT=ddefc45fbc7f8e46dd73185e68295696d1297887 DSH_EXPECT_NODE=v25.6.1 \
+  tests/probes/dsh_behavior_probes.sh
+
+# 两个安装之间的隔离对比（同版本或跨版本）
+DSH_BIN_A=/tmp/dsh-015/node_modules/@deepseek-ai/dsh/lib/bin.js DSH_INSTALL_ROOT_A=/tmp/dsh-015 \
+DSH_BIN_B=/tmp/dsh-016/node_modules/@deepseek-ai/dsh/lib/bin.js DSH_INSTALL_ROOT_B=/tmp/dsh-016 \
+  tests/probes/dsh_install_anchor_probes.sh
 ```
 
-脚本失败时返回 1，并打印每条断言；临时工作目录在退出时删除。若要保留现场，可在运行中中断进程（脚本的 `trap` 会清理）。
+脚本对 `DSH_EXPECT_VERSION` / `DSH_EXPECT_COMMIT` / `DSH_EXPECT_NODE` 做硬断言（未设置则记 NOTE，不冒充已验证）；启动前检查 `curl`/`lsof`/`pgrep`，缺失即 FATAL 退出；所有 DSH 启动都在临时 CWD，并断言调用目录无副作用；自动累计并打印 `assertions: N/M passed`；进程被 `wait` 回收后立即移出存活集合，`cleanup` 只对仍存活的 PID 发信号，绝不会向陈旧 PID 发信号。
+
+脚本失败返回 1 并逐条打印断言；临时工作目录在退出时删除，**中断（SIGINT/SIGTERM）也会删除**；需保留现场请先自行复制工作目录。
