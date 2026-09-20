@@ -1,6 +1,6 @@
 # 独立进程生命周期与所有权验收（T007b / issue #45）
 
-状态：**准备资产阶段，候选接口未就绪，场景套件未注册（本切片不构成 T005/T007 验收）**。
+状态：**夹具与进程/锁场景已注册并在合并后的 runtime 上执行；仍不构成 T005/T007 整体验收**。
 父任务 #7；依赖 #5 候选接口，并与 #43（T005a dataRoot 独占）、#44（T005b 凭据）、会话 hdsl-20/hdsl-21（core 锁生命周期接口）约定可观测面。QA 只测不改生产，不做 review。
 
 本文件与 `tests/integration/process/**` 由 issue #45 独占。夹具自检 13 项全绿只说明“夹具可信”，**不**说明进程启停/所有权/锁/凭据已通过。
@@ -153,6 +153,35 @@ PR #47 独立审核（hdsl-11，对 head `3d64ac5`）提出的非阻塞改进项
 - **F6b**：宿主 HOME 保护只有 `equal===true` 用例，无“能检测到写入”的负向对照；补一个临时目录级负向对照或参数化 `diffHostDefaults`。
 - **F6c**：`support/isolation.ts` 的 `snapshotHome` 用 `statSync`（跟随符号链接），`isSymbolicLink()` 分支不可达；后续改用 `lstatSync` 并处理深度上限。
 
+## 进程切片执行证据（runtime PR #48 合入后）
+
+- 合并事实：runtime PR #48 squash mergeCommit `242fea9a395e2a646d3522e9dc1a02d7afece807`（mergedAt 2026-09-20T12:11:21Z）；修复 head `e835a870d43acb4318ec6480eb89dd0616480906`（含 main `562fa03`、含 `4acb95a`）。QA 文件来源 `69583d595da0a94ac2dcc72d9db6f39b835ff0e2`。
+- 正常验收命令（**必须包含 `process.blockers.red.test.ts`，文件名不是跳过开关**）：
+
+```sh
+pnpm exec vitest run tests/integration/process/
+# 47 passed / 1 skipped（skip 仅为真实 DSH opt-in）
+```
+
+- 分层（本 PR 仅含 QA 文件；锁切片 20 例已在 PR #50 合入）：夹具自检 13 + 进程场景 6 + `process.blockers.red` 5 + 凭据接线 3 + 锁/清理 20 = **47 passed**；真实 DSH opt-in 1 例 require 显式开启。
+- 旧红 → 新绿版本表（同断言，未弱化）：
+
+| 断言 | 首次转绿的候选 |
+| --- | --- |
+| `PROCESS-SCAN-01`（扫描失败 fail-closed；正常空扫描对照合法成功） | `86a223b` |
+| `PROCESS-ORPHAN-01`（close 成功蕴含无自有后代；不要求孤儿存活） | `86a223b` |
+| `PROCESS-RESTART-01`（restart+close 无旧/新自有后代） | `4acb95a8` |
+| `PROCESS-GROUP-ATTR01`（无关诱饵不被信号，close 失败留锁） | `4acb95a8` |
+| `PROCESS-ENV-MAP01`（五键=真实 core 映射） | `4acb95a8` |
+| `PROCESS-ENV-MAP01-CONFLICT`（spawn 前受控失败 + `dispose=1`） | `4acb95a8` |
+| `PROCESS-GROUP-ATTR01-TIME`（组/时间窗不得单独证明归属） | `e835a870` |
+
+- 真实 DSH（opt-in、自有临时 dataRoot、受控 canary provider、无模型、无个人凭据、不覆盖作者证据）：
+  - `4acb95a8`：start-ready-stop-close 一次 PASS（7.6s），endpoint 仅 `http://127.0.0.1:<port>`，记录无 `token=`/query，宿主 `~/.dsh` 不变。
+  - `e835a870`：受影响清理路径 start-ready-stop-restart-stop-close 一次 PASS（10.1s）。
+- 自有进程/临时目录残留 0；未重复无变化的网络安装/keychain/模型调用。
+- 未测/未声明：Windows/Linux 进程语义；真实 DSH 仅上述有界两次；`P3` 边界（捕获是 leader 退出时组内 pid+startToken 快照，非祖先链；launcher 崩溃且未捕获又无线索须安全失败保记录保锁；pid-reused 但空组 `close` 仍应保守失败）**未声称已修**，登记在 #45。
+
 ## 未验证声明
 
-本切片只完成夹具与场景计划，未执行任何受管进程启停、所有权、dataRoot 锁或凭据注入验收。父任务 #7 与 #5 均未完成。
+本文件与 `tests/integration/process/**` 的进程/锁切片已在上述合并候选上执行，但仍不声称 T005/T007 整体完成；`P3` 边界与 Windows/Linux 未测。父任务 #7 与 #5 均未完成。
