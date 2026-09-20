@@ -47,13 +47,13 @@ import {
   operationRefSchema,
   operationSnapshotSchema,
   runtimeCombinationListSchema,
+  sanitizeOperationPhase,
   subscriptionRefSchema,
   type OperationSnapshot,
   type RuntimeCombination,
   type SubscriptionRef,
 } from './dto.js';
 import { isPlainRecord, type Schema, type ValidationIssue } from './schema.js';
-import { sanitizeContractMessage } from './redaction.js';
 
 const ENVELOPE_KEYS: readonly string[] = ['apiVersion', 'method', 'input'];
 
@@ -134,11 +134,12 @@ const validatePortValue = <T>(schema: Schema<T>, value: unknown, label: string):
 
 /**
  * A port-produced snapshot is normalized before it can cross the bridge: the
- * free-text `phase` is sanitized (matching the event path) and a nested
- * error's port message is replaced with the controlled message for its code.
+ * free-text `phase` is sanitized and bounded to its own DTO postcondition
+ * (matching the event path) and a nested error's port message is replaced with
+ * the controlled message for its code.
  */
 const sanitizeOperationSnapshot = (snapshot: OperationSnapshot): OperationSnapshot => {
-  const phase = sanitizeContractMessage(snapshot.phase);
+  const phase = sanitizeOperationPhase(snapshot.phase);
   const normalized = phase === snapshot.phase ? snapshot : { ...snapshot, phase };
   if (normalized.error === undefined || normalized.error === null) {
     return normalized;

@@ -53,6 +53,38 @@ export const sanitizeContractMessage = (message: string): string => {
   return result;
 };
 
+/**
+ * Truncates to `maxLength` Unicode code points — the same unit `sString` counts
+ * — so a schema `maxLength` postcondition holds after redaction. Never splits a
+ * surrogate pair.
+ */
+const boundCodePoints = (value: string, maxLength: number): string => {
+  const codePoints = [...value];
+  return codePoints.length <= maxLength ? value : codePoints.slice(0, maxLength).join('');
+};
+
+/**
+ * Redacts then bounds `message` to `maxLength` code points, guaranteeing the
+ * result satisfies a `maxLength` string schema (issue #29). Redaction runs
+ * first, so truncation can only cut already-substituted text and can never
+ * expose the tail of a raw secret. Bounding can expose a fresh assignment or
+ * path pattern at the cut (e.g. `token=*`), so it is re-run to a fixed point;
+ * the result is idempotent and safe to pass through the sanitizer again.
+ */
+export const sanitizeBoundedMessage = (message: string, maxLength: number): string => {
+  let candidate = boundCodePoints(sanitizeContractMessage(message), maxLength);
+  // Two passes cover the current patterns; the cap only bounds a future pair
+  // that kept alternating.
+  for (let pass = 0; pass < 8; pass += 1) {
+    const next = boundCodePoints(sanitizeContractMessage(candidate), maxLength);
+    if (next === candidate) {
+      return candidate;
+    }
+    candidate = next;
+  }
+  return candidate;
+};
+
 /** Removes known secret values from arbitrary text (used for diagnostics/tests). */
 export const redactSecretValues = (text: string, secrets: readonly string[]): string => {
   let result = text;

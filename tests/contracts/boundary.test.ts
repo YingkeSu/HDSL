@@ -11,8 +11,12 @@ import {
   containsSecret,
   createContractRuntime,
   isRetryable,
+  OPERATION_PHASE_MAX_LENGTH,
+  operationPhaseSchema,
+  operationUpdatedEventSchema,
   portFail,
   portOk,
+  sanitizeBoundedMessage,
   sanitizeContractMessage,
   SubscriptionRegistry,
   type ContractPort,
@@ -20,7 +24,9 @@ import {
   type ExportResult,
   type OpenWebUIResult,
   type OperationSnapshot,
+  type OperationUpdatedEvent,
   type RuntimeCombination,
+  type ValidationIssue,
 } from '@hdsl/contracts';
 import * as productionContracts from '@hdsl/contracts';
 import {
@@ -453,5 +459,160 @@ describe('response phase is sanitized like the event channel', () => {
     );
     expect(response.ok).toBe(true);
     expect(containsSecret(JSON.stringify(response), [CANARY])).toBe(false);
+  });
+});
+
+const codePointLength = (value: string): number => [...value].length;
+
+const expectLegalPhase = (phase: string): void => {
+  const issues: ValidationIssue[] = [];
+  expect(operationPhaseSchema(phase, 'phase', issues)).toBe(phase);
+  expect(issues).toEqual([]);
+  expect(codePointLength(phase)).toBeLessThanOrEqual(OPERATION_PHASE_MAX_LENGTH);
+};
+
+const phaseFromSnapshotResponse = (response: ContractResponse<unknown>): string => {
+  if (!response.ok) {
+    throw new Error(`expected ok, received ${response.error.code}`);
+  }
+  return (response.value as OperationSnapshot).phase;
+};
+
+const snapshotWithPhase = (phase: string): OperationSnapshot => ({
+  id: FIXTURE_IDS.operation.running,
+  environmentId: FIXTURE_IDS.environment.running,
+  kind: 'start',
+  phase,
+  status: 'running',
+  sequence: 9,
+});
+
+describe('#29 a redaction-expanded OperationSnapshot.phase still satisfies operationPhaseSchema', () => {
+  it('bounds an assignment redaction that grows a legal 64-character phase (repro 1)', () => {
+    // 56 + ' token=a' = 64 code points (legal) → ' token=***' makes 66.
+    const snapshot = snapshotWithPhase(`${'a'.repeat(56)} token=a`);
+    expect(codePointLength(snapshot.phase)).toBe(64);
+    const { runtime } = harness({ findOperation: () => portOk(snapshot) });
+    const response = runtime.dispatch(contractRequest('operations.get', { operationId: snapshot.id }));
+    const phase = phaseFromSnapshotResponse(response);
+
+    expectLegalPhase(phase);
+    expect(containsSecret(phase, [' token=a', 'token=a'])).toBe(false);
+    expect(phase).toContain('token=');
+    expect(phase.endsWith('a')).toBe(false);
+  });
+
+  it('bounds a path redaction that grows a legal 64-character phase (repro 2)', () => {
+    // 61 + '~/x' = 64 code points (legal) → '<path>' makes 67.
+    const snapshot = snapshotWithPhase(`${'a'.repeat(61)}~/x`);
+    expect(codePointLength(snapshot.phase)).toBe(64);
+    const { runtime } = harness({ findOperation: () => portOk(snapshot) });
+    const response = runtime.dispatch(contractRequest('operations.get', { operationId: snapshot.id }));
+    const phase = phaseFromSnapshotResponse(response);
+
+    expectLegalPhase(phase);
+    expect(phase).not.toContain('~/x');
+  });
+
+  it('bounds by code points, not UTF-16 units, across a multi-byte boundary', () => {
+    // 55 astral code points (110 UTF-16 units) + ' token=a' = 63 code points
+    // (legal) → ' token=***' makes 65 code points, over the bound by one.
+    const snapshot = snapshotWithPhase(`${'🦄'.repeat(55)} token=a`);
+    expect(codePointLength(snapshot.phase)).toBe(63);
+    expect(snapshot.phase.length).toBeGreaterThan(64);
+    const { runtime } = harness({ findOperation: () => portOk(snapshot) });
+    const response = runtime.dispatch(contractRequest('operations.get', { operationId: snapshot.id }));
+    const phase = phaseFromSnapshotResponse(response);
+
+    expectLegalPhase(phase);
+    // The bound is in code points, so the UTF-16 length may exceed 64 while the
+    // value stays valid, and truncation never leaves a lone surrogate.
+    expect(() => encodeURIComponent(phase)).not.toThrow();
+    expect(containsSecret(phase, ['token=a'])).toBe(false);
+  });
+
+  it('keeps operations.get, operations.cancel and the event on one postcondition', () => {
+    const snapshot = snapshotWithPhase(`${'a'.repeat(56)} token=a`);
+    const cancelled: OperationSnapshot = { ...snapshot, status: 'cancelled', sequence: 10 };
+    const { runtime } = harness({
+      findOperation: () => portOk(snapshot),
+      cancelOperation: () => portOk(cancelled),
+    });
+    const received: OperationUpdatedEvent[] = [];
+    runtime.subscriptions.onEvent((event) => received.push(event));
+    runtime.subscriptions.subscribe(null);
+
+    const getPhase = phaseFromSnapshotResponse(
+      runtime.dispatch(contractRequest('operations.get', { operationId: snapshot.id })),
+    );
+    const cancelPhase = phaseFromSnapshotResponse(
+      runtime.dispatch(
+        contractRequest('operations.cancel', { requestId: 'req-29', operationId: snapshot.id }),
+      ),
+    );
+
+    expectLegalPhase(getPhase);
+    expectLegalPhase(cancelPhase);
+    expect(cancelPhase).toBe(getPhase);
+
+    const event = received.at(-1);
+    if (event === undefined) {
+      throw new Error('expected a published operation.updated event');
+    }
+    const issues: ValidationIssue[] = [];
+    expect(operationUpdatedEventSchema(event, 'event', issues)).not.toBeUndefined();
+    expect(issues).toEqual([]);
+    expectLegalPhase(event.phase);
+    expect(event.phase).toBe(getPhase);
+  });
+
+  it('publishes a bounded event instead of fail-closing on an over-long raw phase', () => {
+    const registry = new SubscriptionRegistry();
+    const received: OperationUpdatedEvent[] = [];
+    registry.onEvent((event) => received.push(event));
+    registry.subscribe(null);
+
+    expect(() =>
+      registry.publish({
+        id: 'op-29',
+        sequence: 1,
+        phase: `${'a'.repeat(56)} token=a`,
+        status: 'running',
+      }),
+    ).not.toThrow();
+
+    const event = received.at(-1);
+    if (event === undefined) {
+      throw new Error('expected a published operation.updated event');
+    }
+    expectLegalPhase(event.phase);
+    expect(containsSecret(event.phase, ['token=a'])).toBe(false);
+  });
+
+  it('leaves an ordinary short phase unchanged in both channels', () => {
+    const phase = 'waiting for the managed runtime';
+    const snapshot = snapshotWithPhase(phase);
+    const { runtime } = harness({
+      findOperation: () => portOk(snapshot),
+      cancelOperation: () => portOk({ ...snapshot, status: 'cancelled', sequence: 10 }),
+    });
+    const response = runtime.dispatch(contractRequest('operations.get', { operationId: snapshot.id }));
+    expect(phaseFromSnapshotResponse(response)).toBe(phase);
+  });
+
+  it('is idempotent and secret-free as a shared boundary', () => {
+    const raws = [
+      `${'a'.repeat(56)} token=a`,
+      // `sanitizeContractMessage` is itself not idempotent when an assignment
+      // value swallows the following text; the fixed point must be stable so
+      // the response and event channels cannot diverge.
+      `*U/..h_dsh-auth-='eao=n🦄'_t<éCCe"🦄asC~*t`,
+    ];
+    for (const raw of raws) {
+      const once = sanitizeBoundedMessage(raw, OPERATION_PHASE_MAX_LENGTH);
+      expect(sanitizeBoundedMessage(once, OPERATION_PHASE_MAX_LENGTH)).toBe(once);
+      expect(codePointLength(once)).toBeLessThanOrEqual(OPERATION_PHASE_MAX_LENGTH);
+      expect(once).not.toContain('eao=n');
+    }
   });
 });
