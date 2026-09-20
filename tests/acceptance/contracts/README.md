@@ -28,6 +28,7 @@ pnpm vitest run tests/acceptance/contracts
   `.credentials.yaml` / JSON / `dsh-auth` secret assignments must not be echoed;
   `operation.updated` events must carry the sanitized `phase`.
 
-See `docs/development/contract-behavior-validation.md` for the original
-evidence, environment, and limitations (no desktop E2E;
-`@hdsl/contracts/testing` is a TEST/FIXTURE port, not persistence).
+Background and limitations for the guarded cases live with their issues
+(#22 #23 #24 #25 #26 #27) and in `contract-boundary.acceptance.test.ts` itself.
+Scope reminder: no desktop E2E; `@hdsl/contracts/testing` is a TEST/FIXTURE
+port, not persistence.
