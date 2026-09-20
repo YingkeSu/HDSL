@@ -1,0 +1,663 @@
+/**
+ * Shared installation scenarios for issue #31 / T007a.
+ *
+ * These functions drive the **public** T004 surface only:
+ * `createRuntimePort` (`@hdsl/runtime`) + `createManagedInstall` (`@hdsl/core`)
+ * + `createContractRuntime(...).dispatch(...)`. They never import an internal
+ * module. They are plain async functions (not `*.test.ts`), so the vitest run
+ * stays green until T004 lands a runnable interface. A thin runner later maps
+ * each function to an `it()` case.
+ *
+ * Fault-labeling policy (issue #31): every injected fault is named in the case
+ * id and asserted through the observable contract (`operation` terminal code /
+ * environment state), never through the fault flag itself. A scenario must
+ * never claim "real disk" while using `forceDiskFull`, and synthetic tarballs
+ * must never be cited as proof that a real DSH is runnable.
+ */
+import assert from 'node:assert/strict';
+import { existsSync, readdirSync } from 'node:fs';
+import { join } from 'node:path';
+
+import type { EnvironmentSummary, RuntimeCombination } from '@hdsl/contracts';
+import { createContractRuntime } from '@hdsl/contracts';
+
+import { buildComposition, COMPOSITION_A, COMPOSITION_B } from '../support/catalog-fixtures.js';
+import { buildPathTraversalArtifact } from '../support/artifacts.js';
+import { expectedCompositionDigest } from '../support/composition.js';
+import { createInjectedEnospcSink } from '../support/disk-fault.js';
+import type {
+  CreationFaults,
+  CreateManagedInstall,
+  CreateRuntimePort,
+  EnvironmentService,
+  ManagedInstall,
+  RuntimeModule,
+  RuntimePortOptions,
+} from '../support/managed-install-api.js';
+import {
+  assertManifestArtifactsOnly,
+  assertManifestRealClosure,
+  readManifest,
+} from '../support/manifest.js';
+import type { LocalEndpoint, RouteFixture } from '../support/local-endpoint.js';
+import { startLocalEndpoint } from '../support/local-endpoint.js';
+import { call, pollTerminalOperation, requireOk, type InstallRuntime } from '../support/scenario.js';
+import {
+  captureHostDefaults,
+  createTempRoot,
+  diffHostDefaults,
+  type HostDefaults,
+  type TempRoot,
+  withIsolatedEnv,
+} from '../support/temp-env.js';
+import { mountTinyVolume } from '../support/tiny-volume.js';
+
+export interface InstallScenarioDeps {
+  readonly createManagedInstall: CreateManagedInstall;
+  readonly createRuntimePort: CreateRuntimePort;
+}
+
+export interface HarnessOptions {
+  readonly label: string;
+  readonly routes: readonly RouteFixture[];
+  readonly catalogFor: (origin: string) => readonly RuntimeCombination[];
+  readonly creationFaults?: CreationFaults;
+  readonly runtimeOptions?: RuntimePortOptions;
+  /** Explicit fixture gate; absent means the production create gate applies. */
+  readonly fixtures?: { readonly allowArtifactsOnly?: boolean };
+  /** Override the data root, e.g. a mounted tiny volume. */
+  readonly dataRootFor?: (root: TempRoot) => string;
+}
+
+export interface InstallHarness {
+  readonly root: TempRoot;
+  readonly dataRoot: string;
+  readonly endpoint: LocalEndpoint;
+  readonly install: ManagedInstall;
+  readonly service: EnvironmentService;
+  readonly api: InstallRuntime;
+  readonly catalog: readonly RuntimeCombination[];
+  readonly hostBefore: HostDefaults;
+  findEnvironmentIdByName(name: string): string;
+  assertHostDefaultsUnchanged(): void;
+}
+
+/**
+ * Opens a real install service over a real temporary root and loopback
+ * endpoint, runs `body`, then closes the service/endpoint and removes the temp
+ * root. HOME/DSH_HOME are redirected for the whole lifetime so any default-root
+ * bug lands in the sandbox.
+ */
+export const withInstallHarness = async (
+  deps: InstallScenarioDeps,
+  options: HarnessOptions,
+  body: (harness: InstallHarness) => Promise<void>,
+): Promise<void> => {
+  const root = createTempRoot(options.label);
+  const dataRoot = options.dataRootFor?.(root) ?? join(root.path, 'data');
+  try {
+    await withIsolatedEnv(root.path, async () => {
+      const endpoint = await startLocalEndpoint(options.routes);
+      const catalog = options.catalogFor(endpoint.origin);
+      const hostBefore = captureHostDefaults();
+      const runtimePort = deps.createRuntimePort({
+        host: { platform: 'darwin', arch: 'arm64' },
+        // Synthetic artifacts are never a complete closure; T004 records
+        // `installMode: artifacts-only` so it cannot be mistaken for a real
+        // install (confirmed by hdsl-15). Real scenarios override this.
+        closureInstall: false,
+        ...options.runtimeOptions,
+      });
+      let install: ManagedInstall | undefined;
+      try {
+        install = await deps.createManagedInstall({
+          dataRoot,
+          catalog,
+          runtime: runtimePort,
+          host: { platform: 'darwin', arch: 'arm64' },
+          ...(options.creationFaults === undefined ? {} : { faults: options.creationFaults }),
+          ...(options.fixtures === undefined ? {} : { fixtures: options.fixtures }),
+          limits: { operationTimeoutMs: 20_000 },
+        });
+        const api: InstallRuntime = {
+          port: install.port,
+          runtime: createContractRuntime({ port: install.port }),
+        };
+        const findEnvironmentIdByName = (name: string): string => {
+          const environments = requireOk(
+            call(api, 'environments.list', {}),
+            'environments.list',
+          ) as readonly EnvironmentSummary[];
+          const match = environments.find((environment) => environment.name === name);
+          assert.ok(match !== undefined, `environment ${name} must exist`);
+          return match.id;
+        };
+        const harness: InstallHarness = {
+          root,
+          dataRoot,
+          endpoint,
+          install,
+          service: install.service,
+          api,
+          catalog,
+          hostBefore,
+          findEnvironmentIdByName,
+          assertHostDefaultsUnchanged: () => {
+            const diff = diffHostDefaults(hostBefore, captureHostDefaults());
+            assert.ok(
+              diff.equal,
+              `host HOME/default dirs changed: ${JSON.stringify(diff.added.concat(diff.changed, diff.removed))}`,
+            );
+          },
+        };
+        await body(harness);
+      } finally {
+        await install?.close();
+        await endpoint.close();
+      }
+    });
+  } finally {
+    root.cleanup();
+  }
+};
+
+const createEnvironment = async (
+  harness: InstallHarness,
+  name: string,
+  combinationId: string,
+  requestId: string,
+): Promise<string> => {
+  const reference = requireOk(
+    call(harness.api, 'environments.create', { requestId, name, catalogCombinationId: combinationId }),
+    'environments.create',
+  ) as { readonly operationId: string };
+  return reference.operationId;
+};
+
+const listEnvironments = (harness: InstallHarness): readonly EnvironmentSummary[] =>
+  requireOk(call(harness.api, 'environments.list', {}), 'environments.list') as readonly EnvironmentSummary[];
+
+/** Shared shape for scenarios whose success depends on real or fixture artifacts. */
+export interface ArtifactSource {
+  readonly routes: readonly RouteFixture[];
+  readonly catalogFor: (origin: string) => readonly RuntimeCombination[];
+  /** `real` runs npm-ci; `fixtures` uses the explicit artifacts-only gate. */
+  readonly mode: 'real' | 'fixtures';
+}
+
+/**
+ * FR-001 / FR-002 / SC-001: two distinct exact compositions create two isolated
+ * environments; digests match the frozen rule; no data or artifact crosses
+ * over; the host home is untouched.
+ *
+ * Per the orchestrator ruling (2026-09-20) an `artifacts-only` generation must
+ * never commit as a usable active environment, so a successful isolation run
+ * requires a real closure source (`closureInstall: true` + real artifacts).
+ * With synthetic fixtures the create is expected to fail; see
+ * {@link scenarioArtifactsOnlyCannotCommit}.
+ */
+export const scenarioTwoEnvironmentIsolation = async (
+  deps: InstallScenarioDeps,
+  source: ArtifactSource,
+): Promise<void> => {
+  const fixtureMode = source.mode === 'fixtures';
+  await withInstallHarness(
+    deps,
+    {
+      label: 'isolation',
+      routes: source.routes,
+      catalogFor: source.catalogFor,
+      ...(fixtureMode
+        ? {
+            fixtures: { allowArtifactsOnly: true },
+            runtimeOptions: { closureInstall: false, precheck: 'none' as const },
+          }
+        : {}),
+    },
+    async (harness) => {
+      const opA = await createEnvironment(harness, 'alpha', COMPOSITION_A.id, 'req-iso-a');
+      const opB = await createEnvironment(harness, 'beta', COMPOSITION_B.id, 'req-iso-b');
+      const a = await pollTerminalOperation(harness.api, opA, { label: 'create alpha' });
+      const b = await pollTerminalOperation(harness.api, opB, { label: 'create beta' });
+      assert.equal(a.status, 'succeeded', `alpha create status: ${JSON.stringify(a.error ?? null)}`);
+      assert.equal(b.status, 'succeeded', `beta create status: ${JSON.stringify(b.error ?? null)}`);
+
+      const environments = listEnvironments(harness);
+      assert.equal(environments.length, 2);
+      const summaryA = environments.find((environment) => environment.name === 'alpha');
+      const summaryB = environments.find((environment) => environment.name === 'beta');
+      assert.ok(summaryA !== undefined && summaryB !== undefined, 'both environments must be listed');
+      assert.equal(summaryA.state, 'stopped');
+      assert.equal(summaryB.state, 'stopped');
+      assert.ok(summaryA.activeGenerationId !== null && summaryB.activeGenerationId !== null);
+      assert.notEqual(summaryA.id, summaryB.id);
+
+      const combinationA = harness.catalog.find((combination) => combination.id === COMPOSITION_A.id);
+      const combinationB = harness.catalog.find((combination) => combination.id === COMPOSITION_B.id);
+      assert.ok(combinationA !== undefined && combinationB !== undefined);
+      assert.equal(summaryA.compositionDigest, expectedCompositionDigest(combinationA));
+      assert.equal(summaryB.compositionDigest, expectedCompositionDigest(combinationB));
+
+      // The persisted manifest must bind each environment to its own verified
+      // root tarball. Real mode must prove a complete npm-ci closure + preflight;
+      // fixture mode must be honestly labelled artifacts-only with preflight
+      // skipped.
+      const manifestA = await readManifest(harness.service, summaryA.id);
+      const manifestB = await readManifest(harness.service, summaryB.id);
+      if (fixtureMode) {
+        assertManifestArtifactsOnly(manifestA, combinationA);
+        assertManifestArtifactsOnly(manifestB, combinationB);
+      } else {
+        assertManifestRealClosure(manifestA, combinationA);
+        assertManifestRealClosure(manifestB, combinationB);
+      }
+
+      harness.assertHostDefaultsUnchanged();
+    },
+  );
+};
+
+/** FR-002: a digest mismatch is a terminal failure, never a runnable env. */
+export const scenarioDigestMismatch = async (deps: InstallScenarioDeps): Promise<void> => {
+  const fixture = buildComposition(COMPOSITION_A);
+  const routes = fixture.routes;
+  const catalogFor = (origin: string): readonly RuntimeCombination[] => {
+    const combination = fixture.combinationFor(origin);
+    return [
+      {
+        ...combination,
+        dsh: { ...combination.dsh, sha256: corruptFirstNibble(combination.dsh.sha256) },
+      },
+    ];
+  };
+  await withInstallHarness(deps, { label: 'digest', routes, catalogFor }, async (harness) => {
+    const operationId = await createEnvironment(harness, 'bad-digest', COMPOSITION_A.id, 'req-digest');
+    const snapshot = await pollTerminalOperation(harness.api, operationId);
+    assert.equal(snapshot.status, 'failed');
+    assert.equal(snapshot.error?.code, 'DIGEST_MISMATCH');
+    assert.equal(snapshot.error?.retryable, false, 'digest mismatch is deterministic, not retryable');
+    const summary = listEnvironments(harness).find((environment) => environment.name === 'bad-digest');
+    assert.ok(summary !== undefined);
+    assert.equal(summary.state, 'error');
+    assert.equal(summary.activeGenerationId, null);
+    assert.equal(summary.compositionDigest, null);
+    harness.assertHostDefaultsUnchanged();
+  });
+};
+
+/** FR-002 / FR-006: a mid-stream download interruption is a terminal failure. */
+export const scenarioDownloadInterruption = async (deps: InstallScenarioDeps): Promise<void> => {
+  const fixture = buildComposition(COMPOSITION_A);
+  const routes = fixture.routesWith({ dsh: 'truncate' });
+  const catalogFor = (origin: string): readonly RuntimeCombination[] => [fixture.combinationFor(origin)];
+  await withInstallHarness(deps, { label: 'download', routes, catalogFor }, async (harness) => {
+    const operationId = await createEnvironment(harness, 'cut', COMPOSITION_A.id, 'req-cut');
+    const snapshot = await pollTerminalOperation(harness.api, operationId);
+    assert.equal(snapshot.status, 'failed');
+    assert.equal(snapshot.error?.code, 'DOWNLOAD_FAILED');
+    const summary = listEnvironments(harness).find((environment) => environment.name === 'cut');
+    assert.ok(summary !== undefined);
+    assert.equal(summary.state, 'error');
+    assert.equal(summary.activeGenerationId, null);
+    const dshRequest = harness.endpoint.requests.find((request) => request.path.includes('dsh-'));
+    assert.ok(dshRequest !== undefined, 'the dsh artifact must have been requested');
+    assert.equal(dshRequest.completed, false, 'the truncated response must not look complete');
+    harness.assertHostDefaultsUnchanged();
+  });
+};
+
+/** Edge case / SC-003: injected disk-full guard terminates as DISK_FULL. */
+export const scenarioDiskFullInjected = async (deps: InstallScenarioDeps): Promise<void> => {
+  const fixture = buildComposition(COMPOSITION_A);
+  const catalogFor = (origin: string): readonly RuntimeCombination[] => [fixture.combinationFor(origin)];
+  await withInstallHarness(
+    deps,
+    {
+      label: 'disk-injected',
+      routes: fixture.routes,
+      catalogFor,
+      runtimeOptions: { faults: { forceDiskFull: true } },
+    },
+    async (harness) => {
+      const operationId = await createEnvironment(harness, 'nospace', COMPOSITION_A.id, 'req-disk');
+      const snapshot = await pollTerminalOperation(harness.api, operationId);
+      assert.equal(snapshot.status, 'failed');
+      assert.equal(snapshot.error?.code, 'DISK_FULL');
+      const summary = listEnvironments(harness).find((environment) => environment.name === 'nospace');
+      assert.ok(summary !== undefined);
+      assert.equal(summary.state, 'error');
+      harness.assertHostDefaultsUnchanged();
+    },
+  );
+};
+
+/**
+ * Real disk pressure on a mounted tiny volume (macOS) with a `minFreeBytes`
+ * threshold above the volume's free space. This measures real `statfs`, unlike
+ * {@link scenarioDiskFullInjected}; the case id records which was used.
+ */
+export const scenarioDiskFullRealVolume = async (
+  deps: InstallScenarioDeps,
+  sizeMb = 2,
+): Promise<void> => {
+  const probe = createTempRoot('disk-probe');
+  try {
+    const volume = mountTinyVolume(probe.path, sizeMb);
+    assert.ok(volume !== undefined, 'scenarioDiskFullRealVolume requires macOS hdiutil');
+    const fixture = buildComposition(COMPOSITION_A);
+    const catalogFor = (origin: string): readonly RuntimeCombination[] => [fixture.combinationFor(origin)];
+    const dataRoot = join(volume.mountPath, 'hdsl-data');
+    try {
+      await withInstallHarness(
+        deps,
+        {
+          label: 'disk-real',
+          routes: fixture.routes,
+          catalogFor,
+          dataRootFor: () => dataRoot,
+          runtimeOptions: { limits: { minFreeBytes: sizeMb * 1024 * 1024 * 4 } },
+        },
+        async (harness) => {
+          const operationId = await createEnvironment(harness, 'real-nospace', COMPOSITION_A.id, 'req-realenospc');
+          const snapshot = await pollTerminalOperation(harness.api, operationId);
+          assert.equal(snapshot.status, 'failed');
+          assert.equal(snapshot.error?.code, 'DISK_FULL');
+        },
+      );
+    } finally {
+      volume.detach();
+    }
+  } finally {
+    probe.cleanup();
+  }
+};
+
+/** Documents the injected ENOSPC sink used where a mounted volume is unavailable. */
+export const scenarioInjectedEnospcSinkIsRealError = (): void => {
+  const sink = createInjectedEnospcSink(2);
+  sink.write(Buffer.alloc(2));
+  assert.throws(() => sink.write(Buffer.alloc(1)));
+};
+
+/**
+ * FR-001 / path safety: hostile archive entries must not write outside the
+ * managed data root, and a path with spaces + non-ASCII characters must still
+ * install inside its own root.
+ */
+export const scenarioPathSafety = async (deps: InstallScenarioDeps): Promise<void> => {
+  const hostile = buildPathTraversalArtifact({
+    kind: 'dsh',
+    version: COMPOSITION_A.dshVersion,
+    platform: 'darwin',
+    arch: 'arm64',
+    scope: 'env-hostile',
+  });
+  const nodeFixture = buildComposition(COMPOSITION_A).node;
+  const catalogFor = (_origin: string): readonly RuntimeCombination[] => [
+    {
+      id: COMPOSITION_A.id,
+      platform: 'darwin',
+      arch: 'arm64',
+      node: {
+        version: nodeFixture.version,
+        platform: nodeFixture.platform,
+        arch: nodeFixture.arch,
+        sha256: nodeFixture.sha256,
+      },
+      dsh: {
+        version: hostile.version,
+        platform: hostile.platform,
+        arch: hostile.arch,
+        sha256: hostile.sha256,
+      },
+      compatibility: { status: 'verified', evidenceRef: 'docs/research/dsh-compatibility.md' },
+      artifactLocations: {
+        node: {
+          version: nodeFixture.version,
+          platform: nodeFixture.platform,
+          arch: nodeFixture.arch,
+          url: '',
+          sha256: nodeFixture.sha256,
+        },
+        dsh: {
+          version: hostile.version,
+          platform: hostile.platform,
+          arch: hostile.arch,
+          url: '',
+          sha256: hostile.sha256,
+        },
+      },
+    },
+  ];
+  const routes: RouteFixture[] = [
+    { path: '/hostile-node.tgz', body: nodeFixture.bytes, mode: 'full' },
+    { path: '/hostile-dsh.tgz', body: hostile.bytes, mode: 'full' },
+  ];
+  await withInstallHarness(
+    deps,
+    {
+      label: 'path-safety',
+      routes,
+      // Rewrite the placeholder URLs to the live endpoint.
+      catalogFor: (origin) => {
+        const combinations = catalogFor(origin);
+        return combinations.map((combination) => ({
+          ...combination,
+          artifactLocations: {
+            node: { ...combination.artifactLocations.node, url: `${origin}/hostile-node.tgz` },
+            dsh: { ...combination.artifactLocations.dsh, url: `${origin}/hostile-dsh.tgz` },
+          },
+        }));
+      },
+      dataRootFor: (root) => join(root.path, '中文 环境', '数据 根'),
+    },
+    async (harness) => {
+      const operationId = await createEnvironment(harness, 'hostile', COMPOSITION_A.id, 'req-path');
+      const snapshot = await pollTerminalOperation(harness.api, operationId);
+      assert.equal(snapshot.status, 'failed', 'traversal entries must be rejected');
+      // The escape targets: one level up from dataRoot, two levels up, and an
+      // absolute /tmp path. None may exist.
+      assert.equal(existsSync(join(harness.root.path, '中文 环境', 'hdsl-qa-escape.txt')), false);
+      assert.equal(existsSync(join(harness.root.path, 'hdsl-qa-escape.txt')), false);
+      assert.equal(existsSync('/tmp/hdsl-qa-absolute-escape.txt'), false);
+    },
+  );
+};
+
+/** FR-001: a full create attempt leaves the host HOME and ~/.dsh byte-identical. */
+export const scenarioHostHomeUnchanged = async (deps: InstallScenarioDeps): Promise<void> => {
+  const fixture = buildComposition(COMPOSITION_A);
+  const catalogFor = (origin: string): readonly RuntimeCombination[] => [fixture.combinationFor(origin)];
+  await withInstallHarness(deps, { label: 'host-home', routes: fixture.routes, catalogFor }, async (harness) => {
+    const operationId = await createEnvironment(harness, 'home-check', COMPOSITION_A.id, 'req-home');
+    await pollTerminalOperation(harness.api, operationId);
+    harness.assertHostDefaultsUnchanged();
+  });
+};
+
+/**
+ * FR-008: an interrupted (uncommitted) create is reconciled on the next start.
+ * Requires `CreationFaults.pauseBeforeCommit`; the operation stays unfinished,
+ * the journal is left for reconciliation, and `recover()` must terminate the
+ * environment as `error` with no active generation.
+ */
+export const scenarioJournalRecovery = async (deps: InstallScenarioDeps): Promise<void> => {
+  const fixture = buildComposition(COMPOSITION_A);
+  const catalogFor = (origin: string): readonly RuntimeCombination[] => [fixture.combinationFor(origin)];
+  await withInstallHarness(
+    deps,
+    {
+      label: 'journal',
+      routes: fixture.routes,
+      catalogFor,
+      creationFaults: { pauseBeforeCommit: true },
+      // The fixture gate is required for the create to reach the commit pause
+      // at all; the production gate would reject artifacts-only first.
+      fixtures: { allowArtifactsOnly: true },
+      runtimeOptions: { closureInstall: false, precheck: 'none' },
+    },
+    async (harness) => {
+      const operationId = await createEnvironment(harness, 'paused', COMPOSITION_A.id, 'req-pause');
+      // Do not wait for terminal: the point is that it is left uncommitted.
+      const before = listEnvironments(harness).find((environment) => environment.name === 'paused');
+      assert.ok(before !== undefined, 'a paused create must still be recorded');
+      assert.equal(before.activeGenerationId, null, 'no generation pointer before commit');
+
+      const transactions = join(harness.dataRoot, 'transactions');
+      assert.equal(existsSync(transactions), true, 'journal directory must exist');
+      assert.ok(
+        countEntries(transactions) > 0,
+        'an uncommitted journal entry must be present for reconciliation',
+      );
+
+      const report = await harness.install.recover();
+      assert.notEqual(report, undefined, 'recover() must return a report');
+
+      const after = listEnvironments(harness).find((environment) => environment.name === 'paused');
+      assert.ok(after !== undefined);
+      assert.equal(after.state, 'error');
+      assert.equal(after.activeGenerationId, null);
+      assert.equal(countEntries(transactions), 0, 'reconciled journal entries must be cleared');
+      void operationId;
+    },
+  );
+};
+
+/** FR-008 / idempotency: a replayed requestId after restart keeps one operation. */
+export const scenarioIdempotentReplayAcrossRestart = async (
+  deps: InstallScenarioDeps,
+  source: ArtifactSource,
+): Promise<void> => {
+  const fixtureMode = source.mode === 'fixtures';
+  await withInstallHarness(
+    deps,
+    {
+      label: 'idempotency',
+      routes: source.routes,
+      catalogFor: source.catalogFor,
+      ...(fixtureMode
+        ? {
+            fixtures: { allowArtifactsOnly: true },
+            runtimeOptions: { closureInstall: false, precheck: 'none' as const },
+          }
+        : {}),
+    },
+    async (harness) => {
+      const first = requireOk(
+        call(harness.api, 'environments.create', {
+          requestId: 'req-replay',
+          name: 'replay',
+          catalogCombinationId: COMPOSITION_A.id,
+        }),
+        'environments.create(first)',
+      ) as { readonly operationId: string };
+      await pollTerminalOperation(harness.api, first.operationId);
+      const requestCountAfterFirst = harness.endpoint.requests.length;
+
+      const replay = requireOk(
+        call(harness.api, 'environments.create', {
+          requestId: 'req-replay',
+          name: 'replay',
+          catalogCombinationId: COMPOSITION_A.id,
+        }),
+        'environments.create(replay)',
+      ) as { readonly operationId: string };
+      assert.equal(replay.operationId, first.operationId, 'replay must return the original operation');
+      assert.equal(
+        harness.endpoint.requests.length,
+        requestCountAfterFirst,
+        'replay must not re-download artifacts',
+      );
+      harness.assertHostDefaultsUnchanged();
+    },
+  );
+};
+
+/**
+ * Orchestrator ruling (2026-09-20, hdsl-2): T004 production create must not
+ * commit an `artifacts-only` generation as a complete usable active
+ * environment. This case forces the synthetic `closureInstall: false` mode and
+ * asserts the public invariant: either the operation fails and no active
+ * generation is written, or (defect) it commits as usable — never "artifacts-only
+ * but fully successful". The T005 start-time re-check is defense in depth and
+ * is tracked separately.
+ */
+export const scenarioArtifactsOnlyCannotCommit = async (deps: InstallScenarioDeps): Promise<void> => {
+  const fixture = buildComposition(COMPOSITION_A);
+  const catalogFor = (origin: string): readonly RuntimeCombination[] => [fixture.combinationFor(origin)];
+  await withInstallHarness(
+    deps,
+    {
+      label: 'artifacts-only-gate',
+      routes: fixture.routes,
+      catalogFor,
+      runtimeOptions: { closureInstall: false },
+    },
+    async (harness) => {
+      const operationId = await createEnvironment(harness, 'artifacts-only', COMPOSITION_A.id, 'req-ao');
+      const snapshot = await pollTerminalOperation(harness.api, operationId);
+      const summary = listEnvironments(harness).find((environment) => environment.name === 'artifacts-only');
+      assert.ok(summary !== undefined, 'the environment row must exist after the attempt');
+      const usable =
+        snapshot.status === 'succeeded' &&
+        summary.activeGenerationId !== null &&
+        (summary.state === 'stopped' || summary.state === 'running');
+      assert.equal(
+        usable,
+        false,
+        'artifacts-only must never commit as a complete usable active generation',
+      );
+      if (snapshot.status === 'failed') {
+        assert.equal(summary.state, 'error');
+        assert.equal(summary.activeGenerationId, null);
+      }
+      harness.assertHostDefaultsUnchanged();
+    },
+  );
+};
+
+/**
+ * Real closure completeness (network required). Uses the audited real
+ * `VERIFIED_COMBINATIONS` and the default `npm ci` closure, then checks the
+ * manifest's lock digest, package count, npm version and preflight stdout.
+ * This is the only case that may be reported as real `version`/`help` evidence;
+ * it is `unmeasured` until run with network access on macOS ARM64.
+ */
+export const scenarioRealClosureCompleteness = async (
+  deps: InstallScenarioDeps,
+  runtimeModule: RuntimeModule,
+): Promise<void> => {
+  assert.ok(runtimeModule.VERIFIED_COMBINATIONS.length > 0, 'need a verified catalog combination');
+  const runs = runtimeModule.VERIFIED_COMBINATIONS.slice(0, 2);
+  await withInstallHarness(
+    deps,
+    {
+      label: 'completeness-real',
+      routes: [],
+      catalogFor: () => runtimeModule.VERIFIED_COMBINATIONS,
+      runtimeOptions: { closureInstall: true },
+    },
+    async (harness) => {
+      for (const [index, combination] of runs.entries()) {
+        const name = `real-${index}`;
+        const operationId = await createEnvironment(harness, name, combination.id, `req-real-${index}`);
+        const snapshot = await pollTerminalOperation(harness.api, operationId, {
+          label: `real create ${combination.id}`,
+          timeoutMs: 10 * 60 * 1000,
+        });
+        assert.equal(snapshot.status, 'succeeded', `real install failed: ${JSON.stringify(snapshot.error ?? null)}`);
+        const environmentId = harness.findEnvironmentIdByName(name);
+        const manifest = await readManifest(harness.service, environmentId);
+        assertManifestRealClosure(manifest, combination);
+      }
+      harness.assertHostDefaultsUnchanged();
+    },
+  );
+};
+
+const corruptFirstNibble = (digest: string): string => {
+  const first = digest.slice(0, 1);
+  return `${first === '0' ? '1' : '0'}${digest.slice(1)}`;
+};
+
+const countEntries = (dir: string): number => readdirSync(dir).length;
