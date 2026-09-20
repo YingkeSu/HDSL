@@ -53,8 +53,14 @@ export const mountTinyVolume = (root: string, sizeMb = 2): TinyVolume | undefine
   };
 };
 
-/** Writes fixed blocks until the filesystem reports ENOSPC; returns the error. */
-export const writeUntilEnospc = (dir: string, maxBytes = 64 * 1024 * 1024): NodeJS.ErrnoException => {
+/**
+ * Writes fixed blocks until the filesystem reports ENOSPC; returns the error.
+ *
+ * P3-4: call this only on a mounted tiny volume. The default cap is small so a
+ * mistaken call against a normal directory cannot fill the temp disk; pass an
+ * explicit larger cap if a bigger volume is under test.
+ */
+export const writeUntilEnospc = (dir: string, maxBytes = 8 * 1024 * 1024): NodeJS.ErrnoException => {
   const block = Buffer.alloc(1024 * 1024, 0x41);
   const path = join(dir, 'hdsl-qa-fill.bin');
   const fd = openSync(path, 'w');

@@ -20,7 +20,13 @@ export type ServeMode =
   /** Announce the full length, send half, then reset the socket. */
   | 'truncate'
   /** Accept the request and reset the socket before sending a body. */
-  | 'reset';
+  | 'reset'
+  /** Send the full body in two delayed halves, to force interleaving. */
+  | 'slow'
+  /** Truncate only the first request to this path; serve full afterwards. */
+  | 'fail-first'
+  /** Send headers, then wait for an explicit `release(path)` before the body. */
+  | 'hold';
 
 export interface RouteFixture {
   readonly path: string;
@@ -38,6 +44,10 @@ export interface LocalEndpoint {
   readonly origin: string;
   url(path: string): string;
   readonly requests: readonly RequestLog[];
+  /** Resolves once a request for `path` has arrived (held or otherwise). */
+  waitForRequest(path: string, timeoutMs?: number): Promise<void>;
+  /** Releases a route served in `hold` mode. */
+  release(path: string): void;
   close(): Promise<void>;
 }
 
@@ -46,6 +56,9 @@ export const startLocalEndpoint = async (
 ): Promise<LocalEndpoint> => {
   const byPath = new Map(routes.map((route) => [route.path, route]));
   const requests: RequestLog[] = [];
+  const failFirstSeen = new Set<string>();
+  const held = new Map<string, () => void>();
+  const delayMs = 60;
 
   const server: Server = createServer((request, response) => {
     const path = (request.url ?? '').split('?')[0] ?? '';
@@ -57,7 +70,11 @@ export const startLocalEndpoint = async (
       response.end('not found');
       return;
     }
-    const mode = route.mode ?? 'full';
+    let mode = route.mode ?? 'full';
+    if (mode === 'fail-first') {
+      mode = failFirstSeen.has(path) ? 'full' : 'truncate';
+      failFirstSeen.add(path);
+    }
     if (mode === 'reset') {
       response.destroy();
       return;
@@ -74,6 +91,30 @@ export const startLocalEndpoint = async (
       // Destroy instead of end(): the client sees a premature close while the
       // advertised Content-Length promises more bytes.
       response.destroy();
+      return;
+    }
+    if (mode === 'slow') {
+      const half = Math.floor(route.body.length / 2);
+      log.bytesSent += half;
+      response.write(route.body.subarray(0, half));
+      setTimeout(() => {
+        const rest = route.body.subarray(half);
+        log.bytesSent += rest.length;
+        response.end(rest, () => {
+          log.completed = true;
+        });
+      }, delayMs);
+      return;
+    }
+    if (mode === 'hold') {
+      // Headers are already sent, so the client's fetch resolved and its body
+      // reader is blocked. The test decides exactly when the transfer ends.
+      held.set(path, () => {
+        log.bytesSent += route.body.length;
+        response.end(route.body, () => {
+          log.completed = true;
+        });
+      });
       return;
     }
     log.bytesSent += route.body.length;
@@ -96,7 +137,33 @@ export const startLocalEndpoint = async (
     origin,
     url: (path: string) => `${origin}${path.startsWith('/') ? path : `/${path}`}`,
     requests,
+    waitForRequest: async (path: string, timeoutMs = 10_000) => {
+      const deadline = Date.now() + timeoutMs;
+      for (;;) {
+        if (requests.some((entry) => entry.path === path)) {
+          return;
+        }
+        if (Date.now() >= deadline) {
+          throw new Error(`no request observed for ${path} within ${timeoutMs}ms`);
+        }
+        await new Promise((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      }
+    },
+    release: (path: string) => {
+      const send = held.get(path);
+      if (send === undefined) {
+        throw new Error(`route ${path} is not held`);
+      }
+      held.delete(path);
+      send();
+    },
     close: async () => {
+      for (const send of [...held.values()]) {
+        send();
+      }
+      held.clear();
       await new Promise<void>((resolve, reject) => {
         server.close((error) => (error ? reject(error) : resolve()));
       });

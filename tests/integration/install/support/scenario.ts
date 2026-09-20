@@ -14,6 +14,8 @@ import {
   type EnvironmentSummary,
   type OperationSnapshot,
 } from '@hdsl/contracts';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
+import { join, relative, sep } from 'node:path';
 
 import { sleep } from './temp-env.js';
 
@@ -122,10 +124,78 @@ export const pollEnvironment = async (
 };
 
 /**
- * Asserts no absolute fixture path leaked through a contract response. Local
- * paths are not secrets, but `local-api.md` forbids exposing them.
+ * Waits until a transaction journal reaches `phase`. Used to make the
+ * "crashed after artifacts installed, before commit" restart boundary
+ * deterministic instead of relying on a fixed sleep; calling `close()` while
+ * the install is still in flight aborts and cleans the journal.
  */
+export const waitForJournalPhase = async (
+  dataRoot: string,
+  phase: string,
+  timeoutMs = 15_000,
+): Promise<void> => {
+  const directory = join(dataRoot, 'transactions');
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    let names: string[] = [];
+    try {
+      names = readdirSync(directory).filter((name) => name.endsWith('.json'));
+    } catch {
+      names = [];
+    }
+    for (const name of names) {
+      try {
+        const record = JSON.parse(readFileSync(join(directory, name), 'utf8')) as {
+          readonly phase?: string;
+        };
+        if (record.phase === phase) {
+          return;
+        }
+      } catch {
+        // A concurrent atomic write can race the read; retry.
+      }
+    }
+    if (Date.now() >= deadline) {
+      throw new Error(`no transaction journal reached phase ${phase} within ${timeoutMs}ms`);
+    }
+    await sleep(25);
+  }
+};
+
+/** Asserts no absolute fixture path leaked through a contract response. */
 export const findLeakedPaths = (payload: unknown, forbidden: readonly string[]): string[] => {
   const text = JSON.stringify(payload) ?? '';
   return forbidden.filter((path) => path.length > 0 && text.includes(path));
+};
+
+/** Recursively lists files under `root` (missing root yields an empty list). */
+export const walkFiles = (root: string): string[] => {
+  const found: string[] = [];
+  const visit = (dir: string): void => {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      return;
+    }
+    for (const name of names) {
+      const full = join(dir, name);
+      let stats;
+      try {
+        stats = statSync(full, { throwIfNoEntry: false });
+      } catch {
+        continue;
+      }
+      if (stats === undefined) {
+        continue;
+      }
+      if (stats.isDirectory()) {
+        visit(full);
+      } else if (stats.isFile()) {
+        found.push(relative(root, full).split(sep).join('/'));
+      }
+    }
+  };
+  visit(root);
+  return found;
 };

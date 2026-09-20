@@ -10,15 +10,16 @@ not modify production code and does not perform PR review.
 
 | Item | State |
 | --- | --- |
-| Public calling surface (T004 / #4) | **Confirmed** by hdsl-15 (see below) |
+| Public calling surface (T004 / #4) | **Confirmed** and executed against candidate `ccaaeb9` |
 | Fixture harness | **Done** — 9 self-checks green |
-| Scenario suite | **Prepared, not executable** — `@hdsl/core`/`@hdsl/runtime` have no implementation yet |
-| Real install execution | **Blocked** on a T004 candidate SHA |
+| Scenario suite | **Executable** — `install.integration.test.ts` registers 16 synthetic + 2 real opt-in cases |
+| Result on `ccaaeb9` | synthetic 16 PASS; real opt-in 2 PASS; full suite 290 passed / 3 skipped |
 
-The harness self-checks (`harness.test.ts`) are the only tests vitest runs from
-this directory. The scenario functions in `scenarios/` are plain async
-functions (not `*.test.ts`), so CI stays green while the launcher does not
-exist. They will be wired to `it()` once T004 exports a runnable interface.
+`harness.test.ts` proves the fixtures; `install.integration.test.ts` drives the
+real T004 public API. Both are real vitest suites. The only conditional cases
+are a documented macOS platform gate (`INST-DISK-02`) and the network/`npm ci`
+opt-in group (`HDSL_QA_REAL_INSTALL=1`). Results and limitations live in
+`docs/development/install-validation.md`.
 
 ## Confirmed public calling surface
 
@@ -60,46 +61,38 @@ Types are declared in `support/managed-install-api.ts`. Key confirmed behavior
 
 ```text
 tests/integration/install/
-  harness.test.ts            # fixture self-checks (vitest, green)
+  harness.test.ts                  # fixture self-checks (vitest, green)
+  install.integration.test.ts      # real executable scenarios over public T004 API
   scenarios/
-    install-scenarios.ts     # executable-ready scenarios (not run yet)
+    install-scenarios.ts           # scenario functions
   support/
-    artifacts.ts             # deterministic tar.gz artifacts + hostile archive
-    catalog-fixtures.ts      # local-endpoint-backed RuntimeCombinations
-    composition.ts           # expected compositionDigest (frozen rule)
-    disk-fault.ts            # labelled injected ENOSPC
-    hash.ts                  # sha256 helpers
-    local-endpoint.ts        # loopback HTTP endpoint (full/truncate/reset)
-    managed-install-api.ts   # confirmed T004 surface + loaders
-    manifest.ts              # install-manifest assertions
-    scenario.ts              # dispatch/poll/require helpers
-    tar.ts                   # deterministic tar.gz writer + parser
-    temp-env.ts              # temp roots, HOME isolation, host-default snapshots
-    tiny-volume.ts           # real ENOSPC via mounted HFS+ image (macOS)
+    artifacts.ts                   # deterministic tar.gz artifacts + hostile archive
+    catalog-fixtures.ts            # local-endpoint-backed RuntimeCombinations
+    composition.ts                 # expected compositionDigest (frozen rule)
+    disk-fault.ts                  # labelled injected ENOSPC
+    hash.ts                        # sha256 helpers
+    local-endpoint.ts              # loopback HTTP endpoint (full/truncate/reset/slow/fail-first)
+    managed-install-api.ts         # re-exported T004 surface types
+    manifest.ts                    # install-manifest assertions
+    scenario.ts                    # dispatch/poll/journal-wait helpers
+    tar.ts                         # deterministic tar.gz writer + parser
+    temp-env.ts                    # temp roots, HOME isolation, host-default snapshots
+    tiny-volume.ts                 # real ENOSPC via mounted HFS+ image (macOS)
 ```
 
-## Run the fixture self-checks
+## Run
 
 ```sh
 pnpm install --frozen-lockfile
+
+# Synthetic install boundary (16 cases, no skips except the macOS gate)
+pnpm exec vitest run tests/integration/install/install.integration.test.ts
+
+# Real closure (opt-in: network + npm ci)
+HDSL_QA_REAL_INSTALL=1 pnpm exec vitest run tests/integration/install/install.integration.test.ts -t "install real closure"
+
+# Fixture self-checks
 pnpm exec vitest run tests/integration/install/harness.test.ts
-```
-
-## Wiring the scenarios (once T004 lands)
-
-Create `tests/integration/install/install.integration.test.ts`:
-
-```ts
-import { loadCoreModule, loadRuntimeModule } from './support/managed-install-api.js';
-import { scenarioTwoEnvironmentIsolation, /* ... */ } from './scenarios/install-scenarios.js';
-
-const core = await loadCoreModule();
-const runtime = await loadRuntimeModule();
-// describe.skip is NOT acceptable for a real defect. If either module is
-// missing, fail loudly: the dependency is not met, the task stops and reports.
-if (core === undefined || runtime === undefined) {
-  throw new Error('T004 public interface is not available yet');
-}
 ```
 
 Never substitute a mock port for a missing real one, never call a scenario green
@@ -113,7 +106,7 @@ through the public contract (terminal `operation.status`/`error.code` and
 environment `state`):
 
 - `forceDiskFull` → **injected**; `mounted tiny volume + minFreeBytes` → **real**.
-- `truncate`/`reset` transport → **injected** download fault.
+- `truncate`/`reset` transport → **injected** download fault; `slow`/`fail-first` → forced interleaving / one failed side.
 - `pauseBeforeCommit` → **injected** crash boundary.
 
 Synthetic tarballs are **not** real Node/DSH artifacts. They prove download,
