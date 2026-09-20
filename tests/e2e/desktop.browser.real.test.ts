@@ -127,10 +127,18 @@ describe.skipIf(!ENABLED)('desktop isolated real-browser lane (opener injection)
       if (!created.ok) {
         return;
       }
-      const createdSnapshot = await composition.service.waitForOperation(created.value.operationId, {
-        timeoutMs: 20 * 60_000,
-      });
-      expect(createdSnapshot.status).toBe('succeeded');
+      // The contract create is asynchronous: poll for the operation record to
+      // appear and reach a terminal status instead of assuming it exists the
+      // instant create returns.
+      await waitFor(
+        () => {
+          const snapshot = composition?.port.findOperation(created.value.operationId);
+          return snapshot !== undefined && snapshot.ok && ['succeeded', 'failed', 'cancelled'].includes(snapshot.value.status);
+        },
+        { timeoutMs: 20 * 60_000, intervalMs: 500, label: 'create operation terminal' },
+      );
+      const createdSnapshot = composition.port.findOperation(created.value.operationId);
+      expect(createdSnapshot.ok && createdSnapshot.value.status).toBe('succeeded');
       const listed = composition.port.listEnvironments();
       expect(listed.ok).toBe(true);
       const environment = listed.ok ? listed.value[0] : undefined;
@@ -249,11 +257,14 @@ describe.skipIf(!ENABLED)('desktop isolated real-browser lane (opener injection)
           '',
         ).catch(() => -1);
         expect(deleted, 'keychain canary deletion must succeed').toBe(0);
+        // macOS `security` returns exactly 44 (errSecItemNotFound) when the item
+        // is absent. Any other non-zero (permission/storage failure) must NOT be
+        // read as "absent" (review F5).
         const stillThere = await runSecurity(
           ['find-generic-password', '-s', service, '-a', account],
           '',
-        ).catch(() => 0);
-        expect(stillThere, 'keychain canary must be gone after deletion').not.toBe(0);
+        ).catch(() => -1);
+        expect(stillThere, 'keychain canary must report errSecItemNotFound (44) after deletion').toBe(44);
       }
       const report = await harness.registry.cleanup();
       expect(report.failed, JSON.stringify(report.failed)).toEqual([]);

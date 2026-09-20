@@ -1,12 +1,12 @@
 # 桌面主流程 E2E 执行与边界（T007c / #64 执行阶段，父任务 #7）
 
 - Owner：hdsl-25（独立 QA）。本文件与 `tests/e2e/**` 归本切片独占；其它路径只读。
-- 候选：PR #68 head `33bfd1e32d0f121a640ba713a4fa165f906c8ffe`（base main `a16146c3b4578889bd72f6d0afd226b74f737935`）。
+- 候选：PR #68 head `2cdea54a9c65252b8d2809737723018ca5b2f801`（base main `a16146c3b4578889bd72f6d0afd226b74f737935`）。
 - 上一冻结 head：`9b52364d8a999617e1537e6ce97c419fb1ebd04e`（红证据即在此 SHA 记录）。
 - 实机：macOS 26.3（Darwin 25D125）arm64；Node v24.21.0；pnpm 11.7.0；Electron 44.4.3；驱动方式 CDP（Node 内置 `WebSocket`/`fetch`，不新增依赖）。
 - 边界：本切片是**独立 QA**。不 review/改 `apps/desktop/**`、不改 `tests/desktop/**`、不改根配置/lockfile。真实 UI 不得用 SSR/demo 替代；composition/HTTP 证据不得当 GUI 证据。
 
-## 执行矩阵（33bfd1e）
+## 执行矩阵（2cdea54）
 
 真实 Electron 窗口 + 真实 CDP 驱动，全部带显式超时（无无界等待）：
 
@@ -20,8 +20,8 @@
 | E2E-LOCK-02 | ✅ 通过 | 同 dataRoot、不同 user-data-dir：第二进程 8s 内无 page target；`<dataRoot>/locks/data-root.lock/lease.json` 的 `pid` 仍为**首实例** pid，终止第二进程后不变；**同配置在空闲 root 的正控能开窗**（归因，非恒真） |
 | E2E-LOCK-03 | ✅ 通过 | 首实例退出后，新实例以同 dataRoot 重新获取 lease（pid 变更）并可服务（与 LOCK-02 的“拒绝”分栏） |
 | E2E-CREATE-01 | ✅ 通过 | 纯键盘主流程（Tab 到按钮 + Enter 激活）→ 真实 install（Node 22.19.0 + DSH 0.1.5-rc.2，npm-ci）→ `state=stopped`；磁盘核实 `environment.json`、`generations/<id>/composition.lock.json`、`install-manifest.json` 落盘（约 41s） |
-| E2E-AUTH-01 | ✅ 通过（33bfd1e） | `isTrustedDocumentUrl` 精确规范化相等：真实文档 URL 通过；`index.html.attacker`、`index.html/nested/evil.html`、`index%2ehtml`、`?x=1` 一律拒绝；子 frame（`isMainFrame=false`）拒绝 |
-| E2E-HOOK-01 | ✅ 通过（33bfd1e） | 生产入口设置三个 `HDSL_*` 钩子后正常启动：`credentials.json` 未生成、固定导出路径无文件、stderr 无 `credential-import` 标记 |
+| E2E-AUTH-01 | ✅ 通过（2cdea54） | `isTrustedDocumentUrl` 精确规范化相等：真实文档 URL 通过；`index.html.attacker`、`index.html/nested/evil.html`、`index%2ehtml`、`?x=1` 一律拒绝；子 frame（`isMainFrame=false`）拒绝 |
+| E2E-HOOK-01 | ✅ 通过（2cdea54） | 生产入口设置三个 `HDSL_*` 钩子后正常启动：`credentials.json` 未生成、固定导出路径无文件、stderr 无 `credential-import` 标记 |
 | E2E-QAENTRY-DIAG-01 | ✅ 通过（注入列） | `qa-entry --hdsl-qa-export-path`：导出返回 `{exportId,exported:true,redacted:true}`；文件不含 canary/`.credentials.yaml`/`credentials.json`/dataRoot 原文；同 `requestId` 重放不重写文件；不返回路径 |
 | E2E-QAENTRY-CRED-01 | ✅ 通过（注入列） | `qa-entry --hdsl-qa-import-path/--hdsl-qa-import-environment`：stderr `credential-import: applied`；`credentials.json` 权限 `0600`、含引用 id/key、无 secret 值 |
 | E2E-QAENTRY-CRED-02 | ✅ 通过（注入列） | 含 `value` 字段的文档 `rejected at parse`；`credentials.json` 未生成；secret 不入 stderr |
@@ -51,12 +51,14 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 
 ## 红证据（9b52364）与修复复验
 
-- **AUTH-01（review P2-1）**：在 `9b52364` 上，纯函数授权边界 `isNavigationAllowed`/`isAuthorizedSender` 接受 `<renderer index.html>.attacker` 等共享前缀的不同资源 —— 同断言 RED。**口径**：这是纯函数授权复现，**未**证明 Chromium 规范化层可利用，不称真实利用。`33bfd1e` 改为 `isTrustedDocumentUrl` 精确规范化相等后，同断言 GREEN。
+- **AUTH-01（review P2-1）**：在 `9b52364` 上，纯函数授权边界 `isNavigationAllowed`/`isAuthorizedSender` 接受 `<renderer index.html>.attacker` 等共享前缀的不同资源 —— 同断言 RED。**口径**：这是纯函数授权复现，**未**证明 Chromium 规范化层可利用，不称真实利用。`33bfd1e` 改为 `isTrustedDocumentUrl` 精确规范化相等后，同断言 GREEN（并在最终 base `2cdea54` 复验）。
 - **HOOK（review P2-2）**：`9b52364` 上运行期复现（正常启动 + 三个 `HDSL_*` 钩子）在真实 install 步骤超时，**没有干净红**；不补写成功复现。`33bfd1e` 把注入迁到独立 `dist/main/qa-entry.js`，生产入口不再读任何钩子；`E2E-HOOK-01` 独立验证「设置三 env 的正常生产启动无任何读文件/写配置/跳对话框副作用」。
 
-## 未解决的可观测性缺口（review F1）
+## F1 拒绝信号（已由生产补齐，`2cdea54`）
 
-`E2E-LOCK-02` 的“第二实例被拒”路径当前**没有机器可读的拒绝信号**：实测该进程不输出 stderr、不退出（阻塞在原生错误框），`locks/` 也不产生拒绝记录（只有首实例的 `lease.json`）。因此本切片只能用“有界无 page + lease 归属不变 + 同配置空闲 root 正控”归因。若要 CI 可独立断言该拒绝，需要一个受控且脱敏的可观测点（例如输出一行脱敏 stderr 并以非零码退出，或写一条受控拒绝证据）；这是**生产可观测性最小缺口**，归后续实现（不属本 QA 改动范围）。
+`33bfd1e` 上该路径没有机器可读的拒绝信号（无 stderr、不退出、`locks/` 无拒绝记录），本切片当时只能用“有界无 page + lease 归属不变 + 同配置空闲 root 正控”归因，并把最小可观测性缺口登记给实现方。
+
+`2cdea54` 在原生错误框**之前**输出单行固定、脱敏的 stderr：`[hdsl] data-root unavailable reason=busy`（另一实例持有时；`unknown` 兜底），不含路径/owner/PID/hostname/secret/异常文本，不写未持锁 dataRoot，用户关闭弹框后退出码 1。`E2E-LOCK-02` 现在断言该精确信号（含 `reason=busy`）且断言该行不含 dataRoot 路径与 `token=`，再断言首实例存活、`lease.json` pid 不变，并保留同配置空闲 root 正控；取证后只终止本测试自己的第二实例进程，不点原生弹框。
 
 ## 通道分栏
 
@@ -93,4 +95,4 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 - 真实 `shell.openExternal` 系统浏览器打开未测（注入 opener 列已验，两者不互代）。
 - LOCK-02 的机器可读拒绝信号缺口保持登记（见上）。
 - Windows x64 未测（T008b）。
-- 本文件与场景计划中的 observation 只对候选 `33bfd1e` 有效；候选变更后需重新复验。
+- 本文件与场景计划中的 observation 只对候选 `2cdea54` 有效；候选变更后需重新复验。

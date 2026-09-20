@@ -165,7 +165,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '故意调用未暴露通道必须抛错/拒绝；若可达则失败',
     requires: ['electron.window', 'preload.bridge', 'ipc.sender-guard'],
     status: 'executed',
-    observation: "已执行 2026-09-20 @33bfd1e：真实窗口 window.hdsl 恰为 {call,onOperationUpdated,selectEnvironment}，window.require/process/ipcRenderer/send/invoke/on 均 undefined",
+    observation: "已执行 2026-09-20 @2cdea54：真实窗口 window.hdsl 恰为 {call,onOperationUpdated,selectEnvironment}，window.require/process/ipcRenderer/send/invoke/on 均 undefined",
   },
   {
     id: 'E2E-TRUST-02',
@@ -191,7 +191,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '主 frame 的精确文档 URL 必须授权（纯函数）；iframe/子 frame 未在真实窗口驱动，不得用 popup/nav 结果声称 iframe 已覆盖',
     requires: ['electron.window', 'ipc.sender-guard'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e：真实窗口 window.open 返回 null、外部导航被拒且 URL 不变；子 frame 仅纯函数断言（isMainFrame=false → false），iframe 未测',
+    observation: '已执行 2026-09-20 @2cdea54：真实窗口 window.open 返回 null、外部导航被拒且 URL 不变；子 frame 仅纯函数断言（isMainFrame=false → false），iframe 未测',
   },
   {
     id: 'E2E-TRUST-04',
@@ -204,7 +204,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '对启动器自身窗口重复同一探测必须能触达受限桥，证明探测自身有效',
     requires: ['webui.native-open', 'electron.window', 'dsh.managed'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e（注入 opener 列）：真实浏览器加载 authenticated DSH 页面时 window.hdsl 为 undefined，页面不持有启动器桥；未在 Electron webContents 内加载 DSH',
+    observation: '已执行 2026-09-20 @2cdea54（注入 opener 列）：真实浏览器加载 authenticated DSH 页面时 window.hdsl 为 undefined，页面不持有启动器桥；未在 Electron webContents 内加载 DSH',
   },
   {
     id: 'E2E-WEBUI-01',
@@ -217,7 +217,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '换端口/停进程/非 loopback/无 endpoint 必须 WEBUI_UNAVAILABLE 或 INTERNAL_ERROR，且绝不打开；真实 shell.openExternal 未测',
     requires: ['electron.window', 'webui.native-open', 'dsh.managed'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e（注入 opener 列）：真实受管进程 loopback 经 main-only bootstrap 后落在去 query canonical origin；未知/无 endpoint 时 WEBUI_UNAVAILABLE（IPC 用例）。真实 shell.openExternal 原生打开未测',
+    observation: '已执行 2026-09-20 @2cdea54（注入 opener 列）：真实受管进程 loopback 经 main-only bootstrap 后落在去 query canonical origin；未知/无 endpoint 时 WEBUI_UNAVAILABLE（IPC 用例）。真实 shell.openExternal 原生打开未测',
   },
   {
     id: 'E2E-WEBUI-02',
@@ -243,7 +243,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '含 value/secret 字段的配置必须被拒且不落盘；若被接受则失败',
     requires: ['electron.window', 'credentials.menu-import', 'preload.bridge', 'dsh.managed'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e（qa-entry 测试注入列，非原生菜单）：stderr applied；credentials.json 0600、含引用 id/key、无 secret 值。真实原生菜单导入仍未测',
+    observation: '已执行 2026-09-20 @2cdea54（qa-entry 测试注入列，非原生菜单）：stderr applied；credentials.json 0600、含引用 id/key、无 secret 值。真实原生菜单导入仍未测',
   },
   {
     id: 'E2E-CRED-02',
@@ -256,7 +256,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '合格引用配置必须成功导入，否则“一律拒绝”会伪装成通过',
     requires: ['electron.window', 'credentials.menu-import'],
     status: 'executed',
-    observation: "已执行 2026-09-20 @33bfd1e（qa-entry 注入列）：含 value 字段文档 rejected at parse，credentials.json 未生成，secret 不入 stderr",
+    observation: "已执行 2026-09-20 @2cdea54（qa-entry 注入列）：含 value 字段文档 rejected at parse，credentials.json 未生成，secret 不入 stderr",
   },
   {
     id: 'E2E-CRED-03',
@@ -295,7 +295,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '故意改宽默认排除（或把 canary 放进导出源）必须使断言失败；导出不得返回本地路径',
     requires: ['electron.window', 'diagnostics.export'],
     status: 'executed',
-    observation: "已执行 2026-09-20 @33bfd1e（qa-entry 注入列）：导出 {exportId,exported:true,redacted:true}；文件不含 canary/.credentials.yaml/credentials.json/dataRoot 原文；同 requestId 重放不重写",
+    observation: "已执行 2026-09-20 @2cdea54（qa-entry 注入列）：导出 {exportId,exported:true,redacted:true}；文件不含 canary/.credentials.yaml/credentials.json/dataRoot 原文；同 requestId 重放不重写",
   },
   {
     id: 'E2E-ISO-01',
@@ -334,7 +334,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: 'A 退出后 B 必须能接管，否则“永久拒绝”会伪装成通过',
     requires: ['electron.single-instance', 'dataRoot.lock', 'electron.window'],
     status: 'executed',
-    observation: "已执行 2026-09-20 @33bfd1e：同 user-data-dir 第二进程经 requestSingleInstanceLock 退出，首实例仍可服务",
+    observation: "已执行 2026-09-20 @2cdea54：同 user-data-dir 第二进程经 requestSingleInstanceLock 退出，首实例仍可服务",
   },
   {
     id: 'E2E-LOCK-02',
@@ -347,7 +347,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '正控必须开窗，否则不能把“无 page”归因于 dataRoot 拒绝；生产该路径无 stderr/exit 信号，已作为最小可观测性缺口报告',
     requires: ['electron.single-instance', 'dataRoot.lock'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e：第二进程 8s 内无 page；lease.json pid 仍为首实例；同配置空闲 root 正控开窗；终止第二进程后 lease 不变',
+    observation: '已执行 2026-09-20 @2cdea54：第二进程 8s 内无 page；lease.json pid 仍为首实例；同配置空闲 root 正控开窗；终止第二进程后 lease 不变',
   },
   {
     id: 'E2E-RESTART-01',
@@ -386,7 +386,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: 'Page.navigate 返回不算认证成功：若最终 URL 仍带 token query、或认证后 DOM 为空，断言失败；不开 Network 域、不 dump cookie',
     requires: ['webui.native-open', 'webui.auth-bootstrap', 'dsh.managed'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e（注入 opener 列）：真实受管 DSH 启动后 bootstrap 经 Page.navigate；认证页断言 rc2 身份（title=DeepSeek Harness + #root [data-slot=root] + 新会话/DOM）；cold 无 cookie 的第二 profile 不出现该 shell（负向）；自建随机 keychain canary 删除并复检不存在。不等于真实 shell.openExternal 原生打开',
+    observation: '已执行 2026-09-20 @2cdea54（注入 opener 列）：真实受管 DSH 启动后 bootstrap 经 Page.navigate；认证页断言 rc2 身份（title=DeepSeek Harness + #root [data-slot=root] + 新会话/DOM）；cold 无 cookie 的第二 profile 不出现该 shell（负向）；自建随机 keychain canary 删除并复检不存在。不等于真实 shell.openExternal 原生打开',
   },
   {
     id: 'E2E-LOCK-03',
@@ -399,7 +399,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '若旧 lease 仍在或新实例无法获取则失败；与 LOCK-02 的拒绝场景分开，不互相代替',
     requires: ['electron.window', 'dataRoot.lock'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e：首实例退出后新实例获取 lease（pid 变更）并可调用 catalog.list',
+    observation: '已执行 2026-09-20 @2cdea54：首实例退出后新实例获取 lease（pid 变更）并可调用 catalog.list',
   },
   {
     id: 'E2E-GUI-STARTSTOP-01',
@@ -412,7 +412,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '按钮禁用或状态标签不变则失败；凭据经已受审 core 接口 setup 注入并明确标注，不冒充原生菜单导入',
     requires: ['electron.window', 'renderer.start-stop', 'operation.progress', 'dsh.managed'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @33bfd1e：setup 注入引用 + 自建 keychain canary 后，真实点击启动→面板显示启动→状态运行中；点击停止→已停止；契约确认 stopped',
+    observation: '已执行 2026-09-20 @2cdea54：setup 注入引用 + 自建 keychain canary 后，真实点击启动→面板显示启动→状态运行中；点击停止→已停止；契约确认 stopped',
   },
 ];
 

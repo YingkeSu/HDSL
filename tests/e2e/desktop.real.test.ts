@@ -1,5 +1,5 @@
 /**
- * Real desktop E2E on the frozen T006 candidate (`33bfd1e`, PR #68).
+ * Real desktop E2E on the frozen T006 candidate (`2cdea54`, PR #68).
  *
  * Independent QA (hdsl-25, `tests/e2e/**`). These tests boot the candidate's
  * own built app and drive the **real** Electron renderer over CDP: real React
@@ -38,7 +38,7 @@ import { waitFor } from './support/gates.js';
 const ENABLED = process.env['HDSL_E2E_DESKTOP'] === '1';
 const COMBINATION_NODE24 = 'darwin-arm64-node24_21_0-dsh0_1_5-rc_2';
 
-describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 33bfd1e)', () => {
+describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
   afterEach(cleanupAllHarnesses);
 
   it('E2E-WIN-01: boots a real window, mounts React and exposes only the narrow bridge', async () => {
@@ -210,12 +210,20 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 33bfd1e)', () => {
     });
     harness.apps.push(second);
 
-    // Rejection evidence. NOTE: the candidate currently emits no machine-readable
-    // rejection signal on this path (no stderr line, no exit, blocked on the
-    // native error box), so attribution relies on: (a) this bounded no-page
-    // observation, (b) the on-disk lease still belonging to the first instance,
-    // and (c) a positive control that proves the same launch config does open a
-    // page on an idle root. The missing observable signal is reported as a gap.
+    // F1: the candidate emits one fixed, secret-free rejection line before the
+    // native dialog. Assert the exact signal, then the lease/attribution checks.
+    await waitFor(
+      () => second.output().includes('[hdsl] data-root unavailable reason=busy'),
+      { timeoutMs: 15_000, intervalMs: 250, label: 'data-root rejection stderr signal' },
+    );
+    expect(second.output()).toContain('[hdsl] data-root unavailable reason=busy');
+    // The line must not carry the dataRoot path, an owner, a PID or a secret.
+    expect(second.output()).not.toContain(first.app.dataRoot);
+    expect(second.output()).not.toContain('token=');
+
+    // Rejection evidence: bounded no-page observation plus the on-disk lease
+    // still belonging to the first instance, with a positive control proving the
+    // same launch config opens a page on an idle root.
     const gotPage = await second.waitForPageTarget(8_000).then(
       () => true,
       () => false,

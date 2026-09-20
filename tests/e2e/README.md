@@ -1,7 +1,7 @@
 # Desktop main-flow E2E QA (`tests/e2e`)
 
 Owner: **hdsl-25** (issue [#64](https://github.com/YingkeSu/HDSL/issues/64), T007c; parent [#7](https://github.com/YingkeSu/HDSL/issues/7)).
-Candidate: PR [#68](https://github.com/YingkeSu/HDSL/pull/68) head `33bfd1e32d0f121a640ba713a4fa165f906c8ffe`
+Candidate: PR [#68](https://github.com/YingkeSu/HDSL/pull/68) head `2cdea54a9c65252b8d2809737723018ca5b2f801`
 (previous frozen head `9b52364d8a999617e1537e6ce97c419fb1ebd04e`).
 Owned paths: this directory and
 [`docs/development/desktop-validation.md`](../../docs/development/desktop-validation.md).
@@ -11,12 +11,12 @@ QA only — no production changes, no `apps/desktop/**` edits, no root config or
 
 | Item | State |
 | --- | --- |
-| Real Electron window / IPC / guards / locks / keyboard create | **Executed and passing on `33bfd1e`** |
-| GUI start/stop (production React, injected credential setup) | **Executed and passing on `33bfd1e`** |
-| Authorization exactness + production hook removal | **Verified on `33bfd1e`**; the old prefix-authorization red is recorded for `9b52364` |
+| Real Electron window / IPC / guards / locks / keyboard create | **Executed and passing on `2cdea54`** |
+| GUI start/stop (production React, injected credential setup) | **Executed and passing on `2cdea54`** |
+| Authorization exactness + production hook removal | **Verified on `2cdea54`**; the old prefix-authorization red is recorded for `9b52364` |
 | Test-injection lane (`qa-entry`) diagnostics/credential | **Executed and passing** (injection lane, not the native menu/dialog) |
 | Fixture harness | **17/17 green**, always on |
-| Isolated real-browser authenticated page (injected opener) | **Executed and passing on `33bfd1e`** — real Chrome + temp profile + CDP |
+| Isolated real-browser authenticated page (injected opener) | **Executed and passing on `2cdea54`** — real Chrome + temp profile + CDP |
 | Native menu+dialogs / real `shell.openExternal` / Windows x64 | **Blocked / manual** — see the validation doc |
 
 Machine counts: all opt-ins `6 passed / 33 tests`; default (gated) `2 passed | 4 skipped; 18 passed | 15 skipped`.

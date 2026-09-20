@@ -1,7 +1,7 @@
 /**
- * Security regression guards for the frozen T006 candidate (`33bfd1e`, PR #68).
+ * Security regression guards for the frozen T006 candidate (`2cdea54`, PR #68).
  *
- * Independent QA (hdsl-25). Both cases are **green on `33bfd1e`**:
+ * Independent QA (hdsl-25). Both cases are **green on `2cdea54`**:
  *
  * - `E2E-AUTH-01` (review P2-1): sender/navigation authorization is exact
  *   normalized document equality. This was RED on the previous frozen head
@@ -33,7 +33,7 @@ const RENDERER_INDEX_URL = pathToFileURL(
   fileURLToPath(new URL('../../apps/desktop/dist/renderer/index.html', import.meta.url)),
 ).href;
 
-describe.skipIf(!ENABLED)('T006 candidate execution evidence (verified on 33bfd1e)', () => {
+describe.skipIf(!ENABLED)('T006 candidate execution evidence (verified on 2cdea54)', () => {
   afterEach(cleanupAllHarnesses);
   it('E2E-AUTH-01: authorization uses exact normalized document equality, not a prefix', () => {
     const policy = createTrustedUrlPolicy(RENDERER_INDEX_URL);

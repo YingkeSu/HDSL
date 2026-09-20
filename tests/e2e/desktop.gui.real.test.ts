@@ -188,11 +188,14 @@ describe.skipIf(!ENABLED)('desktop GUI start/stop (production UI, injected crede
           '',
         ).catch(() => -1);
         expect(deleted, 'keychain canary deletion must succeed').toBe(0);
+        // macOS `security` returns exactly 44 (errSecItemNotFound) when the item
+        // is absent. Any other non-zero (permission/storage failure) must NOT be
+        // read as "absent" (review F5).
         const stillThere = await runSecurity(
           ['find-generic-password', '-s', service, '-a', account],
           '',
-        ).catch(() => 0);
-        expect(stillThere, 'keychain canary must be gone after deletion').not.toBe(0);
+        ).catch(() => -1);
+        expect(stillThere, 'keychain canary must report errSecItemNotFound (44) after deletion').toBe(44);
       }
     }
   }, 20 * 60_000);
