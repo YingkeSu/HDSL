@@ -22,14 +22,13 @@ import {
   type RevisionCommand,
   type RuntimeCombination,
 } from '@hdsl/contracts';
-import type { DiagnosticsExporter, ProcessLifecyclePort } from './ports.js';
+import type { DiagnosticsExporter } from './ports.js';
 import type { EnvironmentService } from './creation-service.js';
 
 export interface EnvironmentContractPortOptions {
   readonly service: EnvironmentService;
   readonly host?: HostPlatform;
   readonly catalog: readonly RuntimeCombination[];
-  readonly process?: ProcessLifecyclePort;
   readonly exportDiagnostics?: DiagnosticsExporter;
 }
 
@@ -39,7 +38,6 @@ export const createEnvironmentContractPort = (
   options: EnvironmentContractPortOptions,
 ): ContractPort => {
   const { service } = options;
-  const processPort = options.process;
   const exporter = options.exportDiagnostics;
 
   return {
@@ -70,21 +68,15 @@ export const createEnvironmentContractPort = (
     },
 
     startEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
-      return processPort === undefined
-        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
-        : processPort.start(command.environmentId, command.expectedRevision);
+      return service.startEnvironment(command);
     },
 
     stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
-      return processPort === undefined
-        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
-        : processPort.stop(command.environmentId, command.expectedRevision);
+      return service.stopEnvironment(command);
     },
 
     openWebUI(command: EnvironmentCommand): PortOutcome<OpenWebUIResult> {
-      return processPort === undefined
-        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
-        : processPort.openWebUI(command.environmentId);
+      return service.openWebUI(command.environmentId);
     },
 
     cancelOperation(command: OperationCommand): PortOutcome<OperationSnapshot> {

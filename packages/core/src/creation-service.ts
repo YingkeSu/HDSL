@@ -26,14 +26,25 @@ import {
   type CompositionLock,
   type ErrorCode,
   type CreateEnvironmentCommand,
+  type EnvironmentState,
   type EnvironmentSummary,
   type HostPlatform,
   type OperationRef,
   type OperationSnapshot,
+  type OpenWebUIResult,
   type PortOutcome,
+  type RevisionCommand,
   type RuntimeCombination,
 } from '@hdsl/contracts';
-import { ensureDirectory, isSpaceError, readJsonFile, removePath, writeJsonAtomic } from './fsx.js';
+import { join } from 'node:path';
+import {
+  ensureDirectory,
+  isSpaceError,
+  readJsonFile,
+  removePath,
+  tryReadJsonFile,
+  writeJsonAtomic,
+} from './fsx.js';
 import { newEnvironmentId, newGenerationId, newOperationId, newTransactionId } from './ids.js';
 import {
   generationPaths,
@@ -41,6 +52,10 @@ import {
   resolveLayout,
   type AppDataLayout,
 } from './layout.js';
+import {
+  DataRootLock,
+  type DataRootLockSnapshot,
+} from './data-root-lock.js';
 import {
   EnvironmentStore,
   toEnvironmentSummary,
@@ -51,6 +66,7 @@ import {
   isTerminalStatus,
   toOperationSnapshot,
   type OperationRecord,
+  type OperationUpdate,
 } from './operation-store.js';
 import { JournalStore, type CreateJournalRecord } from './journal.js';
 import { IdempotencyStore } from './idempotency-store.js';
@@ -58,8 +74,12 @@ import type {
   DiagnosticsExporter,
   InstallContext,
   InstallManifest,
+  ManagedProcessExit,
+  ManagedProcessPhase,
+  ManagedProcessPort,
   ManagedRuntimePort,
-  ProcessLifecyclePort,
+  ProcessLifecycleRequest,
+  ProcessRecoveryEntry,
 } from './ports.js';
 import { errorCodeFrom, ManagedInstallError } from './errors.js';
 
@@ -77,9 +97,16 @@ export interface EnvironmentServiceOptions {
   readonly host?: HostPlatform;
   readonly clock?: () => Date;
   readonly faults?: CreationFaults;
-  readonly process?: ProcessLifecyclePort;
+  readonly process?: ManagedProcessPort;
   readonly exportDiagnostics?: DiagnosticsExporter;
   readonly operationTimeoutMs?: number;
+  /** Data-root lock configuration; a caller normally lets core create it. */
+  readonly lock?: DataRootLock;
+  /** Bounded wait for the exclusive data-root lease. Default 5 000 ms. */
+  readonly lockWaitTimeoutMs?: number;
+  readonly lockPollIntervalMs?: number;
+  readonly lockHeartbeatIntervalMs?: number;
+  readonly lockStaleAfterMs?: number;
   /**
    * Test-only escape hatch. The production creation path refuses to commit an
    * `artifacts-only` manifest; only a fixture harness may set this to `true`,
@@ -101,6 +128,48 @@ export interface RecoveryReport {
   readonly finalized: number;
   readonly rolledBack: number;
   readonly details: readonly RecoveryDetail[];
+  /** True when the caller does not hold the data-root lease and nothing ran. */
+  readonly refused?: boolean;
+  /** Bounded, secret-free reason for a refusal. */
+  readonly reason?: string;
+  /** What the injected managed-process module reconciled, when present. */
+  readonly process?: readonly ProcessRecoveryEntry[];
+}
+
+/**
+ * Outcome of {@link EnvironmentService.close}. `released` is false whenever the
+ * process module could not prove it stopped every owned process tree or the
+ * data-root lease could not be confirmed removed; the caller must then treat
+ * the data root as still owned by this (dying) instance.
+ */
+export interface CloseFailure {
+  readonly code: ErrorCode;
+  readonly message: string;
+}
+
+export interface CloseReport {
+  readonly released: boolean;
+  /**
+   * Managed-process (start/stop) operations that were still in flight when
+   * close began. Core cannot observe the runtime's OS process count; the
+   * runtime owns the actual number of process trees it stopped.
+   */
+  readonly stoppedProcesses: number;
+  readonly failure?: CloseFailure;
+}
+
+interface GenerationView {
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly generationId: string;
+  readonly directory: string;
+  readonly homeDirectory: string;
+  readonly configDirectory: string;
+  readonly dataDirectory: string;
+  readonly nodeExecutable: string;
+  readonly dshEntrypoint: string;
+  readonly installMode: 'npm-ci' | 'artifacts-only';
+  readonly compositionDigest: string;
 }
 
 interface CreateJob {
@@ -118,6 +187,15 @@ interface CreateJob {
 
 const notFound = (message: string): PortOutcome<never> => portFail('NOT_FOUND', message);
 
+const NOT_IMPLEMENTED = 'this capability is owned by the managed-process slice (T005)';
+
+const PROCESS_PHASES: ReadonlySet<ManagedProcessPhase> = new Set<ManagedProcessPhase>([
+  'spawning',
+  'waiting-ready',
+  'running',
+  'stopping',
+]);
+
 export class EnvironmentService {
   readonly #layout: AppDataLayout;
   readonly #catalog: readonly RuntimeCombination[];
@@ -125,10 +203,13 @@ export class EnvironmentService {
   readonly #host: HostPlatform;
   readonly #clock: () => Date;
   readonly #faults: CreationFaults;
-  readonly #process: ProcessLifecyclePort | undefined;
+  #process: ManagedProcessPort | undefined;
   readonly #exportDiagnostics: DiagnosticsExporter | undefined;
   readonly #operationTimeoutMs: number;
   readonly #allowArtifactsOnly: boolean;
+  readonly #lock: DataRootLock;
+  readonly #lockWaitTimeoutMs: number;
+  readonly #lockPollIntervalMs: number;
 
   readonly #environments: EnvironmentStore;
   readonly #operations: OperationStore;
@@ -138,10 +219,10 @@ export class EnvironmentService {
   readonly #controllers = new Map<string, AbortController>();
   readonly #pending = new Set<Promise<void>>();
   #closed = false;
+  #closePromise: Promise<CloseReport> | undefined;
 
   constructor(options: EnvironmentServiceOptions) {
     this.#layout = resolveLayout(options.dataRoot);
-    ensureLayout(this.#layout);
     this.#catalog = [...options.catalog];
     this.#runtime = options.runtime;
     this.#host = options.host ?? { platform: 'darwin', arch: 'arm64' };
@@ -151,10 +232,45 @@ export class EnvironmentService {
     this.#exportDiagnostics = options.exportDiagnostics;
     this.#operationTimeoutMs = options.operationTimeoutMs ?? 60_000;
     this.#allowArtifactsOnly = options.allowArtifactsOnly ?? false;
+    this.#lockWaitTimeoutMs = options.lockWaitTimeoutMs ?? 5_000;
+    this.#lockPollIntervalMs = options.lockPollIntervalMs ?? 50;
+    this.#lock =
+      options.lock ??
+      new DataRootLock({
+        dataRoot: this.#layout.root,
+        clock: this.#clock,
+        ...(options.lockHeartbeatIntervalMs === undefined
+          ? {}
+          : { heartbeatIntervalMs: options.lockHeartbeatIntervalMs }),
+        ...(options.lockStaleAfterMs === undefined ? {} : { staleAfterMs: options.lockStaleAfterMs }),
+      });
+    // Best-effort fast path so a free data root is available synchronously;
+    // open() performs the bounded acquisition and only then writes the layout.
+    this.#lock.tryAcquire();
     this.#environments = new EnvironmentStore(this.#layout);
     this.#operations = new OperationStore(this.#layout);
     this.#journals = new JournalStore(this.#layout);
     this.#idempotency = new IdempotencyStore(this.#layout);
+  }
+
+  /**
+   * Bounded acquisition of the exclusive data-root lease. When it returns
+   * `false` the instance is intentionally *unavailable*: reads still work and
+   * every mutating call fails with `ENVIRONMENT_BUSY`. No layout is written.
+   */
+  async open(): Promise<boolean> {
+    if (this.#lock.held) {
+      ensureLayout(this.#layout);
+      return true;
+    }
+    const acquired = await this.#lock.acquire({
+      waitTimeoutMs: this.#lockWaitTimeoutMs,
+      pollIntervalMs: this.#lockPollIntervalMs,
+    });
+    if (acquired) {
+      ensureLayout(this.#layout);
+    }
+    return acquired;
   }
 
   get layout(): AppDataLayout {
@@ -165,7 +281,7 @@ export class EnvironmentService {
     return this.#host;
   }
 
-  get processPort(): ProcessLifecyclePort | undefined {
+  get processPort(): ManagedProcessPort | undefined {
     return this.#process;
   }
 
@@ -173,8 +289,39 @@ export class EnvironmentService {
     return this.#exportDiagnostics;
   }
 
+  /** True when this instance holds the exclusive data-root lease. */
+  get available(): boolean {
+    return this.#lock.held;
+  }
+
+  /** Queryable lock owner identity / ABA credential / refusal reasons (QA). */
+  lockSnapshot(): DataRootLockSnapshot {
+    return this.#lock.snapshot();
+  }
+
+  /** Wires the managed-process module once the composition root built it. */
+  attachProcess(port: ManagedProcessPort): void {
+    this.#process = port;
+  }
+
   #now(): string {
     return this.#clock().toISOString();
+  }
+
+  #assertLock(): void {
+    // Fail closed before any durable write. A live holder is never taken over,
+    // so this is defence in depth against a lease that was lost abnormally.
+    this.#lock.assertHeld();
+  }
+
+  /** Non-throwing form for entry points that return a `PortOutcome`. */
+  #tryAssertLock(): boolean {
+    try {
+      this.#assertLock();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   readIdempotency(requestId: string) {
@@ -260,6 +407,11 @@ tryReadInstallManifest(
     if (this.#closed) {
       return portFail('INTERNAL_ERROR', 'the environment service is closed');
     }
+    // Re-read the published lease before the first durable write, not just the
+    // cached `held` flag, so an abnormally lost lease cannot write new records.
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
     const resolved = this.#runtime.resolveComposition(command.combination);
     if (!resolved.ok) {
       return portFail(resolved.code, resolved.message);
@@ -326,7 +478,247 @@ tryReadInstallManifest(
     return portOk({ operationId });
   }
 
+  /**
+   * Starts a managed process. Core owns the operation, the environment state
+   * and the revision/state guards; the injected process port performs the
+   * actual spawn and readiness wait.
+   */
+  startEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
+    return this.#beginProcessOperation('start', command);
+  }
+
+  stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
+    return this.#beginProcessOperation('stop', command);
+  }
+
+  openWebUI(environmentId: string): PortOutcome<OpenWebUIResult> {
+    if (this.#closed) {
+      return portFail('INTERNAL_ERROR', 'the environment service is closed');
+    }
+    if (this.#process === undefined) {
+      return portFail('INTERNAL_ERROR', NOT_IMPLEMENTED);
+    }
+    return this.#process.openWebUI(environmentId);
+  }
+
+  /**
+   * Runtime callback for a managed process that exited on its own. Marks the
+   * environment stopped and fails any live start operation with
+   * `PROCESS_EXITED`.
+   */
+  handleProcessExit(info: ManagedProcessExit): void {
+    if (this.#closed || !this.#lock.held) {
+      return;
+    }
+    try {
+      this.#assertLock();
+    } catch {
+      return;
+    }
+    const environment = this.#environments.read(info.environmentId);
+    if (environment !== undefined && (environment.state === 'running' || environment.state === 'starting')) {
+      this.#setEnvironmentState(environment.id, 'stopped');
+    }
+    for (const operation of this.#operations.list()) {
+      if (operation.environmentId !== info.environmentId || operation.kind !== 'start') {
+        continue;
+      }
+      if (isTerminalStatus(operation.status) || this.#controllers.has(operation.id)) {
+        continue;
+      }
+      this.#failOperation(operation.id, 'PROCESS_EXITED', 'the managed process exited unexpectedly');
+    }
+  }
+
+  #beginProcessOperation(
+    kind: 'start' | 'stop',
+    command: RevisionCommand,
+  ): PortOutcome<OperationRef> {
+    if (this.#closed) {
+      return portFail('INTERNAL_ERROR', 'the environment service is closed');
+    }
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
+    if (this.#process === undefined) {
+      return portFail('INTERNAL_ERROR', NOT_IMPLEMENTED);
+    }
+    const environment = this.#environments.read(command.environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    const startable = kind === 'start' ? environment.state === 'stopped' : environment.state === 'running' || environment.state === 'starting';
+    if (!startable) {
+      return portFail('ENVIRONMENT_BUSY', `the environment is not ${kind === 'start' ? 'stopped' : 'running'}`);
+    }
+    const generation = this.#generationFor(environment.id);
+    if (generation === undefined) {
+      return notFound('no installed generation is available for this environment');
+    }
+    const operation = this.#operations.create({
+      id: newOperationId(),
+      kind,
+      environmentId: environment.id,
+      phase: 'queued',
+      createdAt: this.#now(),
+    });
+    this.#setEnvironmentState(environment.id, kind === 'start' ? 'starting' : 'stopping');
+    this.#track(this.#runProcessOperation(kind, operation.id, generation));
+    return portOk({ operationId: operation.id });
+  }
+
+  async #runProcessOperation(
+    kind: 'start' | 'stop',
+    operationId: string,
+    generation: GenerationView,
+  ): Promise<void> {
+    const controller = new AbortController();
+    this.#controllers.set(operationId, controller);
+    const environmentId = generation.environmentId;
+    const request: ProcessLifecycleRequest = {
+      environmentId,
+      expectedRevision: generation.expectedRevision,
+      generationDirectory: generation.directory,
+      homeDirectory: generation.homeDirectory,
+      configDirectory: generation.configDirectory,
+      dataDirectory: generation.dataDirectory,
+      nodeExecutable: generation.nodeExecutable,
+      dshEntrypoint: generation.dshEntrypoint,
+      installMode: generation.installMode,
+      signal: controller.signal,
+      onPhase: (phase, progress) => {
+        this.#updateOperationPhase(operationId, phase, progress);
+      },
+    };
+    const revertTo = kind === 'start' ? 'stopped' : 'running';
+    try {
+      this.#assertLock();
+      this.#updateOperation(operationId, {
+        status: 'running',
+        phase: kind === 'start' ? 'spawning' : 'stopping',
+      });
+      const outcome =
+        kind === 'start' ? await this.#process!.start(request) : await this.#process!.stop(request);
+      if (controller.signal.aborted) {
+        this.#setEnvironmentStateIf(environmentId, kind === 'start' ? 'starting' : 'stopping', revertTo);
+        return;
+      }
+      if (!outcome.ok) {
+        this.#failOperation(operationId, outcome.code, outcome.message);
+        this.#setEnvironmentStateIf(environmentId, kind === 'start' ? 'starting' : 'stopping', revertTo);
+        return;
+      }
+      this.#updateOperation(operationId, { status: 'succeeded', phase: 'finished' });
+      this.#setEnvironmentState(environmentId, kind === 'start' ? 'running' : 'stopped');
+    } catch (error) {
+      if (controller.signal.aborted) {
+        this.#setEnvironmentStateIf(environmentId, kind === 'start' ? 'starting' : 'stopping', revertTo);
+        return;
+      }
+      this.#failOperation(
+        operationId,
+        errorCodeFrom(error) ?? 'INTERNAL_ERROR',
+        error instanceof Error ? error.message : 'the managed process operation failed',
+      );
+      this.#setEnvironmentStateIf(environmentId, kind === 'start' ? 'starting' : 'stopping', revertTo);
+    } finally {
+      this.#controllers.delete(operationId);
+    }
+  }
+
+  #generationFor(environmentId: string): GenerationView | undefined {
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined || environment.activeGenerationId === null) {
+      return undefined;
+    }
+    const paths = generationPaths(this.#layout, environmentId, environment.activeGenerationId);
+    const manifest = tryReadJsonFile<InstallManifest>(paths.manifestPath);
+    if (manifest === undefined) {
+      return undefined;
+    }
+    return {
+      environmentId,
+      expectedRevision: environment.revision,
+      generationId: environment.activeGenerationId,
+      directory: paths.generationDirectory,
+      homeDirectory: paths.homeDirectory,
+      configDirectory: paths.configDirectory,
+      dataDirectory: paths.dataDirectory,
+      nodeExecutable: join(paths.generationDirectory, manifest.node.executable),
+      dshEntrypoint: join(paths.generationDirectory, manifest.dsh.entrypoint),
+      installMode: manifest.installMode,
+      compositionDigest: environment.compositionDigest ?? manifest.compositionDigest,
+    };
+  }
+
+  #updateOperation(operationId: string, update: OperationUpdate): void {
+    if (!this.#lock.held) {
+      return;
+    }
+    const record = this.#operations.read(operationId);
+    if (record === undefined || isTerminalStatus(record.status)) {
+      return;
+    }
+    this.#operations.update(record, update, this.#now());
+  }
+
+  #updateOperationPhase(operationId: string, phase: ManagedProcessPhase, progress?: number): void {
+    if (!PROCESS_PHASES.has(phase)) {
+      return;
+    }
+    this.#updateOperation(operationId, {
+      phase,
+      ...(progress === undefined ? {} : { progress }),
+    });
+  }
+
+  #failOperation(operationId: string, code: ErrorCode, message: string): void {
+    this.#updateOperation(operationId, {
+      status: 'failed',
+      phase: 'failed',
+      error: contractError(code, message, { operationId }),
+    });
+  }
+
+  #setEnvironmentState(environmentId: string, state: EnvironmentState): void {
+    if (!this.#lock.held) {
+      return;
+    }
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined || environment.state === state) {
+      return;
+    }
+    this.#environments.write({
+      ...environment,
+      state,
+      stateVersion: environment.stateVersion + 1,
+      updatedAt: this.#now(),
+    });
+  }
+
+  #setEnvironmentStateIf(environmentId: string, from: EnvironmentState, to: EnvironmentState): void {
+    if (!this.#lock.held) {
+      return;
+    }
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined || environment.state !== from) {
+      return;
+    }
+    this.#environments.write({
+      ...environment,
+      state: to,
+      stateVersion: environment.stateVersion + 1,
+      updatedAt: this.#now(),
+    });
+  }
+
   cancelOperation(operationId: string): PortOutcome<OperationSnapshot> {
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
     const record = this.#operations.read(operationId);
     if (record === undefined) {
       return notFound('operation was not found');
@@ -334,6 +726,8 @@ tryReadInstallManifest(
     if (isTerminalStatus(record.status)) {
       return portFail('CANNOT_CANCEL', 'operation already reached a final state');
     }
+    // Aborting the controller is the cancel signal: the runtime kills its
+    // owned process tree, and the install job aborts before commit.
     this.#controllers.get(operationId)?.abort();
     const updated = this.#operations.update(record, { status: 'cancelled', phase: 'cancelled' }, this.#now());
     return portOk(toOperationSnapshot(updated));
@@ -342,10 +736,39 @@ tryReadInstallManifest(
   /**
    * Reconciles transactions left behind by a previous process.
    *
-   * Call this once after constructing the service and before starting new work.
+   * Only the instance that holds the exclusive data-root lease may reconcile;
+   * otherwise the call is refused without touching a single record, so a live
+   * instance's in-flight transaction is never rolled back. When the injected
+   * process module is present it is reconciled first (adopted -> `running`,
+   * everything else -> `stopped`), then the create journals.
    */
-  recover(): RecoveryReport {
+  async recover(): Promise<RecoveryReport> {
+    if (this.#closed) {
+      return {
+        reconciled: 0,
+        finalized: 0,
+        rolledBack: 0,
+        details: [],
+        refused: true,
+        reason: 'the environment service is closed',
+      };
+    }
+    if (!this.#lock.held) {
+      await this.#lock.acquire({ waitTimeoutMs: 0, pollIntervalMs: 0 });
+    }
+    if (!this.#lock.held) {
+      return {
+        reconciled: 0,
+        finalized: 0,
+        rolledBack: 0,
+        details: [],
+        refused: true,
+        reason: 'data-root-lock-held-by-another-instance',
+      };
+    }
+    ensureLayout(this.#layout);
     const details: RecoveryDetail[] = [];
+    const processEntries = await this.#recoverProcesses(details);
     const journals = this.#journals.list();
     const journalOperations = new Set(journals.map((journal) => journal.operationId));
 
@@ -382,6 +805,11 @@ tryReadInstallManifest(
         continue;
       }
       if (journalOperations.has(operation.id)) {
+        continue;
+      }
+      if (operation.kind === 'start' || operation.kind === 'stop') {
+        // Reconciled with the process module above; without one these cannot
+        // have been created.
         continue;
       }
       this.#operations.update(
@@ -435,7 +863,47 @@ tryReadInstallManifest(
       finalized: details.filter((detail) => detail.resolution === 'finalized').length,
       rolledBack: details.filter((detail) => detail.resolution !== 'finalized').length,
       details,
+      process: processEntries,
     };
+  }
+
+  async #recoverProcesses(details: RecoveryDetail[]): Promise<readonly ProcessRecoveryEntry[]> {
+    if (this.#process === undefined) {
+      return [];
+    }
+    let entries: readonly ProcessRecoveryEntry[] = [];
+    try {
+      const report = await this.#process.recover();
+      entries = report.entries;
+    } catch {
+      return [];
+    }
+    for (const entry of entries) {
+      const environment = this.#environments.read(entry.environmentId);
+      if (environment !== undefined) {
+        this.#setEnvironmentState(
+          environment.id,
+          entry.resolution === 'adopted' ? 'running' : 'stopped',
+        );
+      }
+    }
+    for (const operation of this.#operations.list()) {
+      if (operation.kind !== 'start' && operation.kind !== 'stop') {
+        continue;
+      }
+      if (isTerminalStatus(operation.status) || this.#controllers.has(operation.id)) {
+        continue;
+      }
+      this.#failOperation(operation.id, 'INTERNAL_ERROR', 'operation was interrupted by a restart');
+      details.push({
+        transactionId: null,
+        environmentId: operation.environmentId,
+        operationId: operation.id,
+        generationId: null,
+        resolution: 'failed',
+      });
+    }
+    return entries;
   }
 
   /** Resolves with the operation's terminal snapshot; rejects on timeout. */
@@ -462,15 +930,73 @@ tryReadInstallManifest(
     }
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) {
-      return;
+  /**
+   * Blocks new work, aborts and awaits every in-flight create/start/stop task,
+   * asks the process module to stop every provably-owned process tree, and only
+   * then releases the data-root lease. If the process module cannot prove a
+   * clean shutdown, or the lease cannot be confirmed removed, the lock is kept
+   * and `released` is false so the caller never treats the root as reusable.
+   * Idempotent and safe to call concurrently.
+   */
+  async close(): Promise<CloseReport> {
+    if (this.#closePromise !== undefined) {
+      return this.#closePromise;
     }
+    this.#closePromise = this.#doClose();
+    return this.#closePromise;
+  }
+
+  async #doClose(): Promise<CloseReport> {
     this.#closed = true;
+    // Count the managed-process operations that were still in flight when close
+    // began; core cannot observe the runtime's OS process count.
+    const stoppedProcesses = this.#operations.list().filter(
+      (operation) =>
+        (operation.kind === 'start' || operation.kind === 'stop') &&
+        !isTerminalStatus(operation.status),
+    ).length;
     for (const controller of this.#controllers.values()) {
       controller.abort();
     }
     await Promise.allSettled([...this.#pending]);
+    let failure: CloseFailure | undefined;
+    if (this.#process !== undefined) {
+      try {
+        const outcome = await this.#process.close();
+        if (!outcome.ok) {
+          failure = { code: outcome.code, message: outcome.message };
+        }
+      } catch (error) {
+        failure = {
+          code: 'INTERNAL_ERROR',
+          message: error instanceof Error ? error.message : 'the managed process module failed to close',
+        };
+      }
+    }
+    if (failure === undefined) {
+      try {
+        await this.#lock.release();
+      } catch {
+        // release() records its own result; inspect the snapshot below.
+      }
+      const snapshot = this.#lock.snapshot();
+      const released = snapshot.publishedBy === 'none' && !this.#lock.held;
+      if (!released) {
+        failure = {
+          code: 'INTERNAL_ERROR',
+          message:
+            snapshot.lastRelease?.reason ??
+            'another instance still owns the data-root lease after close',
+        };
+      }
+      const report: CloseReport = {
+        released: failure === undefined,
+        stoppedProcesses,
+        ...(failure === undefined ? {} : { failure }),
+      };
+      return report;
+    }
+    return { released: false, stoppedProcesses, failure };
   }
 
   #track(promise: Promise<void>): void {
@@ -500,6 +1026,7 @@ tryReadInstallManifest(
     this.#controllers.set(job.operationId, controller);
     const paths = generationPaths(this.#layout, job.environmentId, job.generationId);
     try {
+      this.#assertLock();
       const queued = this.#operations.read(job.operationId);
       if (queued !== undefined && !isTerminalStatus(queued.status)) {
         this.#operations.update(queued, { status: 'running', phase: 'downloading' }, this.#now());
@@ -530,6 +1057,7 @@ tryReadInstallManifest(
         this.#fail(job, installed.code, installed.message);
         return;
       }
+      this.#assertLock();
       this.#journals.write({ ...job.journal, phase: 'artifacts-installed', updatedAt: this.#now() });
       if (this.#faults.failBeforeCommit === true) {
         this.#fail(job, 'INTERNAL_ERROR', 'creation aborted before commit (injected fault)');
@@ -552,6 +1080,11 @@ tryReadInstallManifest(
   }
 
   #commit(job: CreateJob, manifestPath: string): void {
+    if (!this.#tryAssertLock()) {
+      // The lease was lost abnormally; do not write. The journal stays for the
+      // next recover to reconcile.
+      return;
+    }
     const manifest = readJsonFile<InstallManifest>(manifestPath);
     if (manifest === undefined) {
       this.#fail(job, 'INTERNAL_ERROR', 'managed install did not produce an install manifest');
@@ -617,6 +1150,9 @@ tryReadInstallManifest(
 
   /** Terminal failure for a live transaction: fail, mark `error`, drop staging. */
   #fail(job: CreateJob, code: ErrorCode, message: string): void {
+    if (!this.#tryAssertLock()) {
+      return;
+    }
     const operation = this.#operations.read(job.operationId);
     if (operation !== undefined && !isTerminalStatus(operation.status)) {
       this.#operations.update(

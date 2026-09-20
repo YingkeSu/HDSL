@@ -759,7 +759,11 @@ export const scenarioRecoverDuringInFlightCreate = async (
       const nodePath = new URL(combination.artifactLocations.node.url).pathname;
       await harness.endpoint.waitForRequest(nodePath, 10_000);
 
-      const report = harness.install.recover();
+      // R3 compatibility with the async `recover()` (T005a): the call must be
+      // awaited, otherwise `report` is a Promise and the assertions below
+      // would be vacuous (`JSON.stringify(promise) === '{}'`).
+      const report = await harness.install.recover();
+      assert.ok(Array.isArray(report.details), 'recover() must resolve to a report with details');
 
       const during = requireOk(
         call(harness.api, 'operations.get', { operationId }),
@@ -773,6 +777,10 @@ export const scenarioRecoverDuringInFlightCreate = async (
       assert.ok(
         !JSON.stringify(report).includes(operationId),
         `recover() must not reconcile the active transaction: ${JSON.stringify(report)}`,
+      );
+      assert.ok(
+        !JSON.stringify(report.details).includes(operationId),
+        `recover() details must not mention the active operation: ${JSON.stringify(report.details)}`,
       );
       const transactions = join(harness.dataRoot, 'transactions');
       assert.ok(

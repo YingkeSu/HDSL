@@ -480,7 +480,7 @@ describe('journal recovery', () => {
 
     // A fresh service (simulated application restart) reconciles the journal.
     const restarted = await buildHarness({ catalog: [combinationA], dataRoot });
-    const report = restarted.managed.recover();
+    const report = await restarted.managed.recover();
     expect(report.reconciled).toBe(1);
     expect(report.rolledBack).toBe(1);
     expect(report.details[0]?.generationId).not.toBeNull();
@@ -552,7 +552,7 @@ describe('journal recovery', () => {
 
     // The install is deliberately blocked, so the operation is live when
     // recover() runs; recovery must leave it and its journal alone.
-    const report = managed.recover();
+    const report = await managed.recover();
     expect(report.reconciled).toBe(0);
     const running = managed.service.findOperation(operationId);
     expect(running.ok).toBe(true);
@@ -587,7 +587,7 @@ describe('journal recovery', () => {
       createdAt: now,
       updatedAt: now,
     });
-    const report = harness.managed.recover();
+    const report = await harness.managed.recover();
     expect(report.details.some((detail) => detail.environmentId === orphanId)).toBe(true);
     expect(store.read(orphanId)?.state).toBe('error');
     await harness.managed.close();
