@@ -43,11 +43,12 @@ afterEach(async () => {
   for (const lock of locks.splice(0)) {
     await lock.release().catch(() => undefined);
   }
+  // Close harness-owned instances (stops heartbeat) and remove only the roots
+  // this harness registered; then remove the test's own dataRoots.
+  await cleanupQaRoots();
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
-  // Remove the harness-owned artifact/data roots too (QA-owned cleanup).
-  cleanupQaRoots();
 });
 
 /** Canonical state of every environment, via the real contract dispatch. */
@@ -195,6 +196,25 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     // A later instance must not be able to start work on the still-locked root.
     const second = await buildLockHarness({ dataRoot });
     expect(second.managed.available).toBe(false);
+
+    // Teardown only (assertions above unchanged): close() is one-shot and cached
+    // its failure, so force a stale takeover to make the stuck owner observe a
+    // different lease and stop its heartbeat, leaving no root behind.
+    const ownerPid = harness.managed.lockSnapshot().publishedLease?.pid;
+    const taker = new DataRootLock({
+      dataRoot,
+      staleAfterMs: 100,
+      heartbeatIntervalMs: 60_000,
+      clock: () => new Date(Date.now() + 60_000),
+      probeProcess: (pid) => (pid === ownerPid ? 'dead' : 'alive'),
+    });
+    locks.push(taker);
+    expect(await taker.acquire({ waitTimeoutMs: 3_000, pollIntervalMs: 20 })).toBe(true);
+    await waitFor(() => harness.managed.lockSnapshot().heldByThisInstance === false, {
+      timeoutMs: 3_000,
+      label: 'stuck owner stops after takeover',
+    });
+    // The taker stays held; afterEach releases it, then removes the roots.
   }, 30_000);
 
   it('PROC-LOCK crash: a killed holder is taken over after staleness, never sooner', async () => {

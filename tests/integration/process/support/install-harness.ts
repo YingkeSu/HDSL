@@ -161,6 +161,7 @@ export interface LockHarness {
 }
 
 const roots: string[] = [];
+const manageds: ManagedInstall[] = [];
 
 export const freshQaRoot = (prefix: string): string => {
   const root = mkdtempSync(join(tmpdir(), prefix));
@@ -168,7 +169,19 @@ export const freshQaRoot = (prefix: string): string => {
   return root;
 };
 
-export const cleanupQaRoots = (): void => {
+/** Roots this QA harness created and therefore owns. */
+export const registeredQaRoots = (): readonly string[] => [...roots];
+
+/**
+ * Closes every harness-owned managed instance (releasing its lock and stopping
+ * its heartbeat) and then removes exactly the roots this harness registered.
+ * Nothing outside the registry is touched, so a failure path cannot leave a
+ * heartbeating instance recreating a removed directory.
+ */
+export const cleanupQaRoots = async (): Promise<void> => {
+  for (const managed of manageds.splice(0)) {
+    await managed.close().catch(() => undefined);
+  }
   for (const root of roots.splice(0)) {
     rmSync(root, { recursive: true, force: true });
   }
@@ -218,6 +231,7 @@ export const buildLockHarness = async (
     ...(options.lockStaleAfterMs === undefined ? {} : { lockStaleAfterMs: options.lockStaleAfterMs }),
   });
   const contract = createContractRuntime({ port: managed.port as ContractPort });
+  manageds.push(managed);
   return {
     dataRoot,
     managed,
