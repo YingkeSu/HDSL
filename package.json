@@ -12,6 +12,8 @@
   "scripts": {
     "typecheck": "tsc -p tsconfig.json",
     "build": "tsc -b tsconfig.build.json",
+    "build:renderer": "pnpm --filter @hdsl/desktop run build:renderer",
+    "build:desktop": "pnpm run build && pnpm run build:renderer",
     "clean": "tsc -b tsconfig.build.json --clean",
     "test": "vitest run",
     "test:watch": "vitest",

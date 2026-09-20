@@ -1,0 +1,180 @@
+/* HDSL renderer styles (T006). Kept local; no remote fonts or assets. */
+:root {
+  color-scheme: light;
+  --border: #d6d9e0;
+  --muted: #5b6270;
+  --accent: #2456c9;
+  --danger: #b3261e;
+  --ok: #17663a;
+  --bg: #f6f7f9;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 1.5rem;
+  background: var(--bg);
+  color: #15181e;
+  font: 15px/1.55 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+}
+
+main {
+  max-width: 60rem;
+  margin: 0 auto;
+}
+
+h1 {
+  font-size: 1.3rem;
+}
+
+h2 {
+  font-size: 1rem;
+  margin: 0 0 0.6rem;
+}
+
+.panel {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 1rem;
+  margin: 0 0 1rem;
+}
+
+.demo-banner {
+  background: #fff4d6;
+  border: 1px solid #e2b93b;
+  border-radius: 8px;
+  padding: 0.6rem 0.8rem;
+  font-weight: 600;
+}
+
+.notices p {
+  margin: 0.35rem 0;
+  padding: 0.5rem 0.7rem;
+  border-radius: 6px;
+  background: #eef1f6;
+}
+
+.notice-error {
+  background: #fdeceb;
+  color: var(--danger);
+}
+
+.field {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  margin: 0.4rem 0;
+}
+
+.field label {
+  min-width: 6.5rem;
+}
+
+input,
+select,
+button {
+  font: inherit;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+button[disabled] {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.environment-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 0.5rem;
+}
+
+.environment-list button {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  text-align: left;
+}
+
+.environment-list button[aria-pressed="true"] {
+  border-color: var(--accent);
+  background: #eef3ff;
+}
+
+.state-badge {
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.state-running {
+  color: var(--ok);
+  font-weight: 600;
+}
+
+.state-error {
+  color: var(--danger);
+  font-weight: 600;
+}
+
+dl.environment-detail {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.2rem 1rem;
+  margin: 0 0 0.8rem;
+}
+
+dt {
+  color: var(--muted);
+}
+
+dd {
+  margin: 0;
+}
+
+.action-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.progress-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+progress {
+  width: 16rem;
+  max-width: 100%;
+}
+
+.boundary-note {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+code {
+  background: #f0f2f6;
+  border-radius: 4px;
+  padding: 0 0.25rem;
+}

@@ -22,6 +22,7 @@
     "packages/*/src/**/*.tsx",
     "apps/*/src/**/*.ts",
     "apps/*/src/**/*.tsx",
+    "apps/*/src/**/*.cts",
     "tests/**/*.ts",
     "vitest.config.ts"
   ]

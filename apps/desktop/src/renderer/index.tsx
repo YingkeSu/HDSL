@@ -21,6 +21,8 @@ export interface RendererEntryOptions {
   readonly events?: RendererEventSource | undefined;
   readonly pollIntervalMs?: number | undefined;
   readonly createRequestId?: (() => string) | undefined;
+  /** Notified with the opaque id whenever the selected environment changes. */
+  readonly onSelectionChange?: ((environmentId: string) => void) | undefined;
 }
 
 /**
@@ -60,8 +62,20 @@ export function renderRenderer(
   const controller = createRendererController(client, options);
   const root = createRoot(container);
   root.render(<App controller={controller} />);
+  let lastSelection = controller.getState().selectedEnvironmentId;
+  const notifySelection = (): void => {
+    const selection = controller.getState().selectedEnvironmentId;
+    if (selection !== lastSelection) {
+      lastSelection = selection;
+      if (selection !== null) {
+        options.onSelectionChange?.(selection);
+      }
+    }
+  };
+  const unsubscribeSelection = controller.subscribe(notifySelection);
   void controller.load();
   return async () => {
+    unsubscribeSelection();
     root.unmount();
     await controller.dispose();
   };

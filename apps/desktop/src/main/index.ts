@@ -1,30 +1,18 @@
 /**
- * Electron main-process entry point.
+ * Electron main entry — **production** (T006 / issue #6).
  *
- * T002 scope: establish the compiled entry and the secure window defaults
- * documented in docs/architecture/tdd.md (context isolation on, Node
- * integration off, sandbox on). Creating windows, registering the narrow IPC
- * whitelist and wiring environment lifecycle belong to T003/T006, so no window
- * is opened and no product behavior is implemented here.
- */
-import type { BrowserWindowConstructorOptions } from 'electron';
-
-/** Web preferences every HDSL window must use; the renderer is never trusted. */
-export const SECURE_WINDOW_DEFAULTS = {
-  contextIsolation: true,
-  nodeIntegration: false,
-  sandbox: true,
-} satisfies BrowserWindowConstructorOptions['webPreferences'];
-
-/**
- * Placeholder for the real application bootstrap.
+ * This is the package `main`. It starts the desktop app with production
+ * defaults only: native dialogs for diagnostic export and credential-reference
+ * import, and the native application menu. It reads **no** test hooks and no
+ * HDSL_* environment switch, so a user build cannot bypass the native
+ * selectors or a user confirmation through the environment.
  *
- * It is deliberately not invoked at module load: running Electron today exits
- * without a window instead of presenting a fake launcher. T006 replaces this
- * with the real lifecycle and main-side use-case wiring.
+ * A separate, explicitly launched test entry (`qa-entry.ts`) exists for
+ * headless QA and is never referenced here.
  */
-export function bootstrapDesktop(): never {
-  throw new Error(
-    'HDSL desktop shell is not implemented yet; see specs/001-environment-lifecycle/tasks.md T006.',
-  );
-}
+import { startDesktopApp } from './app.js';
+
+export { SECURE_WINDOW_DEFAULTS } from './security.js';
+export { DATA_ROOT_ENV, DATA_ROOT_FLAG, resolveDataRoot } from './data-root.js';
+
+void startDesktopApp();
