@@ -16,5 +16,8 @@ export default defineConfig({
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],
+    // tests/probes holds manually executed upstream DSH evidence (shell/Python),
+    // not HDSL acceptance or part of the engineering unit run.
+    exclude: ['tests/probes/**', '**/node_modules/**'],
   },
 });
