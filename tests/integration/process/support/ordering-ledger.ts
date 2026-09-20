@@ -91,3 +91,37 @@ export const assertOrdered = (
     );
   }
 };
+
+/**
+ * Asserts that no two writers ever hold the dataRoot at the same time, using
+ * `enter`/`exit` events recorded in real order. This is the observable form of
+ * the "two writers" risk: a single two-party contention run can pass by luck,
+ * so the scenario records a three-party interleaving and this check fails on
+ * any overlapping interval or missing `exit`.
+ *
+ * A negative control (two `enter` without an `exit` between) must throw.
+ */
+export const assertNoConcurrentWriters = (
+  ledger: OrderingLedger,
+  enterEvent = 'writer-enter',
+  exitEvent = 'writer-exit',
+): void => {
+  const active = new Set<string>();
+  for (const entry of ledger.read()) {
+    if (entry.event === enterEvent) {
+      if (active.size > 0) {
+        throw new OrderViolationError(
+          `concurrent writers: ${entry.actor} entered while ${[...active].join(', ')} still held the dataRoot`,
+        );
+      }
+      active.add(entry.actor);
+    } else if (entry.event === exitEvent) {
+      if (!active.delete(entry.actor)) {
+        throw new OrderViolationError(`writer ${entry.actor} exited without a matching enter`);
+      }
+    }
+  }
+  if (active.size > 0) {
+    throw new OrderViolationError(`writers never exited: ${[...active].join(', ')}`);
+  }
+};

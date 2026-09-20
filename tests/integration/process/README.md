@@ -11,10 +11,10 @@ QA only — no production changes, no PR review.
 | Item | State |
 | --- | --- |
 | T005 public interface (#5) | **Absent** — no `packages/runtime/src/{process,reconcile,credentials}`, no PR |
-| dataRoot lock interface (#43 / #20 / #21) | **Absent** — not frozen |
+| dataRoot lock interface (#43 / #20 / #21) | **Not frozen** — non-CAS three-party risk awaiting #21 revision + #5 design review |
 | Credential resolver (#44) | **Absent** — no PR |
 | Fixture harness | **Done** — 11 self-checks green |
-| Scenario suite | **Not registered** — 20 planned cases, all `blocked` |
+| Scenario suite | **Not registered** — 23 planned cases, all `blocked` |
 
 The fixture harness proves the QA fixtures are real, deterministic and safe. It
 does **not** validate process start/stop, ownership, locks or credentials. The
@@ -27,7 +27,7 @@ interface expectations and blockers are in `docs/development/process-validation.
 tests/integration/process/
   harness.test.ts                  # fixture self-checks (real vitest, green)
   scenarios/
-    process-scenario-plan.ts       # 20 planned QA cases (blocked until the candidate lands)
+    process-scenario-plan.ts       # 23 planned QA cases (blocked until the candidate lands)
   support/
     fixture-process.mjs            # controlled parent/grandchild: hold/stubborn/crash/never-ready/bind
     spawn-fixture.ts               # FixtureProcess: ready gate, guarded kill, grandchild reaping

@@ -45,6 +45,7 @@ import {
   LockFixture,
 } from './support/lock-fixture.js';
 import {
+  assertNoConcurrentWriters,
   assertOrdered,
   OrderingLedger,
   OrderViolationError,
@@ -326,6 +327,29 @@ describe('process fixture harness', () => {
       expect(() =>
         assertOrdered(good, { actor: 'core', event: 'lock-release' }, { actor: 'next', event: 'next-acquire' }),
       ).not.toThrow();
+    });
+  });
+
+  it('detects overlapping writers (three-party lock risk) and accepts a serialized order', async () => {
+    await withRoot('writers', async (root) => {
+      const overlap = new OrderingLedger(join(root, 'overlap.jsonl'));
+      overlap.append('A', 'writer-enter');
+      overlap.append('B', 'writer-enter');
+      overlap.append('B', 'writer-exit');
+      overlap.append('A', 'writer-exit');
+      expect(() => assertNoConcurrentWriters(overlap)).toThrow(OrderViolationError);
+
+      const neverExited = new OrderingLedger(join(root, 'open.jsonl'));
+      neverExited.append('A', 'writer-enter');
+      neverExited.append('B', 'writer-enter');
+      expect(() => assertNoConcurrentWriters(neverExited)).toThrow(OrderViolationError);
+
+      const serialized = new OrderingLedger(join(root, 'serialized.jsonl'));
+      for (const id of ['A', 'B', 'C']) {
+        serialized.append(id, 'writer-enter');
+        serialized.append(id, 'writer-exit');
+      }
+      expect(() => assertNoConcurrentWriters(serialized)).not.toThrow();
     });
   });
 

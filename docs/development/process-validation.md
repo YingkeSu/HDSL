@@ -3,7 +3,7 @@
 状态：**准备资产阶段，候选接口未就绪，场景套件未注册（本切片不构成 T005/T007 验收）**。
 父任务 #7；依赖 #5 候选接口，并与 #43（T005a dataRoot 独占）、#44（T005b 凭据）、#20/#21（core 锁生命周期接口）约定可观测面。QA 只测不改生产，不做 review。
 
-本文件与 `tests/integration/process/**` 由 issue #45 独占。夹具自检 12 项全绿只说明“夹具可信”，**不**说明进程启停/所有权/锁/凭据已通过。
+本文件与 `tests/integration/process/**` 由 issue #45 独占。夹具自检 13 项全绿只说明“夹具可信”，**不**说明进程启停/所有权/锁/凭据已通过。
 
 ## 元数据
 
@@ -25,7 +25,7 @@
 - **代码层面**：`packages/runtime/src/{process,reconcile,credentials}` 仍未出现在任何已推送 ref；process 候选尚未推送分支/PR，凭据候选为 [PR #46](https://github.com/YingkeSu/HDSL/pull/46)（`ao/hdsl-22/credentials`，未合入）。
 - `packages/core/src/ports.ts` 的占位 `ProcessLifecyclePort`（`start`/`stop`/`openWebUI`）仍无 runtime 实现。
 - **已公布的候选可观测面（QA 注册依据，最终以合入版本为准）**：
-  - **#20 T005 进程**：`createProcessManager({ dataRoot, credentials, probe?, readinessTimeoutMs=60000, stopGraceMs=5000, closeConfirmMs=5000, onProcessExit?, isRecoveryPermitted? })`；端口 `start`/`stop`/`openWebUI`/`recover`/`close`。身份查询 `launchesDirectory`、`readLaunchRecord(environmentId)`、`listLaunchRecords()`；`ProcessLaunchRecord.identity = { pid, pgid, startToken, commandFragment, createdAt }`（`startToken` 为 kernel `lstart`，**非 PID 即身份**）。错误码映射用现有冻结码（`START_TIMEOUT`/`PORT_UNAVAILABLE`/`PROCESS_EXITED`/`WEBUI_UNAVAILABLE`/`ENVIRONMENT_BUSY`）。`close` 必须停并 `await` 全部 owned/adopted 运行 DSH 与安装/预检子树，成功才允许 core 释放 dataRoot 锁。#43 已同意该形状。**代码分支/PR 尚未推送。**
+  - **#20 T005 进程**：`createProcessManager({ dataRoot, credentials, probe?, readinessTimeoutMs=60000, stopGraceMs=5000, closeConfirmMs=5000, onProcessExit?, isRecoveryPermitted? })`；端口 `start`/`stop`/`openWebUI`/`recover`/`close`。身份查询 `launchesDirectory`、`readLaunchRecord(environmentId)`、`listLaunchRecords()`；`ProcessLaunchRecord.identity = { pid, pgid, startToken, commandFragment, createdAt }`（`startToken` 为 kernel `lstart`，**非 PID 即身份**）。错误码映射用现有冻结码（`START_TIMEOUT`/`PORT_UNAVAILABLE`/`PROCESS_EXITED`/`WEBUI_UNAVAILABLE`/`ENVIRONMENT_BUSY`）。`close` 必须停并 `await` 全部 owned/adopted 运行 DSH 与安装/预检子树，成功才允许 core 释放 dataRoot 锁。#43 已同意该形状；但 `rename` 后校验/`link` 还原非 CAS，锁方案与接口待 #21 修订 + #5 专职设计审后冻结。**代码分支/PR 尚未推送。**
   - **#22 T005b 凭据**：`packages/runtime/src/credentials/index.js` 的 `createCredentialInjection`（机制层）与 `createLaunchCredentialPort`（环境作用域 port）；成功返回 `baseEnv + 凭据` 的完整显式 env。测试必须**显式**传 `provider`/`injection`，生产 factory 不允许替身默认注入；非 darwin 的 `UNSUPPORTED_PLATFORM` **不回退 mock**。
 
 场景注册需要上述代码在可 fetch 的 ref 上；在此之前按 issue #45 的阶段化要求，**先交付夹具与准备 PR 后停止**。禁止用 mock 冒充真实接口、禁止 `it.skip`/`it.fails` 把缺口变绿。
@@ -47,6 +47,7 @@
    - `close` 在仍有安装/进程写任务时的语义（拒绝、等待或有界超时），不得在新实例并发写时释放 dataRoot。
    - **正常 close 的 M1 硬要求（编排补充）**：close 必须先停止并 `await` 所有**已证明自有**的 DSH/安装/预检子树退出，core 才释放 dataRoot 锁；旧写者退出前下一实例不得获锁。崩溃遗留由 reconcile 另测，不接受“正常 close 后靠下次 adopt 掩盖”。
    - 拒绝原因需可区分：`stale`、`foreign-host`、`pid-reused`、`corrupt`、`busy`。
+   - **原子性与三方竞争（编排补充）**：`rename` 后校验/`link` 还原**不是 CAS**；A 观察陈旧→B 建新 lease→A 移动 B→C 趁隙 `wx` 可能出现两个 writer。必须由原子 `wx`+`O_EXCL` 或 fencing 关闭；**单次双进程竞争成功不构成证明**，需三方竞争 + `assertNoConcurrentWriters` 负向对照。
 3. **凭据引用解析**（#44，候选 PR #46）
    - `createLaunchCredentialPort({ load, injection })` 成功 = 完整显式子进程 env（`baseEnv` + 凭据变量）；失败 `PortOutcome` 的 `message` 不含值。
    - 无引用/缺条目/取消的错误映射：无引用→`MISSING_REFERENCE`、缺条目→`CREDENTIAL_NOT_FOUND`、取消→`CREDENTIAL_ACCESS_CANCELLED`；`UNSUPPORTED_PLATFORM`→`UNSUPPORTED_COMBINATION`，其余→`INTERNAL_ERROR`。
@@ -57,10 +58,10 @@
 
 ```text
 tests/integration/process/
-  harness.test.ts                    # 夹具自检（12 项，真实执行，全绿）
+  harness.test.ts                    # 夹具自检（13 项，真实执行，全绿）
   README.md                          # 所有权、状态与运行方式
   scenarios/
-    process-scenario-plan.ts         # 21 个计划的 QA 场景目录（当前全部 blocked）
+    process-scenario-plan.ts         # 23 个计划的 QA 场景目录（当前全部 blocked）
   support/
     fixture-process.mjs              # 受控父/孙进程：ready、bind、crash、stubborn、never-ready
     spawn-fixture.ts                 # FixtureProcess：ready 轮询、guarded kill、孙进程回收
@@ -75,10 +76,10 @@ tests/integration/process/
 夹具自检命令与结果：
 
 ```sh
-pnpm exec vitest run tests/integration/process/harness.test.ts   # 12 passed
+pnpm exec vitest run tests/integration/process/harness.test.ts   # 13 passed
 ```
 
-自检覆盖：父/孙进程身份可证且 SIGTERM 停整棵树；`crash` 模式真实遗留孤儿孙进程（launcher 必须处理的失败形态）；`stubborn` 忽略 SIGTERM、需 SIGKILL 升级；伪造 token / 陈旧 start time / 不存在的 PID 一律拒绝且无关对照进程存活；真实 loopback 200 探测与停止后端口释放；占用端口时受管进程 `exit 40` 且占用者不被杀；`never-ready` 有界超时而非挂死；双实例 canary 隔离且宿主 HOME 不变；锁输入制造器与 PID 复用拒绝；ordering ledger 对错误 close/lock/writer 顺序确定性报错。
+自检覆盖：父/孙进程身份可证且 SIGTERM 停整棵树；`crash` 模式真实遗留孤儿孙进程（launcher 必须处理的失败形态）；`stubborn` 忽略 SIGTERM、需 SIGKILL 升级；伪造 token / 陈旧 start time / 不存在的 PID 一律拒绝且无关对照进程存活；真实 loopback 200 探测与停止后端口释放；占用端口时受管进程 `exit 40` 且占用者不被杀；`never-ready` 有界超时而非挂死；双实例 canary 隔离且宿主 HOME 不变；锁输入制造器与 PID 复用拒绝；ordering ledger 对错误 close/lock/writer 顺序确定性报错；重叠 writer 被 `assertNoConcurrentWriters` 拒绝。
 
 ## 场景目录（计划，当前全部 `blocked`）
 
@@ -101,6 +102,8 @@ pnpm exec vitest run tests/integration/process/harness.test.ts   # 12 passed
 | PROC-LOCK-04 | 旧 owner release 不得删替代锁（ABA） | real | 接管完成后再触发旧 release | dataRoot.lock |
 | PROC-LOCK-05 | close 有在途写任务时不释放 dataRoot | injected | 写任务持有期间调用 close | dataRoot.lock/install/start |
 | PROC-LOCK-06 | owner/heartbeat 损坏、异 host、PID 复用保守拒绝 | injected | LockFixture 制造输入 + 真实对照进程 | dataRoot.lock/ownership |
+| PROC-LOCK-07 | 三方竞争（A stale→B 新 lease→A 移动 B→C 空隙 wx）不得出现两个 writer | injected | 三方 contentionGate 固定交错 + assertNoConcurrentWriters | dataRoot.lock/start/ownership |
+| PROC-LOCK-08 | 旧 owner heartbeat/lease 覆写不得使新 owner 失配或复活（fencing） | injected | 新 owner 建立后写旧 heartbeat，断言被拒/无副作用 | dataRoot.lock |
 | PROC-CLOSE-01 | 正常 close 先停并 await 自有子树退出再释放锁；下一实例在旧写者退出后才获锁 | real | OrderingLedger 断言 writer-exit < lock-release < next-acquire | dataRoot.lock/stop/ownership |
 | PROC-CRED-01 | 凭据引用注入显式 env，值不落盘/日志 | real | 专用 canary 引用，子进程回显哈希 | credential.resolve/start |
 | PROC-CRED-02 | 无引用/缺失/取消失败且不泄密 | injected | 撤销引用后启动并全量扫描 canary | credential.resolve/start |
