@@ -9,6 +9,7 @@
  * and on `CompositionLock.sources`, and never enter the composition digest.
  */
 import { contractErrorSchema } from './errors.js';
+import { sanitizeBoundedMessage } from './redaction.js';
 import {
   catalogCombinationIdSchema,
   environmentIdSchema,
@@ -146,7 +147,22 @@ export type OperationStatus = Infer<typeof operationStatusSchema>;
 export const operationKindSchema = sLiteral('create', 'start', 'stop', 'openWebUI', 'export');
 export type OperationKind = Infer<typeof operationKindSchema>;
 
-export const operationPhaseSchema = sString({ minLength: 1, maxLength: 64 });
+/** `OperationSnapshot.phase` / `operation.updated` phase share this bound. */
+export const OPERATION_PHASE_MAX_LENGTH = 64;
+
+export const operationPhaseSchema = sString({
+  minLength: 1,
+  maxLength: OPERATION_PHASE_MAX_LENGTH,
+});
+
+/**
+ * Canonicalizes a free-text operation `phase` before it crosses the bridge:
+ * secret/path redaction plus the `operationPhaseSchema` code-point bound, so the
+ * response (`operations.get` / `operations.cancel`) and event channels apply
+ * the same postcondition to the same field (issue #29).
+ */
+export const sanitizeOperationPhase = (phase: string): string =>
+  sanitizeBoundedMessage(phase, OPERATION_PHASE_MAX_LENGTH);
 
 /** EnvironmentSummary: read-only list view without secrets or local paths. */
 export const environmentSummarySchema = sObject({

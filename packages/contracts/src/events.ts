@@ -6,8 +6,8 @@
  * counter. A multi-operation subscription therefore sees one independent
  * increasing sequence per `operationId`. `SubscriptionRegistry.publish`
  * enforces strict monotonicity, validates the event against the shared schema
- * and sanitizes the phase text, so a downstream producer cannot emit a
- * regressing sequence or a credential-bearing event.
+ * and sanitizes/bounds the phase text, so a downstream producer cannot emit a
+ * regressing sequence or a credential-bearing, over-long event.
  *
  * Subscriptions carry an optional opaque `owner` (a trusted call context such as
  * a window id). T003's dispatcher does not have a sender and passes `null`;
@@ -16,14 +16,17 @@
  * change, and no per-window isolation is claimed here.
  */
 import { operationIdSchema, subscriptionIdSchema } from './ids.js';
-import { operationStatusSchema, type SubscriptionRef } from './dto.js';
-import { sanitizeContractMessage } from './redaction.js';
+import {
+  operationPhaseSchema,
+  operationStatusSchema,
+  sanitizeOperationPhase,
+  type SubscriptionRef,
+} from './dto.js';
 import {
   sInteger,
   sNumber,
   sObject,
   sOptional,
-  sString,
   type Infer,
   type ValidationIssue,
 } from './schema.js';
@@ -34,7 +37,7 @@ export const operationUpdatedEventSchema = sObject({
   subscriptionId: subscriptionIdSchema,
   operationId: operationIdSchema,
   sequence: sInteger({ min: 0 }),
-  phase: sString({ minLength: 1, maxLength: 64 }),
+  phase: operationPhaseSchema,
   status: operationStatusSchema,
   progress: sOptional(sNumber({ min: 0, max: 100 })),
 });
@@ -129,7 +132,7 @@ export class SubscriptionRegistry {
       );
     }
     this.#lastSequence.set(operation.id, operation.sequence);
-    const phase = sanitizeContractMessage(operation.phase);
+    const phase = sanitizeOperationPhase(operation.phase);
     const events: OperationUpdatedEvent[] = [];
     for (const [subscriptionId, entry] of this.#entries) {
       if (entry.operationId !== null && entry.operationId !== operation.id) {
