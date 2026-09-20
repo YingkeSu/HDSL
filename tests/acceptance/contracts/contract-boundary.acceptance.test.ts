@@ -21,16 +21,19 @@
  * Two sections:
  * - `frozen contract behavior` — behavior the contract pins down and that
  *   already held on the frozen SHA.
- * - `contract expectations` — the 10 cases that assert the behavior the
- *   contract requires. They were intentionally red on `0cfbdbd` and all pass
- *   on `b1904ce` without changing an expectation. The suite must never be
- *   green *because* a defect exists; do not weaken or skip these.
+ * - `contract expectations` — cases that assert the behavior the contract
+ *   requires. The original 10 were intentionally red on `0cfbdbd` and pass on
+ *   `b1904ce` with unchanged expectations. The `operations.cancel` guard case
+ *   (found by hdsl-5 at `b1904ce`) is red until that guard fix lands. The suite
+ *   must never be green *because* a defect exists; do not weaken, skip or
+ *   `it.fails` these.
  */
 import {
   createContractRuntime,
   containsSecret,
   isLoopbackOrigin,
   isRetryable,
+  portFail,
   portOk,
   SubscriptionRegistry,
   type ContractPort,
@@ -296,10 +299,12 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
 
 describe(`contract expectations @ ${API_SHA} (red on ${PRIOR_SHA})`, () => {
   /**
-   * Every case below asserts the behavior the contract text requires. All 10
-   * were red on `0cfbdbd` and are green on `b1904ce` with the same
-   * expectation; they remain the regression guards for issues #22 #23 #24
-   * #25 #26 #27 and review F3. Do not weaken, skip or `it.fails` them.
+   * Every case below asserts the behavior the contract text requires. The
+   * original 10 were red on `0cfbdbd` and are green on `b1904ce` with the
+   * same expectation; they remain the regression guards for issues #22 #23
+   * #24 #25 #26 #27 and review F3. The final `[#22/cancel guard]` case is red
+   * on `b1904ce` (hdsl-5 finding, fix in flight) and must go green without an
+   * expectation change. Do not weaken, skip or `it.fails` them.
    */
 
   it('[#22] a guard rejection must not permanently poison the requestId on corrected parameters', () => {
@@ -486,5 +491,35 @@ describe(`contract expectations @ ${API_SHA} (red on ${PRIOR_SHA})`, () => {
     }
     const combinations = response.value as readonly { compatibility: { status: string } }[];
     expect(combinations.filter((c) => c.compatibility.status !== 'verified')).toEqual([]);
+  });
+
+  it('[#22/cancel guard] an unknown-operationId rejection must not be recorded as a result', () => {
+    // hdsl-5 found at b1904ce that operations.cancel calls the port without a
+    // preceding findOperation guard, so a port-declared NOT_FOUND is cached as
+    // `completed` and a corrected retry with the same requestId can never run.
+    let exists = false;
+    const snapshot: OperationSnapshot = {
+      id: FIXTURE_IDS.operation.running,
+      environmentId: FIXTURE_IDS.environment.running,
+      kind: 'start',
+      phase: 'finished',
+      status: 'cancelled',
+      sequence: 3,
+    };
+    const { runtime } = harness({
+      findOperation: () =>
+        exists ? portOk(snapshot) : portFail('NOT_FOUND', 'operation was not found'),
+      cancelOperation: () =>
+        exists ? portOk(snapshot) : portFail('NOT_FOUND', 'operation was not found'),
+    });
+    const request = contractRequest('operations.cancel', {
+      requestId: 'acc-cancel-guard',
+      operationId: FIXTURE_IDS.operation.running,
+    });
+    const first = runtime.dispatch(request);
+    expect(errorCode(first)).toBe('NOT_FOUND');
+    exists = true;
+    const second = runtime.dispatch(request);
+    expect(second.ok).toBe(true);
   });
 });
