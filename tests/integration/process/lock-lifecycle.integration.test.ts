@@ -11,7 +11,7 @@
  * the close-ordering scenario holds the install in flight so the assertion is
  * deterministic rather than a race.
  */
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { hostname, tmpdir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -23,8 +23,10 @@ import {
   createEnvironmentInput,
   operationRef,
   QaProcess,
+  type LockHarness,
 } from './support/install-harness.js';
 import { spawnLockHolder, waitForChildExit } from './support/lock-holder.js';
+import { assertOrdered, OrderingLedger } from './support/ordering-ledger.js';
 import { waitFor } from './support/wait.js';
 
 const roots: string[] = [];
@@ -44,6 +46,25 @@ afterEach(async () => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/** Canonical state of every environment, via the real contract dispatch. */
+const environmentState = (harness: LockHarness): string => {
+  const list = harness.dispatch('environments.list', {});
+  if (!list.ok) {
+    throw new Error(`environments.list failed: ${list.error.code}`);
+  }
+  const environments = list.value as Array<{ state: string }>;
+  return JSON.stringify(environments.map((environment) => environment.state));
+};
+
+/** Count of durable operation records under the dataRoot. */
+const operationRecordCount = (dataRoot: string): number => {
+  try {
+    return readdirSync(join(dataRoot, 'operations')).length;
+  } catch {
+    return 0;
+  }
+};
 
 describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
   it('PROC-LOCK-01: a second instance on the same dataRoot is unavailable and refused', async () => {
@@ -98,9 +119,14 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     }
   }, 30_000);
 
-  it('PROC-LOCK-05: close waits for an in-flight install before releasing the lock', async () => {
+  it('PROC-LOCK-05: close waits for the writer to settle, then releases the lock, then the next instance acquires', async () => {
     const dataRoot = freshRoot();
-    const harness = await buildLockHarness({ dataRoot, gated: true });
+    const ledger = new OrderingLedger(join(dataRoot, 'close-ordering.jsonl'));
+    const harness = await buildLockHarness({
+      dataRoot,
+      gated: true,
+      onWriterSettle: () => ledger.append('writer', 'settled'),
+    });
     const gate = harness.gate;
     expect(gate).toBeDefined();
     if (gate === undefined) {
@@ -118,19 +144,38 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     const concurrent = await buildLockHarness({ dataRoot });
     expect(concurrent.managed.available).toBe(false);
 
-    // close() must abort the in-flight write but not release before it ends.
+    // close() must abort the in-flight write but not release before it settles.
     const closing = harness.managed.close();
     await waitFor(() => gate.aborted(), { timeoutMs: 5_000, label: 'close aborts the in-flight install' });
     expect(harness.managed.lockSnapshot().publishedBy).toBe('this-instance');
 
+    // Release the writer; close may only finish after the writer settled.
     gate.release();
+    const settled = await harness.managed.waitForOperation(operationId);
+    expect(['failed', 'cancelled']).toContain(settled.status);
+
     const report = await closing;
     expect(report.released).toBe(true);
     expect(harness.managed.lockSnapshot().publishedBy).toBe('none');
+    ledger.append('core', 'lock-release');
 
-    // The interrupted operation reached a terminal state; it is not silently lost.
-    const settled = await harness.managed.waitForOperation(operationId);
-    expect(['failed', 'cancelled']).toContain(settled.status);
+    // The next instance must acquire only after the lock was released.
+    const next = await buildLockHarness({ dataRoot });
+    expect(next.managed.available).toBe(true);
+    ledger.append('next', 'acquire');
+    await next.managed.close();
+
+    // Ordering proof: writer settled < lock released < next acquired.
+    assertOrdered(
+      ledger,
+      { actor: 'writer', event: 'settled' },
+      { actor: 'core', event: 'lock-release' },
+    );
+    assertOrdered(
+      ledger,
+      { actor: 'core', event: 'lock-release' },
+      { actor: 'next', event: 'acquire' },
+    );
   }, 30_000);
 
   it('PROC-LOCK failure: a close that cannot stop its process keeps the lock', async () => {
@@ -182,6 +227,11 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     });
     expect(harness.managed.available).toBe(true);
 
+    // Create an environment while the lock is provably held, so the post-loss
+    // no-op assertion has a real state to compare against.
+    await createEnvironment(harness, 'req-lost-env');
+    const stateBefore = environmentState(harness);
+
     // External tamper: a foreign but well-formed lease replaces the canonical
     // one. This is an external-tamper robustness case, listed separately from
     // the in-protocol takeover scenarios.
@@ -196,6 +246,8 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
       heartbeatAt: new Date().toISOString(),
     };
     writeFileSync(leasePath, JSON.stringify(foreign));
+    const foreignRaw = readFileSync(leasePath, 'utf8');
+    const opsBefore = operationRecordCount(dataRoot);
 
     // Bounded gate: the owner observes the displacement and stops owning.
     await waitFor(
@@ -209,17 +261,52 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     expect(snapshot.publishedLease?.lockId).toBe('foreign-lock');
     expect(snapshot.heldByThisInstance).toBe(false);
 
-    // The displaced owner must not clobber or remove the new lease.
-    expect((JSON.parse(readFileSync(leasePath, 'utf8')) as { lockId: string }).lockId).toBe('foreign-lock');
+    // The displaced owner's heartbeat must not clobber, move or delete the new lease.
+    expect(readFileSync(leasePath, 'utf8')).toBe(foreignRaw);
 
-    // A new managed write is refused while the lock is not provably held.
+    // A new managed write is refused while the lock is not provably held, and it
+    // leaves no new persistent side effect (no environment, no operation record).
     const created = harness.dispatch('environments.create', createEnvironmentInput('req-lost'));
     expect(created.ok).toBe(false);
     if (!created.ok) {
       expect(created.error.code).toBe('ENVIRONMENT_BUSY');
     }
+    expect(environmentState(harness)).toBe(stateBefore);
+    expect(operationRecordCount(dataRoot)).toBe(opsBefore);
+    expect(readFileSync(leasePath, 'utf8')).toBe(foreignRaw);
 
-    // An exit event for a process this instance no longer owns must be a no-op.
-    expect(() => harness.managed.handleProcessExit({ environmentId: 'external', pid: 4242, exitCode: 1 })).not.toThrow();
+    // An exit event for a process this instance no longer owns must be a no-op:
+    // the environment state is unchanged.
+    expect(() =>
+      harness.managed.handleProcessExit({ environmentId: 'external', pid: 4242, exitCode: 1 }),
+    ).not.toThrow();
+    expect(environmentState(harness)).toBe(stateBefore);
+
+    // Closing a displaced instance must not delete the new owner's lease.
+    await harness.managed.close();
+    expect((JSON.parse(readFileSync(leasePath, 'utf8')) as { lockId: string }).lockId).toBe('foreign-lock');
+  }, 30_000);
+
+  it('PROC-LOCK-07: while a real holder owns the root, the service refuses new managed writes', async () => {
+    const dataRoot = freshRoot();
+    const holder = spawnLockHolder(dataRoot, 'acquire');
+    expect(await holder.firstLine).toMatch(/^HELD \d+$/);
+    try {
+      const blocked = await buildLockHarness({ dataRoot });
+      expect(blocked.managed.available).toBe(false);
+      expect(blocked.managed.lockSnapshot().publishedBy).toBe('another-instance');
+      const created = blocked.dispatch('environments.create', createEnvironmentInput('req-real-busy'));
+      expect(created.ok).toBe(false);
+      if (!created.ok) {
+        expect(created.error.code).toBe('ENVIRONMENT_BUSY');
+      }
+    } finally {
+      // Clean release, then a fresh instance can take the root.
+      holder.child.kill('SIGTERM');
+      await waitForChildExit(holder.child);
+    }
+    const after = await buildLockHarness({ dataRoot });
+    expect(after.managed.available).toBe(true);
+    await after.managed.close();
   }, 30_000);
 });

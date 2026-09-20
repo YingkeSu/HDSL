@@ -109,7 +109,10 @@ export interface InstallGate {
 }
 
 /** Wraps the real runtime but holds `install` until the test releases it. */
-export const createGatedRuntime = (artifacts: string): { runtime: ManagedRuntimePort; gate: InstallGate } => {
+export const createGatedRuntime = (
+  artifacts: string,
+  onSettle?: () => void,
+): { runtime: ManagedRuntimePort; gate: InstallGate } => {
   const real = createRuntimePort({
     closureInstall: false,
     precheck: 'none',
@@ -138,6 +141,8 @@ export const createGatedRuntime = (artifacts: string): { runtime: ManagedRuntime
       context.signal.addEventListener('abort', onAbort, { once: true });
       await gate;
       context.signal.removeEventListener('abort', onAbort);
+      // The writer has settled now, before close can proceed to release the lock.
+      onSettle?.();
       if (aborted) {
         return portFail('INTERNAL_ERROR', 'the install was cancelled');
       }
@@ -177,6 +182,8 @@ export const buildLockHarness = async (
     readonly gated?: boolean;
     readonly lockHeartbeatIntervalMs?: number;
     readonly lockStaleAfterMs?: number;
+    /** Called when a gated install actually settles (for ordering evidence). */
+    readonly onWriterSettle?: () => void;
   } = {},
 ): Promise<LockHarness> => {
   const dataRoot = options.dataRoot ?? freshQaRoot('hdsl-proc-lifecycle-');
@@ -187,7 +194,7 @@ export const buildLockHarness = async (
   let runtime: ManagedRuntimePort;
   let gate: InstallGate | undefined;
   if (options.gated === true) {
-    const gated = createGatedRuntime(artifacts);
+    const gated = createGatedRuntime(artifacts, options.onWriterSettle);
     runtime = gated.runtime;
     gate = gated.gate;
   } else {
