@@ -12,5 +12,5 @@ import { CONTRACT_METHODS, OPERATION_UPDATED_CHANNEL } from '@hdsl/contracts';
 /** Exactly the methods in `contracts/local-api.md`; nothing else is exposed. */
 export const PRELOAD_CONTRACT_METHODS = CONTRACT_METHODS;
 
-/** The only push channel; `operations.subscribe` scopes it per caller. */
+/** The only push channel; per-caller scoping and sender validation are T006. */
 export const PRELOAD_OPERATION_UPDATED_CHANNEL = OPERATION_UPDATED_CHANNEL;
