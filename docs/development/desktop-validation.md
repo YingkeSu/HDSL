@@ -51,7 +51,7 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 - 全部 opt-in：`8 files / 37 tests`（本批新增 `E2E-SENDERFRAME-01/02`；`E2E-IFRAME-01/02` 与其余 33 条已在 `2cdea54`/`3174447` base 复跑全绿）。
 - 默认（gated）：`20 passed | 17 skipped`（tests/e2e，37 条）。
 
-`HDSL_E2E_DESKTOP=1` / `HDSL_E2E_BROWSER=1` / `HDSL_E2E_GUI=1` 是显式 opt-in 门（同 T004/T005 真实证据测试的模式）：真实矩阵不进入 `pnpm run test` 默认集。默认 CI 跑工程检查 + always-on 夹具自检（17 条）与 always-on 的 Electron binary 探测（共 18 passed），**不含** opt-in 的 15 条。真实矩阵用注册的 `hdsl-e2e-run-*` 临时 base 下的 dataRoot/user-data/profile，不读个人 keychain、不调用模型、不碰用户 `~/.dsh` 或浏览器 profile。
+`HDSL_E2E_DESKTOP=1` / `HDSL_E2E_BROWSER=1` / `HDSL_E2E_GUI=1` / `HDSL_E2E_IFRAME=1` / `HDSL_E2E_SENDERFRAME=1` 是显式 opt-in 门（同 T004/T005 真实证据测试的模式）：真实矩阵不进入 `pnpm run test` 默认集。默认 CI 跑工程检查与 always-on 项：夹具自检 17 + Electron binary 探测 1 + iframe 层分类器负控 1 + sender-frame fixture 检查 1 = **20 passed**，其余 **17 skipped**（tests/e2e 共 37 条）。真实矩阵用注册的 `hdsl-e2e-run-*` 临时 base 下的 dataRoot/user-data/profile，不读个人 keychain、不调用模型、不碰用户 `~/.dsh` 或浏览器 profile（例外仅限下面“真实外部验收”人工步骤中明确标注的系统默认浏览器路径）。
 
 ## 红证据（9b52364）与修复复验
 
@@ -91,13 +91,15 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 - Windows x64：未测（T008b）。
 - 其余计划场景（`tests/e2e/scenarios/desktop-e2e-scenario-plan.ts`）保持 `blocked`。
 
-## 真实外部验收：可操作人工步骤（未执行，不改系统权限）
+## 真实外部验收：可操作人工步骤（未执行，不声称完成）
 
-以下三项**未自动执行也不声称完成**；步骤可直接人工执行，均使用独立临时 dataRoot/自建 keychain canary，不读个人 keychain、不改系统权限：
+以下三项**未自动执行也不声称完成**；都必须由人操作、且**不使用 QA 的临时 profile 注入**。前两项只使用独立临时 dataRoot 与自建 keychain canary，不读个人 keychain；**第三项会经过宿主机真实默认浏览器与其用户 profile**，因此本切片**未执行**它，也**不会**自动更改默认浏览器或任何用户配置。
+
+建议在**专用测试 OS 账户**或事先明确选定/切换好的测试浏览器环境下执行；在普通个人环境执行前需用户知情并同意，因为 bootstrap 可能留在浏览器历史/会话中。**不得**声称该 token 为一次性或短期有效：rc2 在同一进程内复用，本切片未证明其过期语义。
 
 1. **原生「环境 → 导入环境凭据引用…」文件选择**：启动 production 应用（`pnpm run build:desktop` 后 `<electron> apps/desktop --hdsl-data-root <临时dir>`）→ 先创建一个环境并在列表选中 → 菜单「环境 → 导入环境凭据引用…」→ 在 NSOpenPanel 选择 `schemaVersion:"1"`、`bindings:[{name,reference:{id,store:"keychain",key:"service#account"}}]` 的 JSON → 预期成功提示；核对 `<dataRoot>/environments/<id>/credentials.json` 为 `0600` 且无 secret 值。自动列以 `qa-entry` 注入替代，不能当原生菜单证据。
 2. **诊断保存对话框（NSSavePanel）**：在选中环境上触发「导出诊断」（或不设注入路径调用 `diagnostics.export`）→ 在原生保存框选路径 → 预期文件存在且不含 canary/`.credentials.yaml`/`credentials.json`/dataRoot 原文。自动列以 `--hdsl-qa-export-path` 注入替代。
-3. **真实系统浏览器打开**：running 环境点「打开 WebUI（主进程原生打开）」→ 由 `shell.openExternal` 交给系统默认浏览器 → 人工确认落点与页面可用；注入 opener 列（`E2E-BROWSER-01`）**不等价**。
+3. **真实系统浏览器打开**（`shell.openExternal` 路径，与 `E2E-BROWSER-01` 的临时 profile 注入 opener **不同、不可互代**）：running 环境点「打开 WebUI（主进程原生打开）」→ 由 `shell.openExternal` 交给**宿主机默认浏览器/用户 profile** → 人工确认落点与页面可用。**未执行**：本切片未在真实默认浏览器上运行该路径；bootstrap URL 可能进入该浏览器历史/会话。若要在可复核条件下执行，请在专用测试账户或已选定的测试浏览器中操作，并按需在事后自行清理该浏览器历史（本切片不代做、不改用户配置）。
 
 已记录的能力限制：`osascript` 发送按键 `error 1002`（Input Monitoring 未授权）、AX `windows 0`，故上述原生面板无法在无权限会话中自动完成；不自行改系统授权。
 
