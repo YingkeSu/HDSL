@@ -11,8 +11,8 @@
  * the close-ordering scenario holds the install in flight so the assertion is
  * deterministic rather than a race.
  */
-import { mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import { hostname, tmpdir } from 'node:os';
+import { readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
+import { hostname } from 'node:os';
 import { basename, dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { canonicalizeDataRoot, DataRootLock } from '@hdsl/core';
@@ -22,32 +22,39 @@ import {
   cleanupQaRoots,
   createEnvironment,
   createEnvironmentInput,
+  freshQaRoot,
   operationRef,
   QaProcess,
+  registerQaPath,
   type LockHarness,
 } from './support/install-harness.js';
-import { spawnLockHolder, waitForChildExit } from './support/lock-holder.js';
+import {
+  liveLockHolders,
+  reapLockHolders,
+  spawnLockHolder,
+  waitForChildExit,
+} from './support/lock-holder.js';
 import { assertOrdered, OrderingLedger } from './support/ordering-ledger.js';
 import { waitFor } from './support/wait.js';
 
-const roots: string[] = [];
 const locks: DataRootLock[] = [];
 
-const freshRoot = (): string => {
-  const root = mkdtempSync(join(tmpdir(), 'hdsl-lockqa-'));
-  roots.push(root);
-  return root;
-};
+const freshRoot = (): string => freshQaRoot('hdsl-lockqa-');
 
 afterEach(async () => {
   for (const lock of locks.splice(0)) {
     await lock.release().catch(() => undefined);
   }
-  // Close harness-owned instances (stops heartbeat) and remove only the roots
-  // this harness registered; then remove the test's own dataRoots.
-  await cleanupQaRoots();
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
+  // Bounded terminate + await exit for every holder this slice started, then
+  // remove only the paths this harness registered. Fail loudly on any residue
+  // instead of silently reporting zero.
+  const reaped = await reapLockHolders();
+  const report = await cleanupQaRoots();
+  const liveHolders = liveLockHolders();
+  if (reaped.timedOut > 0 || liveHolders.length > 0 || report.failed.length > 0) {
+    throw new Error(
+      `QA cleanup incomplete: ${JSON.stringify({ reaped, liveHolders, failed: report.failed })}`,
+    );
   }
 });
 
@@ -103,7 +110,7 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     const aliasDotDot = join(dataRoot, '..', basename(dataRoot));
     const aliasLink = join(parent, `alias-${String(process.pid)}-${Math.random().toString(16).slice(2)}`);
     symlinkSync(dataRoot, aliasLink);
-    roots.push(aliasLink);
+    registerQaPath(aliasLink);
 
     expect(canonicalizeDataRoot(aliasDotDot)).toBe(canonicalizeDataRoot(dataRoot));
     expect(canonicalizeDataRoot(aliasLink)).toBe(canonicalizeDataRoot(dataRoot));
@@ -332,4 +339,12 @@ describe('dataRoot lock lifecycle QA (PROC-LOCK service level)', () => {
     expect(after.managed.available).toBe(true);
     await after.managed.close();
   }, 30_000);
+
+  it('PROC-CLEANUP holder: afterEach reaps a real holder left by an abnormal path', () => {
+    // Intentionally do NOT kill or await the holder here. The suite afterEach
+    // must terminate and await it; the afterEach residue check fails the test
+    // if any registered holder is still live.
+    const holder = spawnLockHolder(freshRoot(), 'acquire');
+    expect(holder.child.pid).toBeGreaterThan(0);
+  });
 });

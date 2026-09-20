@@ -161,6 +161,7 @@ export interface LockHarness {
 }
 
 const roots: string[] = [];
+const extraPaths: string[] = [];
 const manageds: ManagedInstall[] = [];
 
 export const freshQaRoot = (prefix: string): string => {
@@ -172,19 +173,45 @@ export const freshQaRoot = (prefix: string): string => {
 /** Roots this QA harness created and therefore owns. */
 export const registeredQaRoots = (): readonly string[] => [...roots];
 
+/** Registers an extra owned path (e.g. a symlink) for targeted removal. */
+export const registerQaPath = (path: string): void => {
+  extraPaths.push(path);
+};
+
+export interface CleanupReport {
+  readonly closed: number;
+  readonly removed: readonly string[];
+  readonly failed: readonly { readonly path: string; readonly error: string }[];
+}
+
 /**
  * Closes every harness-owned managed instance (releasing its lock and stopping
- * its heartbeat) and then removes exactly the roots this harness registered.
- * Nothing outside the registry is touched, so a failure path cannot leave a
- * heartbeating instance recreating a removed directory.
+ * its heartbeat) and then removes exactly the paths this harness registered —
+ * never a broad glob. Failures are reported, never swallowed, so a caller can
+ * fail loudly instead of claiming zero residue.
  */
-export const cleanupQaRoots = async (): Promise<void> => {
+export const cleanupQaRoots = async (): Promise<CleanupReport> => {
+  let closed = 0;
   for (const managed of manageds.splice(0)) {
-    await managed.close().catch(() => undefined);
+    try {
+      await managed.close();
+      closed += 1;
+    } catch {
+      // The directory removal below still runs; a stuck lock is reported by
+      // the caller's live-process/residue checks.
+    }
   }
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
+  const removed: string[] = [];
+  const failed: { path: string; error: string }[] = [];
+  for (const path of [...roots.splice(0), ...extraPaths.splice(0)]) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      removed.push(path);
+    } catch (error) {
+      failed.push({ path, error: error instanceof Error ? error.message : String(error) });
+    }
   }
+  return { closed, removed, failed };
 };
 
 export const buildLockHarness = async (

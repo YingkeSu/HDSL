@@ -34,7 +34,7 @@ pnpm exec vitest run tests/integration/process/lock.integration.test.ts tests/in
 | PROC-LOCK-01 双实例 | 不适用 | **有**：第二个 `available===false`、`recover().refused`、`create`→`ENVIRONMENT_BUSY` | real |
 | PROC-LOCK alias | `canonicalizeDataRoot` 相等 | **有**：别名实例 `available===false` | real |
 | PROC-LOCK-03 三方竞争 | **有**：`tryAcquire` 观察→B 接管→guard 重读 busy、B lease 不变、quarantine 无 B.lockId | 见下行 | real |
-| PROC-LOCK-03 零重叠持有者 | **有**：3 个真实 `try-once` 恰好 1 `HELD`/2 `BUSY` exit 3 | **有（无重叠受管写）**：真实 holder 持锁期间 `create`→`ENVIRONMENT_BUSY` | real |
+| PROC-LOCK-03 零重叠持有者 | **有**：3 个真实 `try-once` 恰好 1 `HELD`/2 `BUSY` exit 3 | **有（PROC-LOCK-07）**：真实 holder 持锁期间 `create`→`ENVIRONMENT_BUSY` | real |
 | PROC-LOCK-04 旧 owner（ABA） | **有**：A 迟到 `release()`→`released:false`、B lease 保留 | 无（不适用） | injected |
 | PROC-LOCK-05 close 顺序 | 不适用 | **有**：OrderingLedger 证明 `writer-settle < lock-release < next-acquire`；在途期间 `publishedBy==="this-instance"`，`operation` 终态 | injected |
 | PROC-LOCK 失败留锁 | 不适用 | **有**：`CloseReport.released:false`、`failure.code=INTERNAL_ERROR`、锁仍 held、后续实例不可用 | injected |
@@ -73,5 +73,7 @@ gated runtime 挂起在途 install；`close()` 先置 abort 但 writer 未 settl
 
 ## 清理
 
-- 所有测试只在 `mkdtemp` 根下运行；真实 holder 进程由测试按自有句柄 SIGTERM/SIGKILL 并 `await` 退出；无残留进程或临时目录。
+- 测试只在 `mkdtemp` 注册根下运行。`cleanupQaRoots` 先关闭本 harness 注册的 `ManagedInstall`（释放锁、停心跳），再删除**仅本次注册**的根/额外路径；不使用任何 glob。
+- 真实 holder 子进程由 `support/lock-holder.ts` 登记；afterEach/finally 以有界 SIGTERM→SIGKILL 终止并 `await` 退出，`liveLockHolders()` 必须为空，否则显式报错（不静默冒充 0 残留）。
+- `cleanupQaRoots` 返回 `{removed, failed}`；`failed` 非空即失败。`cleanup.integration.test.ts` 额外验证：正常路径/抛异常路径/read-only 导致删除失败均被如实报告，且外部 sentinel 目录不被误删。
 - 未按命令路径盲杀未知进程；外部遗留由所有者自行清理并确认。
