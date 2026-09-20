@@ -10,6 +10,7 @@
  * reused verbatim; no new wire DTO or error code is introduced here.
  */
 import type { OpenWebUIResult, PortOutcome } from '@hdsl/contracts';
+import type { LaunchCredentialPort } from '../credentials/index.js';
 import type { ProcessProbe } from './probe.js';
 import type { ProcessLaunchRecord } from './records.js';
 
@@ -80,26 +81,12 @@ export interface ManagedProcessPort {
 }
 
 /**
- * Credentials port owned by T005b (#44). `resolveLaunchEnvironment` returns a
- * handle whose `env` is the **complete explicit child environment** (managed
- * isolation variables plus credential variables); the launcher never inherits
- * the host environment. The handle's `dispose()` erases the transient
- * credential material and is called by the process manager in a `finally`
- * around the spawn, covering success, spawn failure and cancellation. The env
- * map is never persisted, logged or captured by a long-lived closure.
+ * Credentials port owned by T005b (#44) and re-exported by the runtime root.
+ * The process manager consumes it by `import type` only: `env` is the complete
+ * explicit child environment, and `dispose()` is invoked in a `finally` around
+ * the spawn (success, isolation rejection, spawn error and cancellation). The
+ * env map is never persisted, logged or captured by a long-lived closure.
  */
-export interface LaunchEnvironment {
-  readonly env: Readonly<Record<string, string>>;
-  /** Idempotent: erases the transient credential material. */
-  dispose(): void;
-}
-
-export interface LaunchCredentialPort {
-  resolveLaunchEnvironment(
-    environmentId: string,
-  ): Promise<PortOutcome<LaunchEnvironment>>;
-}
-
 export interface ProcessExitEvent {
   readonly environmentId: string;
   readonly pid: number;

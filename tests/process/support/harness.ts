@@ -17,7 +17,7 @@ import {
   createPosixProcessProbe,
   createProcessManager,
   type LaunchCredentialPort,
-  type LaunchEnvironment,
+  type LaunchEnvironmentHandle,
   type ProcessExitEvent,
   type ProcessLifecycleRequest,
   type ProcessManager,
@@ -97,7 +97,7 @@ export const createHarness = async (options: HarnessOptions = {}): Promise<Harne
   const credential = options.credential ?? 'canary-model-key';
   let credentialDisposals = 0;
   const credentials: LaunchCredentialPort = {
-    resolveLaunchEnvironment: async (): Promise<PortOutcome<LaunchEnvironment>> => {
+    resolveLaunchEnvironment: async (): Promise<PortOutcome<LaunchEnvironmentHandle>> => {
       if (credential === false) {
         return portFail('INTERNAL_ERROR', 'no managed credential reference is configured');
       }

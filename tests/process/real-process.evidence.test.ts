@@ -26,11 +26,13 @@ import { API_VERSION, createContractRuntime } from '@hdsl/contracts';
 import { createManagedInstall, generationPaths } from '@hdsl/core';
 import {
   VERIFIED_COMBINATIONS,
+  createCredentialInjection,
+  createLaunchCredentialPort,
   createProcessManager,
   createRuntimePort,
   isProcessAlive,
 } from '@hdsl/runtime';
-import type { LaunchCredentialPort } from '@hdsl/runtime';
+import type { CredentialInjection, OsCredentialProvider, ProcessManager } from '@hdsl/runtime';
 
 const enabled = process.env['HDSL_REAL_PROCESS'] === '1';
 const keep = process.env['HDSL_EVIDENCE_KEEP'] === '1';
@@ -111,19 +113,44 @@ describe.skipIf(!enabled)('real DSH process lifecycle (opt-in evidence)', () => 
       );
 
       let disposals = 0;
-      const credentials: LaunchCredentialPort = {
-        resolveLaunchEnvironment: () =>
+      // The real T005b adapter with an in-test OS provider: the managed launch
+      // environment is built by the credentials module, not by the test.
+      const provider: OsCredentialProvider = {
+        store: 'keychain',
+        read: () => Promise.resolve('hdsl-t005-canary-no-model-call'),
+      };
+      const injection = createCredentialInjection({ provider });
+      const counting: CredentialInjection = {
+        store: injection.store,
+        resolveLaunchEnvironment: async (input) => {
+          const launch = await injection.resolveLaunchEnvironment(input);
+          return {
+            ...launch,
+            dispose: () => {
+              disposals += 1;
+              launch.dispose();
+            },
+          };
+        },
+      };
+      const credentials = createLaunchCredentialPort({
+        load: () =>
           Promise.resolve({
-            ok: true as const,
-            value: {
-              env: { DEEPSEEK_API_KEY: 'hdsl-t005-canary-no-model-call' },
-              dispose: () => {
-                disposals += 1;
+            bindings: [
+              {
+                name: 'DEEPSEEK_API_KEY',
+                reference: { id: 't005-evidence', store: 'keychain', key: 'hdsl-t005-evidence#t005' },
               },
+            ],
+            baseEnv: {
+              HOME: paths.homeDirectory,
+              DSH_HOME: paths.homeDirectory,
+              PATH: `${join(generationDirectory, 'node', 'bin')}:/usr/bin:/bin`,
             },
           }),
-      };
-      const manager = createProcessManager({ dataRoot, credentials });
+        injection: counting,
+      });
+      const manager: ProcessManager = createProcessManager({ dataRoot, credentials });
       const request = {
         environmentId: summary.id,
         expectedRevision: summary.revision,

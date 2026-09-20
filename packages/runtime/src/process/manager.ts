@@ -47,9 +47,8 @@ import {
 } from './readiness.js';
 import { delay, killProcessTreeSync, signalProcessTree, waitForProcessExit } from './tree.js';
 import { reconcileRuntimeState } from '../reconcile/reconcile.js';
+import type { LaunchCredentialPort, LaunchEnvironmentHandle } from '../credentials/index.js';
 import type {
-  LaunchCredentialPort,
-  LaunchEnvironment,
   ProcessExitEvent,
   ProcessLifecycleRequest,
   ProcessManager,
@@ -384,7 +383,7 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       return failStart(record, 'INTERNAL_ERROR', 'the start was cancelled');
     }
 
-    let resolved: PortOutcome<LaunchEnvironment>;
+    let resolved: PortOutcome<LaunchEnvironmentHandle>;
     try {
       resolved = await credentials.resolveLaunchEnvironment(request.environmentId);
     } catch {
