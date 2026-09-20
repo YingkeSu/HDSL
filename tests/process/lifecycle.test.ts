@@ -8,6 +8,7 @@
  */
 import { createServer, type Server } from 'node:net';
 import { spawn } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createPosixProcessProbe, isProcessAlive } from '@hdsl/runtime';
@@ -410,11 +411,11 @@ describe('unexpected exit and close', () => {
     const grandchildPid = Number(info['grandchildPid']);
     expect(isProcessAlive(grandchildPid)).toBe(true);
 
-    // Simulate a crash of the group leader; the grandchild is orphaned in the
-    // recorded process group and survives until close/reconcile resolves it.
+    // Simulate a crash of the group leader; the provable grandchild is resolved
+    // (eagerly on exit, or at the latest by close).
     process.kill(parentPid, 'SIGKILL');
     await waitFor(() => !isProcessAlive(parentPid));
-    expect(isProcessAlive(grandchildPid)).toBe(true);
+    await waitFor(() => !isProcessAlive(grandchildPid), 10_000);
 
     const closed = await h.manager.close();
     expect(closed.ok).toBe(true);
@@ -518,7 +519,7 @@ describe('injected boundary hardening (review P3)', () => {
     await h.manager.stop(h.request());
   });
 
-  it('rejects a launch env that tries to override the managed HOME', async () => {
+  it('rejects a launch env that disagrees with the managed HOME', async () => {
     const h = await open({ envOverrides: { HOME: '/tmp/hdsl-evil-home' } });
     const outcome = await h.manager.start(h.request());
     expect(outcome.ok).toBe(false);
@@ -527,13 +528,126 @@ describe('injected boundary hardening (review P3)', () => {
     }
   });
 
-  it('keeps the managed PATH authoritative over the launch env', async () => {
+  it('rejects a launch env that disagrees with the managed PATH', async () => {
     const h = await open({ envOverrides: { PATH: '/evil/bin' } });
     const outcome = await h.manager.start(h.request());
-    expect(outcome.ok, JSON.stringify(outcome)).toBe(true);
-    const info = await h.waitForInfo();
-    expect(String(info['path'])).not.toContain('/evil/bin');
-    expect(String(info['path'])).toContain(join(process.execPath, '..'));
-    await h.manager.stop(h.request());
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.message).toContain('PATH');
+    }
+  });
+
+  it('rejects a launch env that disagrees with the managed DSH_AGENTS_HOME', async () => {
+    const h = await open({ envOverrides: { DSH_AGENTS_HOME: '/tmp/hdsl-evil-agents' } });
+    const outcome = await h.manager.start(h.request());
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.message).toContain('DSH_AGENTS_HOME');
+    }
+  });
+});
+
+describe('restart over a crashed predecessor (review P2-A / issue #57)', () => {
+  it('refuses to start while an unprovable descendant survives and keeps the old record', async () => {
+    const h = await open();
+    const pidFile = join(h.dataRoot, 'unprovable-grandchild.pid');
+    const script =
+      "const{spawn}=require('node:child_process');const fs=require('node:fs');" +
+      "const c=spawn(process.execPath,['-e','setInterval(()=>{},1<<30)'],{stdio:'ignore'});" +
+      `fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));setInterval(()=>{},1<<30);`;
+    const leader = spawn(process.execPath, ['-e', script], { detached: true, stdio: 'ignore' });
+    const leaderPid = leader.pid;
+    leader.unref();
+    if (leaderPid === undefined) {
+      throw new Error('failed to spawn the leader');
+    }
+    const probe = createPosixProcessProbe();
+    await waitFor(() => probe.inspect(leaderPid) !== undefined);
+    const leaderInfo = probe.inspect(leaderPid);
+    expect(leaderInfo).toBeDefined();
+    if (leaderInfo === undefined) {
+      return;
+    }
+    await waitFor(() => {
+      try {
+        return readFileSync(pidFile, 'utf8').length > 0;
+      } catch {
+        return false;
+      }
+    });
+    const grandchildPid = Number(readFileSync(pidFile, 'utf8'));
+
+    process.kill(leaderPid, 'SIGKILL');
+    await waitFor(() => !isProcessAlive(leaderPid));
+    expect(isProcessAlive(grandchildPid)).toBe(true);
+
+    // No recorded exit time and a non-matching command: the survivor cannot be
+    // proven ours, so it must never be signalled and the old record is kept.
+    writeLaunchRecord(
+      h.dataRoot,
+      launchFixture(h.dataRoot, h.environmentId, {
+        state: 'running',
+        processExitedAt: null,
+        identity: {
+          pid: leaderPid,
+          pgid: leaderInfo.pgid,
+          startToken: leaderInfo.startToken,
+          commandFragment: 'unprovable-fragment',
+          createdAt: new Date().toISOString(),
+        },
+      }),
+    );
+    const beforePid = h.manager.readLaunchRecord(h.environmentId)?.identity?.pid;
+    try {
+      const restarted = await h.manager.start(h.request());
+      expect(restarted.ok).toBe(false);
+      if (!restarted.ok) {
+        expect(restarted.code).toBe('INTERNAL_ERROR');
+      }
+      expect(h.manager.readLaunchRecord(h.environmentId)?.identity?.pid).toBe(beforePid);
+      expect(isProcessAlive(grandchildPid)).toBe(true);
+    } finally {
+      try {
+        process.kill(grandchildPid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
+  });
+
+  it('never signals an identity-null decoy that merely matches fragment and generation', async () => {
+    const h = await open();
+    const decoy = spawn(
+      process.execPath,
+      ['-e', 'setInterval(() => {}, 1 << 30)', FAKE_DSH_PATH, h.generationDirectory],
+      { detached: true, stdio: 'ignore' },
+    );
+    const decoyPid = decoy.pid;
+    decoy.unref();
+    if (decoyPid === undefined) {
+      throw new Error('failed to spawn the decoy');
+    }
+    const probe = createPosixProcessProbe();
+    await waitFor(() => probe.inspect(decoyPid) !== undefined);
+    try {
+      writeLaunchRecord(
+        h.dataRoot,
+        launchFixture(h.dataRoot, h.environmentId, {
+          state: 'running',
+          identity: null,
+          commandFragment: FAKE_DSH_PATH,
+          generationDirectory: h.generationDirectory,
+        }),
+      );
+      const closed = await h.manager.close();
+      expect(closed.ok).toBe(false);
+      expect(isProcessAlive(decoyPid)).toBe(true);
+    } finally {
+      try {
+        process.kill(decoyPid, 'SIGKILL');
+      } catch {
+        // already gone
+      }
+    }
   });
 });

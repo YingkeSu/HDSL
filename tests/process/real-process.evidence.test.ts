@@ -145,7 +145,9 @@ describe.skipIf(!enabled)('real DSH process lifecycle (opt-in evidence)', () => 
             baseEnv: {
               HOME: paths.homeDirectory,
               DSH_HOME: paths.homeDirectory,
-              PATH: `${join(generationDirectory, 'node', 'bin')}:/usr/bin:/bin`,
+              DSH_AGENTS_HOME: join(paths.homeDirectory, 'agents'),
+              PATH: [join(generationDirectory, 'node', 'bin'), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'),
+              TMPDIR: join(paths.homeDirectory, '.tmp'),
             },
           }),
         injection: counting,

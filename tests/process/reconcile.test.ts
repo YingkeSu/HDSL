@@ -126,16 +126,10 @@ describe('restart reconciliation', () => {
 
     const manager = freshManager(h.dataRoot);
     const report = await manager.recover();
-    // The reused pid now belongs to an unrelated process that happens to share
-    // the recorded process group id, so ownership cannot be re-proven: the
-    // conservative result is unverifiable, and the unrelated process is not
-    // signalled.
+    // The reused pid is its own group leader, so the recorded group has no
+    // other member to resolve: the previous launch is safely gone.
     expect(report.entries).toEqual([
-      {
-        environmentId: h.environmentId,
-        resolution: 'unverifiable',
-        detail: 'a managed descendant tree could not be confirmed exited',
-      },
+      { environmentId: h.environmentId, resolution: 'no-process' },
     ]);
     expect(sleeper.isAlive()).toBe(true);
     await manager.close();

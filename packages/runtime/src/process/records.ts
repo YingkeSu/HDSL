@@ -100,6 +100,13 @@ export interface ProcessLaunchRecord {
   readonly identity: ProcessIdentity | null;
   readonly endpoint: ProcessEndpoint | null;
   readonly exitCode: number | null;
+  /**
+   * When the launcher observed the leader exit (ISO). Used as the ownership
+   * boundary for descendant cleanup: a group member that already existed at
+   * the recorded exit time was forked while the leader was alive, so the group
+   * id could not have been freed and reused under it.
+   */
+  readonly processExitedAt: string | null;
   readonly errorCode: ErrorCode | null;
   readonly errorDetail: string | null;
   readonly createdAt: string;

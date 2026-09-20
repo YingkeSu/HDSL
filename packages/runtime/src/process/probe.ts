@@ -34,9 +34,16 @@ export interface ProcessScanEntry {
 
 export interface ProcessProbe {
   inspect(pid: number): ProcessInfo | undefined;
-  /** Legacy scan; returns `[]` on failure. Prefer the checked variants below. */
+  /**
+   * Legacy scan; returns `[]` on failure.
+   * @deprecated Use {@link tryFindIdsByCommandFragment} for a checked scan.
+   */
   scan(): readonly ProcessScanEntry[];
-  /** Legacy id lookup; returns `[]` on failure. Prefer {@link tryFindIdsByCommandFragment}. */
+  /**
+   * Legacy id lookup; returns `[]` on failure.
+   * @deprecated Use {@link tryFindIdsByCommandFragment}; production cleanup must
+   * not treat an unavailable scan as an empty one.
+   */
   findIdsByCommandFragment(fragment: string): readonly number[];
   /**
    * Pids whose command line contains `fragment`; `undefined` means the scan

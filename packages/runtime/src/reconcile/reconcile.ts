@@ -73,9 +73,9 @@ const reconcileLaunch = async (
 
   if (identity === null) {
     // The instance crashed between writing the intent and recording an
-    // identity. The unique generation directory still identifies our process;
-    // a shared command fragment alone is never enough, and an unavailable scan
-    // is unprovable rather than "no process".
+    // identity. An unavailable scan is unprovable, and a command/directory
+    // match is not proof of ownership (a decoy can share both), so candidates
+    // are never signalled.
     const scan = findOwnedProcessesDetailed(
       options.probe,
       record.commandFragment,
@@ -93,22 +93,12 @@ const reconcileLaunch = async (
       options.launches.write(transition(record, 'stopped'));
       return { environmentId, resolution: 'no-process' };
     }
-    let stopped = true;
-    for (const info of scan.processes) {
-      stopped = (await stopOwnedTree(options, info.pid, info.pgid)) && stopped;
-    }
-    options.launches.write(transition(record, stopped ? 'stopped' : 'unverifiable'));
-    return stopped
-      ? {
-          environmentId,
-          resolution: 'stopped',
-          detail: 'interrupted before the process identity was recorded',
-        }
-      : {
-          environmentId,
-          resolution: 'unverifiable',
-          detail: 'an installation process could not be confirmed exited',
-        };
+    options.launches.write(transition(record, 'unverifiable'));
+    return {
+      environmentId,
+      resolution: 'unverifiable',
+      detail: 'an unverified managed process is present and was not signalled',
+    };
   }
 
   const verdict = verifyIdentity(options.probe, identity);
@@ -119,6 +109,9 @@ const reconcileLaunch = async (
       probe: options.probe,
       pgid: identity.pgid,
       leaderReason: verdict.reason,
+      commandFragment: record.commandFragment,
+      generationDirectory: record.generationDirectory,
+      exitedAt: record.processExitedAt ?? null,
       confirmMs: options.confirmMs,
     });
     if (!cleanup.ok) {

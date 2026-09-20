@@ -21,7 +21,7 @@
  * `onProcessExit`.
  */
 import { spawn, type ChildProcess } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { join } from 'node:path';
 import {
   isErrorCode,
   portFail,
@@ -88,13 +88,13 @@ interface LaunchPatch {
   readonly identity?: ProcessIdentity | null;
   readonly endpoint?: ProcessEndpoint | null;
   readonly exitCode?: number | null;
+  readonly processExitedAt?: string | null;
   readonly errorCode?: ErrorCode | null;
   readonly errorDetail?: string | null;
 }
 
 const OUTPUT_BUFFER_LIMIT = 32 * 1024;
-const MANAGED_PATH_SUFFIX = '/usr/bin:/bin:/usr/sbin:/sbin';
-
+const MANAGED_PATH_ENTRIES = ['/usr/bin', '/bin', '/usr/sbin', '/sbin'] as const;
 const appendBounded = (current: string, chunk: Buffer): string => {
   const next = current + chunk.toString('utf8');
   return next.length > OUTPUT_BUFFER_LIMIT ? next.slice(-OUTPUT_BUFFER_LIMIT) : next;
@@ -172,6 +172,8 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     identity: update.identity !== undefined ? update.identity : record.identity,
     endpoint: update.endpoint !== undefined ? update.endpoint : record.endpoint,
     exitCode: update.exitCode !== undefined ? update.exitCode : record.exitCode,
+    processExitedAt:
+      update.processExitedAt !== undefined ? update.processExitedAt : record.processExitedAt,
     errorCode: update.errorCode !== undefined ? update.errorCode : record.errorCode,
     errorDetail: update.errorDetail !== undefined ? update.errorDetail : record.errorDetail,
     createdAt: record.createdAt,
@@ -189,12 +191,21 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     return portFail(code, message);
   };
 
+  /** The five-key managed mapping, exactly matching core's baseEnv. */
   const managedEnvironment = (request: ProcessLifecycleRequest): Record<string, string> => ({
     HOME: request.homeDirectory,
     DSH_HOME: request.homeDirectory,
-    DSH_AGENTS_HOME: join(request.dataDirectory, 'agents-home'),
-    PATH: `${dirname(request.nodeExecutable)}${MANAGED_PATH_SUFFIX}`,
+    DSH_AGENTS_HOME: join(request.homeDirectory, 'agents'),
+    // Derive from the trusted generation path (core's convention), not from
+    // `dirname(nodeExecutable)`: PATH is a managed mapping key and must match
+    // core's baseEnv exactly, while a misplaced nodeExecutable is a separate
+    // request-configuration concern.
+    PATH: [join(request.generationDirectory, 'node', 'bin'), ...MANAGED_PATH_ENTRIES].join(':'),
     TMPDIR: join(request.homeDirectory, '.tmp'),
+  });
+
+  /** Runtime launch policy keys, authoritative and separate from the mapping. */
+  const launchPolicy = (): Record<string, string> => ({
     DSH_TELEMETRY_DISABLED: '1',
     NODE_NO_WARNINGS: '1',
   });
@@ -244,14 +255,15 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
   };
 
   /**
-   * Resolves the descendant tree of a leader that is no longer owned.
+   * Resolves the descendant tree of a launch whose leader is no longer owned.
    *
-   * A `dead` leader means the recorded group was created by our detached child
-   * and may still hold descendants: signal and await it. A reused pid means the
-   * group id may have been reassigned, so nothing is signalled — a surviving
-   * group is reported as unverifiable so `close` can refuse to report success.
+   * Cleanup never keys off the dead leader's pid: every live member of the
+   * recorded group must carry the launch's own evidence (command fragment or
+   * generation directory) before it is signalled. Unprovable survivors make the
+   * result unverifiable so `close` refuses to report success.
    */
   const cleanupGoneLeader = async (
+    record: ProcessLaunchRecord,
     identity: ProcessIdentity,
     verdict: OwnershipVerdict,
   ): Promise<LeftoverCleanupResult> =>
@@ -259,6 +271,9 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       probe,
       pgid: identity.pgid,
       leaderReason: verdict.reason,
+      commandFragment: record.commandFragment,
+      generationDirectory: record.generationDirectory,
+      exitedAt: record.processExitedAt,
       confirmMs,
     });
 
@@ -354,8 +369,37 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       // stopped record with live group members as unfinished cleanup (and fail
       // rather than report success when they cannot prove ownership).
       launches.write(
-        patch(current, { state: 'stopped', exitCode: code, errorCode: 'PROCESS_EXITED' }),
+        patch(current, {
+          state: 'stopped',
+          exitCode: code,
+          processExitedAt: new Date().toISOString(),
+          errorCode: 'PROCESS_EXITED',
+        }),
       );
+      // An unexpected exit can orphan descendants in our process group. Resolve
+      // the provable ones now (bounded window), and mark the record
+      // unverifiable if any survivor cannot be proven so a later close()
+      // refuses to report success.
+      if (record.identity !== null) {
+        const cleanup = cleanupLostLeaderTree({
+          probe,
+          pgid: record.identity.pgid,
+          leaderReason: 'dead',
+          commandFragment: record.commandFragment,
+          generationDirectory: record.generationDirectory,
+          exitedAt: record.processExitedAt,
+          confirmMs,
+        }).then((result) => {
+          if (result.ok) {
+            return;
+          }
+          const latest = launches.read(environmentId);
+          if (latest !== undefined) {
+            launches.write(patch(latest, { state: 'unverifiable' }));
+          }
+        });
+        tracked(cleanup);
+      }
       if (!closed && onProcessExit !== undefined && expectedPid !== undefined) {
         const event: ProcessExitEvent = {
           environmentId,
@@ -387,34 +431,48 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         portFail('INTERNAL_ERROR', 'the generation is not a complete managed install'),
       );
     }
-    const previous = launches.read(environmentId);
-    if (previous?.identity !== null && previous?.identity !== undefined) {
-      const verdict = verifyIdentity(probe, previous.identity);
-      if (verdict.owned) {
-        return Promise.resolve(
-          portFail('ENVIRONMENT_BUSY', 'a managed process is already running for this environment'),
-        );
-      }
-      // A dead or reused pid is safe to replace; a live pid we cannot prove is
-      // ours must be reconciled first, never overwritten.
-      if (!identityIsGone(verdict)) {
-        return Promise.resolve(
-          portFail(
-            'INTERNAL_ERROR',
-            'a previous process could not be verified; reconcile before starting',
-          ),
-        );
-      }
-    }
 
     const controller = new AbortController();
     active.set(environmentId, { kind: 'start', controller });
     const signal = AbortSignal.any([request.signal, controller.signal]);
-    const task = runStart(request, signal).finally(() => {
-      if (active.get(environmentId)?.controller === controller) {
-        active.delete(environmentId);
+    const task = (async (): Promise<PortOutcome<ProcessStartOutcome>> => {
+      try {
+        const previous = launches.read(environmentId);
+        if (previous?.identity !== null && previous?.identity !== undefined) {
+          const verdict = verifyIdentity(probe, previous.identity);
+          if (verdict.owned) {
+            return portFail(
+              'ENVIRONMENT_BUSY',
+              'a managed process is already running for this environment',
+            );
+          }
+          if (!identityIsGone(verdict)) {
+            // A live pid we cannot prove is ours must be reconciled first; the
+            // previous ownership record is kept, never overwritten.
+            return portFail(
+              'INTERNAL_ERROR',
+              'a previous process could not be verified; reconcile before starting',
+            );
+          }
+          // The previous leader is gone, but its detached group may still hold
+          // descendants. Resolve them (using the previous record's evidence)
+          // before the new spawn overwrites the record; otherwise a later
+          // close() would only see the new group and leave the old orphans.
+          const cleanup = await cleanupGoneLeader(previous, previous.identity, verdict);
+          if (!cleanup.ok) {
+            return portFail(
+              'INTERNAL_ERROR',
+              'a previous managed process tree could not be resolved; reconcile before starting',
+            );
+          }
+        }
+        return await runStart(request, signal);
+      } finally {
+        if (active.get(environmentId)?.controller === controller) {
+          active.delete(environmentId);
+        }
       }
-    });
+    })();
     return tracked(task);
   };
 
@@ -433,6 +491,7 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       identity: null,
       endpoint: null,
       exitCode: null,
+      processExitedAt: null,
       errorCode: null,
       errorDetail: null,
       createdAt: now,
@@ -498,20 +557,28 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         portArgument,
       ];
       const managed = managedEnvironment(request);
-      // A launch environment may not redirect the managed isolation variables.
-      for (const key of ['HOME', 'DSH_HOME'] as const) {
+      // The single five-key managed mapping is derived from the trusted request
+      // paths and matches core's `launchCredentialRequest` baseEnv (HOME,
+      // DSH_HOME, DSH_AGENTS_HOME, PATH, TMPDIR). A provided managed key must
+      // agree exactly: a mismatch is a wiring error and fails closed before
+      // spawn (so dispose() still runs), instead of silently overwriting it.
+      for (const [key, expected] of Object.entries(managed)) {
         const provided = launchEnvironment.env[key];
-        if (provided !== undefined && provided !== request.homeDirectory) {
+        if (provided !== undefined && provided !== expected) {
           return failStart(
             record,
             'INTERNAL_ERROR',
-            `the launch environment tried to override managed ${key}`,
+            `the launch environment disagrees with the managed ${key}`,
           );
         }
       }
-      // Managed variables are authoritative: PATH, TMPDIR, DSH_AGENTS_HOME and
-      // the HOME pair can never be redirected by the injected launch env.
-      const childEnvironment: Record<string, string> = { ...launchEnvironment.env, ...managed };
+      // Credential variables may only add non-managed keys; the managed mapping
+      // and the runtime launch policy are authoritative for their own keys.
+      const childEnvironment: Record<string, string> = {
+        ...managed,
+        ...launchEnvironment.env,
+        ...launchPolicy(),
+      };
       try {
         child = spawn(request.nodeExecutable, args, {
           cwd: request.dataDirectory,
@@ -654,22 +721,23 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         );
       }
       if (scan.processes.length === 0) {
+        // A verified empty scan is a legitimate "nothing to stop".
         launches.write(patch(record, { state: 'stopped' }));
         return portOk({ wasRunning: false });
       }
-      let exitedAll = true;
-      for (const info of scan.processes) {
-        exitedAll = (await terminate(info.pid, info.pgid, signal)) && exitedAll;
-      }
-      launches.write(patch(record, { state: exitedAll ? 'stopped' : 'unverifiable' }));
-      return exitedAll
-        ? portOk({ wasRunning: true })
-        : portFail('INTERNAL_ERROR', 'the recorded process could not be confirmed exited');
+      // A candidate exists but the identity was never captured, so command and
+      // directory matches are not proof of ownership (a decoy can share both).
+      // Never signal an unverified process: fail closed and retain the record.
+      launches.write(patch(record, { state: 'unverifiable' }));
+      return portFail(
+        'INTERNAL_ERROR',
+        'an unverified managed process is present and was not signalled',
+      );
     }
 
     const verdict = verifyIdentity(probe, identity);
     if (identityIsGone(verdict)) {
-      const cleanup = await cleanupGoneLeader(identity, verdict);
+      const cleanup = await cleanupGoneLeader(record, identity, verdict);
       if (!cleanup.ok) {
         launches.write(patch(record, { state: 'unverifiable' }));
         return portFail(
@@ -758,10 +826,11 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
           failures.push('a managed process scan was unavailable');
           continue;
         }
-        for (const info of scan.processes) {
-          if (!(await terminate(info.pid, info.pgid))) {
-            failures.push('a managed process did not exit');
-          }
+        if (scan.processes.length > 0) {
+          // Identity was never captured, so command/directory matches are not
+          // proof of ownership (a decoy can share both). Never signal; retain
+          // the record and fail close so the data-root lock is not released.
+          failures.push('an unverified managed process is present and was not signalled');
         }
         continue;
       }
@@ -772,7 +841,7 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
           continue;
         }
       } else if (!verdict.alive) {
-        const cleanup = await cleanupGoneLeader(identity, verdict);
+        const cleanup = await cleanupGoneLeader(record, identity, verdict);
         if (!cleanup.ok) {
           failures.push('a managed process tree could not be confirmed exited');
           continue;

@@ -90,7 +90,8 @@ const buildFixture = async (mode = 'never-ready'): Promise<InteropFixture> => {
         baseEnv: {
           HOME: homeDirectory,
           DSH_HOME: homeDirectory,
-          PATH: process.env['PATH'] ?? '/usr/bin:/bin',
+          // Managed mapping keys (PATH/TMPDIR/DSH_AGENTS_HOME) are filled by the
+          // process manager; the adapter supplies credentials and test controls.
           FAKE_DSH_MODE: mode,
           FAKE_DSH_INFO_FILE: infoFile,
         },

@@ -64,8 +64,21 @@ interface LaunchCredentialPort {
 - `runtime/src/index.ts` 已导出 `./credentials/index.js`（#44 merge `ead40c1`）；进程侧 `import type` 复用 `LaunchCredentialPort` / `LaunchEnvironmentHandle`，不重复声明，避免同名导出歧义。
 - runtime 在 spawn 前解析；`handle.env` 与受管隔离变量合并为显式子进程 env；`spawn` 同步拷贝后在同一 `try/finally` 中调用 `handle.dispose()`，覆盖成功、隔离校验失败、spawn 抛错与取消。
 - 凭据只走显式 env，绝不进入 argv、`LaunchRecord`、日志或事件；`env` 只在 launch 局部存在，随后清空引用。
-- loader 前置条件（已闭合）：`service#account` 完整引用的强制由凭据端口单点负责（#44 PR #53 `b704cd8`：`createLaunchCredentialPort` 生产路径拒绝 service-only）；loader 由 core（#43 PR #52 `5d8b171`）提供 versioned 引用存储与 `launchCredentialRequest`。runtime 仍不读凭据配置。
-- 互操作证据：`tests/process/credentials-integration.test.ts` 用真实 `createLaunchCredentialPort`（测试内 OS provider）驱动 manager，断言 env 来自适配器、`dispose()` 在成功/spawn 失败/取消三条路径各执行一次。
+- loader 前置条件（已闭合）：`service#account` 完整引用的强制由凭据端口单点负责（#44 PR #53 `b704cd8`）；loader 由 core（#43 PR #52 `5d8b171`/`562fa03`）提供 versioned 引用存储与 `launchCredentialRequest`。runtime 不读凭据配置。
+
+**单一五键映射（与 core `#baseLaunchEnvironment` 精确一致，review P2-C/#60）**：
+
+| key | 值（runtime 由 request 可信路径导出） |
+| --- | --- |
+| `HOME` | `request.homeDirectory` |
+| `DSH_HOME` | `request.homeDirectory` |
+| `DSH_AGENTS_HOME` | `join(request.homeDirectory, "agents")` |
+| `PATH` | `join(request.generationDirectory,"node","bin") + ":/usr/bin:/bin:/usr/sbin:/sbin"` |
+| `TMPDIR` | `join(request.homeDirectory, ".tmp")` |
+
+- `handle.env` 中出现的**任一受管键**若与上表不一致，spawn 前受控失败（`INTERNAL_ERROR`）且 `finally dispose()`；不静默覆盖，不把错位 `nodeExecutable` 混报为凭据冲突。
+- `DSH_TELEMETRY_DISABLED`/`NODE_NO_WARNINGS` 为 runtime 启动策略键，单列且不参与五键一致性校验。
+- 互操作证据：`tests/process/credentials-integration.test.ts`（真实适配器 + 测试 provider）；`tests/process/core-loader-wiring.test.ts`（真实 core loader→strict port→manager，断言五键与 core 完全一致、canary 注入、宿主 env 不泄漏）。
 
 ## 进程记录
 
@@ -78,7 +91,7 @@ interface LaunchCredentialPort {
   "state": "spawning|starting|running|stopping|stopped|failed|unverifiable",
   "identity": { "pid": 1234, "pgid": 1234, "startToken": "Sun Sep 20 ...", "commandFragment": "...", "createdAt": "..." },
   "endpoint": { "origin": "http://127.0.0.1:63059", "host": "127.0.0.1", "port": 63059 },
-  "exitCode": null, "errorCode": null, "errorDetail": null,
+  "exitCode": null, "processExitedAt": null, "errorCode": null, "errorDetail": null,
   "createdAt": "...", "updatedAt": "...", "sequence": 3
 }
 ```
@@ -91,6 +104,7 @@ interface LaunchCredentialPort {
 
 - **启动**：同步写 launch intent → 解析凭据 → `spawn` 受管 Node + `web --no-open --host 127.0.0.1 --port 0|<fixed>`（`detached` 自成进程组）→ 记录身份 → 等待 stdout 上 `dsh web: http://127.0.0.1:<port>/?token=…` 并做 loopback TCP 连接确认 → 记录 `running` 与 origin。就绪判定不是固定 sleep，也不把端口打开当就绪。
 - **重复启动**：已 running 或同环境有在途任务 → `ENVIRONMENT_BUSY`，不生成第二个进程。
+- **重启**：`start()` 在新 spawn / 覆盖 record 前先用旧 record 证据解析旧进程组；不可证则 `INTERNAL_ERROR` 且不覆盖旧记录。
 - **停止**：只对可证明自有的树 `SIGTERM → grace → SIGKILL`（组信号 + 后代兜底），await 退出后 `stopped`；无法认领则不杀并返回 `INTERNAL_ERROR`。
 - **就绪超时 / 固定端口被占 / 就绪前退出 / 取消**：先终止自有整树再 resolve；错误码见下。
 - **recover**：`isRecoveryPermitted()` 为假直接返回空报告；否则对每条 launch record 核身份：可证明且已就绪可达 → `adopted`；可证明但未就绪 → 停止；不可证明的存活 pid → `unverifiable` 不杀；已消失/复用 → `no-process`。同时清理 generation 下仍可证明自有的安装子进程 journal。
@@ -123,7 +137,7 @@ interface LaunchCredentialPort {
 pnpm install --frozen-lockfile
 pnpm run typecheck     # PASS
 pnpm run build         # PASS
-pnpm run test          # 37 files passed / 3 skipped; 500 passed / 5 skipped（含 tests/process 58 项）
+pnpm run test          # 47 files passed / 3 skipped; 576 passed / 5 skipped（含 tests/process 67 项）
 python3 scripts/check_repository.py   # PASS
 ```
 
@@ -177,17 +191,19 @@ reviewed SHA `49b5d599…` → `CHANGES_REQUESTED`（2 P2 + 7 P3）。本轮处�
 
 | 项 | 处置 | 证据 |
 | --- | --- | --- |
-| P2-1 身份未捕获清理在扫描失败时 fail-open（#55） | 已修：probe 新增 `tryFindIdsByCommandFragment`（`undefined` = 扫描失败）、`listProcessGroup`；`findOwnedProcessesDetailed` 返回 `{ok:true,processes}|{ok:false,reason}`；`stop`/`close`/`reconcile` 不可证时按 `unverifiable` 失败，不再写 `stopped`；`close` 失败则 core 不放锁 | `tests/process/lifecycle.test.ts` “scan availability” 两条（真实坏 `psPath` vs 正常真空扫描）；`tests/process/ownership.test.ts`；QA `PROCESS-SCAN-01` 转绿 |
-| P2-2 崩溃后后代树不被回收、`close()` 误报成功（#57） | 已修：`leftovers.ts` 对记录到的 detached 进程组做 `SIGKILL` + await 清空；`stop`/`close`/`recover` 三层对“leader 已死但组仍有成员”收尾；扫描失败或 pid 被复用（不可证）时保守失败，不强杀且不报成功 | `tests/process/lifecycle.test.ts` “cleans up a crashed parent's descendants …” / “close fails when the recorded process group cannot be scanned”；QA `PROCESS-ORPHAN-01` 转绿 |
+| P2-1 身份未捕获清理在扫描失败时 fail-open（#55） | 已修：probe 新增 `tryFindIdsByCommandFragment`（`undefined` = 扫描失败）、`listProcessGroup`；`findOwnedProcessesDetailed` 返回 `{ok:true,processes}|{ok:false,reason}`；identity-null 路径扫描失败或存在候选（命令/目录匹配不足以证明归属，可能是诱饵）时一律**只读失败、不杀**，不再写 `stopped`；`close` 失败则 core 不放锁 | `tests/process/lifecycle.test.ts` “scan availability” 两条 + “identity-null decoy” 用例；`tests/process/ownership.test.ts`；QA `PROCESS-SCAN-01` / `PROCESS-GROUP-ATTR01` 转绿 |
+| P2-A 重启覆盖旧遗留进程组（#57） | 已修：`start()` 在新 spawn / 覆盖 record 之前，先用**旧 record 的证据**解析旧进程组；解析成功才新启动，不可证则 `INTERNAL_ERROR` 且**不覆盖旧归属记录**，便于后续/人工处理 | `tests/process/lifecycle.test.ts` “restart over a crashed predecessor” 两条；QA `PROCESS-RESTART-01` 转绿 |
+| P2-B 成员级归属与防组复用（#57/#59） | 已修：`cleanupLostLeaderTree` 逐成员证明——组内成员且（命令/生成目录证据 **或** 成员在记录的 leader 退出时间之前已存在，后者为 OS 进程组证据：leader 存活时组号属于我们，未空置不可能被复用）；逐成员 SIGKILL，未知成员不杀；存在不可证成员/扫描失败则 fail-closed、保留 record、`close` 失败不放锁。早期 `watchExit` 收尾也走同一证明 | `tests/process/leftovers.test.ts`（命令证据/退出时间证据/退出后无证据拒杀/扫描失败/真空）；`tests/process/lifecycle.test.ts` “cleans up a crashed parent's descendants…” |
+| P2-C 受管 env 五键映射（#60） | 已修：五键精确映射与 core `#baseLaunchEnvironment` 一致（含 `PATH=join(generationDirectory,"node","bin")+":/usr/bin:/bin:/usr/sbin:/sbin"`）；`handle.env` 任一受管键不一致 → spawn 前受控 `INTERNAL_ERROR` 且 `finally dispose()`；`DSH_TELEMETRY_DISABLED`/`NODE_NO_WARNINGS` 为启动策略键、单列 | `tests/process/core-loader-wiring.test.ts`（真实 core loader→strict port→manager）；`tests/process/lifecycle.test.ts` 三条冲突拒绝；QA `PROCESS-ENV-MAP01`/`-CONFLICT` 转绿 |
 | P3-1 `LaunchRecordStore.write` 未校验 opaque ID | 已修：与 read/remove 一致校验 | `records.ts` |
 | P3-2 凭据响应形状未校验 | 已修：运行时校验 `PortOutcome` 与 handle 形状，映射为受控 `INTERNAL_ERROR`（不再出现 `undefined` code/message） | `lifecycle.test.ts` “rejects a malformed credential result …” |
 | P3-3 `captureIdentity` 条件反向 | 已修：活着的 pid 读不到时在 2s 内重试；进程已死时立即失败 | `lifecycle.test.ts` “retries identity capture …” |
-| P3-4 launch env 可覆盖受管 PATH/TMPDIR | 已修：受管 env 权威（反向合并），并拒绝 launch env 覆盖 `HOME`/`DSH_HOME` | `lifecycle.test.ts` “rejects a launch env that overrides HOME” / “keeps the managed PATH authoritative” |
+| P3-4 launch env 可覆盖受管 PATH/TMPDIR | 已修：五键一致性校验（见 P2-C）；不静默覆盖 | `lifecycle.test.ts` “rejects a launch env that disagrees with … HOME/PATH/DSH_AGENTS_HOME” |
 | P3-5 startToken 秒级粒度 | 跟踪：#59（低频、需要同秒 pid 复用且命令一致）；本文件如实记录 | — |
 | P3-6 adopt 端点归属 TOCTOU | 跟踪：#59；受 loopback + 唯一 generation 路径约束，不扩大平台声明 | — |
 | P3-7 `run-command` 拼接 OS `error.message` | 已修：只保留 OS error code 的受控文案 | `run-command.ts` |
 
-保留旧 `findOwnedProcesses`/`findIdsByCommandFragment` 返回数组的兼容签名（QA 合成测试与既有消费方使用），但生产清理路径一律使用 `findOwnedProcessesDetailed` / `tryFindIdsByCommandFragment`，因此扫描失败不再可能被误判为空。
+`findOwnedProcesses`/`scan`/`findIdsByCommandFragment` 的旧数组返回签名保留但已标 `@deprecated`（QA 合成用例仍用）；生产清理一律使用 `findOwnedProcessesDetailed`/`tryFindIdsByCommandFragment`，扫描失败不可能被误判为空。逐成员证明只在身份存在时适用；identity-null 记录即使命令与目录双匹配也**不**视为归属证据（诱饵，QA `PROCESS-GROUP-ATTR01`）。
 
 ## 未测 / 缺口
 
@@ -196,6 +212,6 @@ reviewed SHA `49b5d599…` → `CHANGES_REQUESTED`（2 P2 + 7 P3）。本轮处�
 - **跨实例/跨进程 dataRoot 锁**：归 #43（core）；本模块只注入并不自定锁。锁设计仍在审核（目录主锁 + TCP loopback guard），本文件不把该设计当作已安全。
 - **core 整合未完成**：`EnvironmentService` 尚未注入本端口（#43 分支）。凭据适配器（#44，#46 merge `ead40c1`）已接入并由 runtime 根 index 导出。
 - **adopted 后 openWebUI 的存活复核**：采用 loopback TCP 可达 + 身份匹配；未覆盖 DSH 进程存活但 HTTP 层挂起的场景（会落到 reconcile 的停止路径）。
-- **进程组 id 复用的残余风险**：崩溃后仅凭记录的 `pgid` 清理后代；`pid-reused` 时不发信号，若组仍有成员则保守失败。pgid 整个被复用且恰好有成员的情形未消除（#57）。
+- **进程组归属的 OS 依据与残差**：崩溃后逐成员清理时，除命令/生成目录证据外，使用“成员在记录的 leader 退出时间之前已存在”作为 OS 进程组证据（leader 存活时组号属于我们，组未空置便被复用不成立）。残差：`ps -o lstart=` 为秒级，退出边界有 1s 容忍；完整无歧义需要 supervisor/组级 mark，#57/#59 跟踪并请 #8 确认该 OS 路线。
 - **子进程 stdout/stderr 不落盘**：因此没有 DSH 启动诊断文件；T006 的诊断导出需另行设计（不在本切片）。
 - 未在真实“启动后取消”与“就绪后立即停止”的时序上做穷尽并发压测；关键分支由确定性门控覆盖，无 `skip`/`it.fails` 冒充。

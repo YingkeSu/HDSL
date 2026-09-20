@@ -113,9 +113,11 @@ export const findOwnedProcessesDetailed = (
 
 /**
  * Legacy convenience wrapper used by tests: returns the matched processes and
- * collapses an unavailable scan to `[]`. Production cleanup paths must use
- * {@link findOwnedProcessesDetailed} so a failed scan is never mistaken for an
- * empty one.
+ * collapses an unavailable scan to `[]`.
+ *
+ * @deprecated Production cleanup. Use {@link findOwnedProcessesDetailed} so a
+ * failed scan is never mistaken for an empty one. Kept exported only for
+ * existing test consumers.
  */
 export const findOwnedProcesses = (
   probe: ProcessProbe,

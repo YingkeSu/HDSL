@@ -227,23 +227,35 @@ export const launchFixture = (
   dataRoot: string,
   environmentId: string,
   overrides: Partial<ProcessLaunchRecord> = {},
-): ProcessLaunchRecord => ({
-  schemaVersion: '1',
-  environmentId,
-  expectedRevision: 1,
-  generationDirectory: join(dataRoot, 'environments', environmentId, 'generations', 'gentest0001'),
-  commandFragment: process.execPath,
-  state: 'running',
-  identity: null,
-  endpoint: null,
-  exitCode: null,
-  errorCode: null,
-  errorDetail: null,
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-  sequence: 1,
-  ...overrides,
-});
+): ProcessLaunchRecord => {
+  const generationDirectory = join(
+    dataRoot,
+    'environments',
+    environmentId,
+    'generations',
+    'gentest0001',
+  );
+  return {
+    schemaVersion: '1',
+    environmentId,
+    expectedRevision: 1,
+    generationDirectory,
+    // Unique per generation, like the real managed DSH entrypoint: a generic
+    // `node` command line must never count as ownership evidence.
+    commandFragment: join(generationDirectory, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'),
+    state: 'running',
+    identity: null,
+    endpoint: null,
+    exitCode: null,
+    processExitedAt: null,
+    errorCode: null,
+    errorDetail: null,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sequence: 1,
+    ...overrides,
+  };
+};
 
 export interface DetachedProcess {
   readonly pid: number;
