@@ -46,4 +46,17 @@ describe('production entry has no test hooks', () => {
     expect(pkg.main).toBe('./dist/main/index.js');
     expect(pkg.files?.some((entry) => entry.includes('qa-entry'))).toBe(true);
   });
+
+  it('writes the data-root-unavailable signal before the modal and exits non-zero', () => {
+    const app = source('apps/desktop/src/main/app.ts');
+    const signalIndex = app.indexOf('formatDataRootUnavailableSignal');
+    const dialogIndex = app.indexOf("'数据目录被占用'");
+    expect(signalIndex).toBeGreaterThanOrEqual(0);
+    expect(dialogIndex).toBeGreaterThan(signalIndex);
+    expect(app).toContain('app.exit(1)');
+    // The signal module is pure: no environment or filesystem access.
+    const signals = source('apps/desktop/src/main/app-signals.ts');
+    expect(signals).not.toContain('process.env');
+    expect(signals).not.toContain('node:fs');
+  });
 });

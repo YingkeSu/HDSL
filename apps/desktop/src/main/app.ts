@@ -20,6 +20,7 @@ import {
   type VerifiedWebUiOpener,
 } from './composition.js';
 import { applyCredentialFile, hasLaunchCredentialReference } from './credential-import.js';
+import { dataRootUnavailableReason, formatDataRootUnavailableSignal } from './app-signals.js';
 import { resolveDataRoot } from './data-root.js';
 import type { DiagnosticsPathChooser } from './exporter.js';
 import {
@@ -304,11 +305,19 @@ const bootstrap = async (options: DesktopAppOptions): Promise<void> => {
   });
   composition = created;
   if (!created.available) {
+    // Fixed, secret-free attribution signal written BEFORE the modal box, so an
+    // operator/QA can attribute the refusal without a window or a page.
+    process.stderr.write(
+      formatDataRootUnavailableSignal(dataRootUnavailableReason(created.lockSnapshot())),
+    );
     dialog.showErrorBox(
       '数据目录被占用',
-      `另一个 HDSL 实例正在使用该数据目录，或独占锁无法获取：\n${dataRoot}\n\n请关闭另一个实例后重试。`,
+      '另一个 HDSL 实例正在使用该数据目录，或独占锁无法获取。\n请关闭另一个实例后重试。',
     );
-    app.quit();
+    // Do not write evidence into an unlocked data root; only release whatever
+    // this instance might still hold, then exit with a clear non-zero code.
+    await created.close();
+    app.exit(1);
     return;
   }
   ipcHost = new DesktopIpcHost({
