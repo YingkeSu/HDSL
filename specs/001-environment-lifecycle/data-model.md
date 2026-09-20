@@ -9,7 +9,7 @@
 | Environment | id, name, revision, stateVersion, activeGenerationId, state | id 为不透明内部 ID；name 不作为路径；见下方修订语义 |
 | EnvironmentSummary | id, name, revision, stateVersion, state, activeGenerationId, compositionDigest | `environments.list` 的只读视图；不含秘密、token 或本地路径 |
 | Generation | id, environmentId, compositionDigest, createdAt | 只属于一个环境；组成固定 |
-| CompositionLock | schemaVersion, node, dsh, plugins | node/dsh 为 RuntimeArtifactRef（不含 url）；精确版本、来源、摘要、平台；plugins 在首切片为空 |
+| CompositionLock | schemaVersion, node, dsh, plugins, sources | node/dsh 为 RuntimeArtifactRef（不含 url）；`sources` 并列保留下载 url 与 sha256 供来源追溯；plugins 在首切片为空 |
 | RuntimeCombination | id, platform, arch, node, dsh, compatibility, artifactLocations | node/dsh 为 RuntimeArtifactRef；`catalog.list` 的返回项；compatibility 至少含 status 与 evidenceRef，未核验组合不入列表；artifactLocations 并列记录下载 URL，不进入组成摘要 |
 | RuntimeArtifactRef | version, platform, arch, sha256 | 进入 CompositionLock 与组成摘要的字段子集；sha256 为 64 个十六进制字符（256 位，小写）；**不含 url** |
 | RuntimeArtifact | version, platform, arch, url, sha256 | 受审 catalog 的完整产物记录；url 仅作并列位置，不参与摘要 |
@@ -33,9 +33,9 @@
 
 ## 组成摘要（compositionDigest）规范
 
-- 输入是 CompositionLock 的**规范化 JSON**，且只包含定义字段子集：`schemaVersion`、`node`/`dsh`（各为 RuntimeArtifactRef 的 `version/platform/arch/sha256`）与排序后的 `plugins`。键按 UTF-8 字节序升序、无多余空白、字符串 UTF-8、数组保持语义顺序（插件按已定义排序键排序）。
-- 摘要在平台无关的规范化字节上计算：`SHA-256`，输出 64 个小写十六进制字符。
-- 相同语义输入跨平台必须得到同一摘要；T004 必须包含跨平台稳定性测试。下载 `url` 属于 RuntimeArtifact/RuntimeCombination 的并列记录，**不进入** CompositionLock 的摘要字段子集。
+- 输入是 CompositionLock 的**规范化 JSON 子集**（issue #15 N3）：`schemaVersion`、`node`/`dsh`（各为 RuntimeArtifactRef 的 `version/platform/arch/sha256`）与排序后的 `plugins`。CompositionLock 可以携带 `sources`（下载 url 与 sha256）用于来源追溯，但 `sources` **不属于**摘要输入，永不进入摘要。键按 UTF-8 字节序升序、无多余空白、字符串 UTF-8、数组保持语义顺序（插件按已定义排序键排序）。
+- 摘要在平台无关的规范化字节上计算：`SHA-256`，输出 64 个小写十六进制字符。可执行投影与规范化函数见 `packages/contracts/src/digest.ts`（`compositionDigestInput` / `serializeCompositionDigestInput`）；T004 负责对规范化字节做 SHA-256 与持久化。
+- 相同语义输入跨平台必须得到同一摘要；T004 必须包含跨平台稳定性测试。下载 `url` 属于 RuntimeArtifact/RuntimeCombination 的并列记录与 CompositionLock.sources，**不进入**组成摘要；镜像或带签名查询串的 URL 变化不得改变摘要。
 
 ## 状态机与运行数据
 
