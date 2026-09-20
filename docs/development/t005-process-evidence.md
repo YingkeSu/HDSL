@@ -133,7 +133,7 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
   pnpm exec vitest run tests/process/real-process.evidence.test.ts --reporter=verbose
 ```
 
-结果：`1 passed`，4.9s。
+结果：`1 passed`，4.3s。运行于本分支提交 `0d299b7134d296f8f4f089e74a1ec034e1eaf366`（基线 `7fbdc1e2`）。
 
 ```json
 {
@@ -142,7 +142,7 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
   "nodeVersion": "22.19.0",
   "dshVersion": "0.1.5-rc.2",
   "installMode": "npm-ci",
-  "origin": "http://127.0.0.1:63059",
+  "origin": "http://127.0.0.1:64111",
   "httpStatus": 401,
   "launchRecordState": "running",
   "startTokenPresent": true,
