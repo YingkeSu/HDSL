@@ -191,7 +191,7 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     negativeControl: '主 frame 的精确文档 URL 必须授权（纯函数）；真实 srcdoc 子 frame 无桥、该 frame 自身的 data: 导航失败；带桥子 frame 的真实 sender 拒绝未覆盖，不得用 popup/nav 或静态 CSP 配置冒充',
     requires: ['electron.window', 'ipc.sender-guard'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @2cdea54/3174447：真实窗口 window.open 返回 null、外部导航被拒且 URL 不变；真实 srcdoc 子 frame 执行但 window.hdsl/require/process/ipcRenderer 全 undefined；该 frame 自身的 data: 导航失败（chrome-error://chromewebdata/，按 data: src 归因）；带桥子 frame 的真实 senderFrame 拒绝仍未覆盖（纯函数 isMainFrame=false 已断言，另见 E2E-IFRAME-01）',
+    observation: "已执行 2026-09-20 @df3508b：测试宿主列（E2E-SENDERFRAME-01）真实子 frame 携带生产 preload 桥发真实 IPC，生产 senderFrame/isMainFrame 判定在 dispatch 前拒绝（全部 INTERNAL_ERROR，无 create/export/open 副作用），主 frame catalog.list 正控 ok；生产窗口列见 E2E-IFRAME-01"
   },
   {
     id: 'E2E-TRUST-04',
@@ -426,6 +426,19 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     requires: ['electron.window', 'preload.bridge', 'ipc.sender-guard'],
     status: 'executed',
     observation: '已执行 2026-09-20 @3174447：srcdoc 子 frame 实际执行（about:srcdoc + 可见 qa-frame）且 bridge 全 undefined；该 frame 的 data: 导航失败（chrome-error://chromewebdata/，按 data: src 归因）；主 frame catalog.list 前后 ok。静态 CSP 配置（default-src none、无 frame-src）另列；main senderFrame 真实拒绝与带桥子 frame 未覆盖',
+  },
+  {
+    id: 'E2E-SENDERFRAME-01',
+    title: '测试宿主列：真实子 frame 带生产桥发真实 IPC，被生产 senderFrame 判定在 dispatch 前拒绝',
+    requirements: ['FR-003', 'FR-007'],
+    lane: 'synthetic',
+    evidence: 'injected',
+    realUi: true,
+    determinismGate: '测试专用 Electron 宿主加载生产 DesktopIpcHost/信任策略与生产 preload 原件；仅宿主开启 nodeIntegrationInSubFrames 让真实子 frame 持桥；有界等子 frame postMessage 结果',
+    negativeControl: '子 frame 任一方法若返回 ok:true、或返回 NOT_FOUND/UNSUPPORTED_COMBINATION（说明已进入 dispatch）、或产生 create/export/open 副作用即失败；主 frame catalog.list 必须 ok:true',
+    requires: ['electron.window', 'preload.bridge', 'ipc.sender-guard'],
+    status: 'executed',
+    observation: '已执行 2026-09-20 @df3508b：真实子 frame bridgePresent=true，catalog/create/export/openWebUI 全部 ok:false + INTERNAL_ERROR（无 NOT_FOUND），无环境/导出副作用、无原始异常/路径/secret；主 frame catalog.list ok:true（生产 catalog 2 条）。该宿主为纵深验证列，不是产品第一层防线（产品窗口列见 E2E-IFRAME-01）',
   },
 ];
 
