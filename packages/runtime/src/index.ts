@@ -14,3 +14,8 @@
 export * from './catalog/index.js';
 export * from './composition/index.js';
 export * from './install/index.js';
+export * from './process/index.js';
+export * from './reconcile/index.js';
+// `./credentials/index.js` (T005b / #44) is exported once that slice is
+// present: the process manager consumes it through the structural
+// `LaunchCredentialPort`, so the two directories never import each other.
