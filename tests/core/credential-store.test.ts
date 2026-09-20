@@ -5,13 +5,15 @@
  * loader builds the explicit child base environment from the committed
  * generation paths and fails closed on a missing/corrupt record.
  */
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { portOk, type RuntimeCombination } from '@hdsl/contracts';
 import {
   createManagedInstall,
+  CredentialStore,
+  resolveLayout,
   type CredentialBinding,
   type ManagedInstall,
   type ManagedProcessPort,
@@ -215,6 +217,20 @@ describe('environment credential reference store', () => {
     expect(cleared.ok).toBe(true);
     expect(existsSync(harness.recordPath)).toBe(false);
     await expect(harness.managed.service.launchCredentialRequest(harness.environmentId)).rejects.toThrow();
+  });
+
+  it('cleans its own temp file and preserves the old target when the atomic rename fails', () => {
+    const dataRoot = freshRoot();
+    const layout = resolveLayout(dataRoot);
+    const store = new CredentialStore(layout);
+    const environmentId = 'env-credentialtmp0';
+    const directory = join(layout.environments, environmentId);
+    // A non-empty directory at the target path makes rename(file, target) fail.
+    mkdirSync(join(directory, 'credentials.json', 'keep'), { recursive: true });
+    expect(() => store.write(environmentId, [binding()], 0, new Date().toISOString())).toThrow();
+    expect(statSync(join(directory, 'credentials.json')).isDirectory()).toBe(true);
+    const leftovers = readdirSync(directory).filter((name) => name.includes('.tmp-'));
+    expect(leftovers).toEqual([]);
   });
 
   it('guards the environment revision and increments the record revision', async () => {

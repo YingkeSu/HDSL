@@ -25,7 +25,7 @@ import {
   type CredentialReference,
   type ValidationIssue,
 } from '@hdsl/contracts';
-import { chmodSync, closeSync, fsyncSync, openSync, renameSync, writeSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, openSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { ensureDirectory, pathExists, readTextFile, removePath } from './fsx.js';
 import { environmentDirectory, type AppDataLayout } from './layout.js';
@@ -104,7 +104,12 @@ export class CredentialStore {
     if (!pathExists(path)) {
       return { kind: 'missing' };
     }
-    const raw = readTextFile(path);
+    let raw: string | undefined;
+    try {
+      raw = readTextFile(path);
+    } catch {
+      return { kind: 'invalid', message: 'the credential record could not be read' };
+    }
     if (raw === undefined) {
       return { kind: 'missing' };
     }
@@ -145,31 +150,71 @@ export class CredentialStore {
     removePath(this.recordPath(environmentId));
   }
 
+  /**
+   * Writes the record atomically with `0600` permissions.
+   *
+   * The staging file is uniquely named and is removed on any failure before the
+   * rename publishes it, so a failed write never leaves a temp file behind and
+   * never deletes anything it does not own. A close failure cannot mask the
+   * original write/fsync error.
+   */
   #writeAtomic(path: string, data: string): void {
     ensureDirectory(dirname(path));
     temporaryCounter += 1;
     const temporary = `${path}.tmp-${String(process.pid)}-${String(temporaryCounter)}`;
-    const descriptor = openSync(temporary, 'wx', 0o600);
+    let published = false;
     try {
-      writeSync(descriptor, data);
-      fsyncSync(descriptor);
-    } finally {
-      closeSync(descriptor);
-    }
-    chmodSync(temporary, 0o600);
-    renameSync(temporary, path);
-    try {
-      chmodSync(path, 0o600);
-    } catch {
-      // Some platforms refuse chmod on an already-correct file; the rename kept 0600.
-    }
-    const directory = openDirectoryBestEffort(dirname(path));
-    if (directory !== undefined) {
+      const descriptor = openSync(temporary, 'wx', 0o600);
+      let bodyError: unknown;
       try {
-        fsyncSync(directory);
+        writeSync(descriptor, data);
+        fsyncSync(descriptor);
+      } catch (error) {
+        bodyError = error;
+        throw error;
       } finally {
-        closeSync(directory);
+        try {
+          closeSync(descriptor);
+        } catch (closeError) {
+          // A close failure must not mask a write/fsync failure.
+          if (bodyError === undefined) {
+            throw closeError;
+          }
+        }
       }
+      chmodSync(temporary, 0o600);
+      renameSync(temporary, path);
+      published = true;
+      try {
+        chmodSync(path, 0o600);
+      } catch {
+        // Some platforms refuse chmod on an already-correct file; the rename kept 0600.
+      }
+      this.#fsyncDirectory(dirname(path));
+    } catch (error) {
+      if (!published) {
+        // Remove only our own uniquely named staging file; never mask the error.
+        try {
+          rmSync(temporary, { force: true });
+        } catch {
+          // Best effort: the original error is what the caller must see.
+        }
+      }
+      throw error;
+    }
+  }
+
+  #fsyncDirectory(path: string): void {
+    const directory = openDirectoryBestEffort(path);
+    if (directory === undefined) {
+      return;
+    }
+    try {
+      fsyncSync(directory);
+    } catch {
+      // Directory fsync is best-effort; the file content was already fsynced.
+    } finally {
+      closeSync(directory);
     }
   }
 }
