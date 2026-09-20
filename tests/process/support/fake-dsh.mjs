@@ -101,10 +101,33 @@ if (mode === 'exit') {
 
 writeInfo();
 
+const TOKEN = process.env.FAKE_DSH_TOKEN ?? 't'.repeat(40);
+
 if (mode === 'never-ready') {
   setInterval(() => {}, 1 << 30);
 } else {
-  server = http.createServer((_request, response) => {
+  server = http.createServer((request, response) => {
+    // Mimic the rc.2 WebUI auth boundary (T001 R004): the token URL issues the
+    // dsh-auth cookie with a 303; the token-free origin without the cookie is
+    // 401; the cookie authenticates. Used only by controlled tests.
+    const requestUrl = new URL(request.url ?? '/', 'http://127.0.0.1');
+    const cookie = request.headers.cookie ?? '';
+    if (requestUrl.searchParams.get('token') === TOKEN) {
+      response.statusCode = 303;
+      response.setHeader('Location', '/');
+      response.setHeader(
+        'Set-Cookie',
+        'dsh-auth-test=ok; HttpOnly; SameSite=Strict; Max-Age=2592000',
+      );
+      response.end();
+      return;
+    }
+    if (cookie.includes('dsh-auth-test=ok')) {
+      response.statusCode = 200;
+      response.setHeader('Content-Type', 'text/html');
+      response.end('<!doctype html><html><body>managed webui</body></html>');
+      return;
+    }
     response.statusCode = 401;
     response.end('unauthorized');
   });
@@ -119,7 +142,7 @@ if (mode === 'never-ready') {
   server.listen(Number(portArgument), host, () => {
     const address = server.address();
     const port = typeof address === 'object' && address !== null ? address.port : Number(portArgument);
-    process.stdout.write(`dsh web: http://${host}:${String(port)}/?token=${'t'.repeat(40)}\n`);
+    process.stdout.write(`dsh web: http://${host}:${String(port)}/?token=${TOKEN}\n`);
     writeInfo({ ready: true, port });
     const exitAfter = Number(process.env.FAKE_DSH_EXIT_AFTER_READY_MS ?? '0');
     if (Number.isFinite(exitAfter) && exitAfter > 0) {
