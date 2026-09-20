@@ -23,7 +23,8 @@
 | hdsl-3 候选版本 | tag `dsh-v0.1.5-rc.2` = `fb2c4b9e698e30edb738bca4cf0618587db7d203` | `git ls-remote --tags origin 'dsh-v0.1.5-rc.2'`，与 hdsl-3 提供一致 |
 | 本机已构建版本 | tag `dsh-v0.1.6-alpha.2` = `ddefc45fbc7f8e46dd73185e68295696d1297887` | `git rev-parse HEAD` 与 `git ls-remote --tags` 一致；GitHub Release 2026-09-17 Pre-release |
 | npm dist-tags | `latest=0.1.5-rc.2`，`alpha=0.1.6-alpha.2`，`next=0.1.5-rc.2` | `npm view @deepseek-ai/dsh dist-tags` |
-| npm 完整性（rc.2） | `sha512-PHR/3ZHpJNWXlDQ3UweFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==` | `npm view @deepseek-ai/dsh@0.1.5-rc.2 dist.integrity`（`shasum=37d635377c9807c47d49d662ca00d6d5ea5792de`） |
+| npm 完整性（`0.1.5-rc.2`） | integrity `sha512-8Xc8hCQHcIWRmTCVU/xZdp6/qMsWMeAd2ObChKDEsfhUPJFXx6H0lgeb1DxUMD86HZrrVN+1bCvn1ppjZ/fOxw==`，shasum `2c78db39568d910868f1e4f34062a4f346d4815d` | `npm view @deepseek-ai/dsh@0.1.5-rc.2 dist.integrity dist.shasum`；`curl https://registry.npmjs.org/@deepseek-ai%2Fdsh` 读 packument；实下载 tarball 复算 `sha1`/`sha512`（三处一致） |
+| npm 完整性（`0.1.6-alpha.2`） | integrity `sha512-PHR/3ZHpJNWXlDQ3UweFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==`，shasum `37d635377c9807c47d49d662ca00d6d5ea5792de` | 同上（`@0.1.6-alpha.2`） |
 | Node engine | `^22.19.0 \|\| >=24.0.0` | 仓库根 `package.json` `engines.node` |
 
 **注意**：npm `latest` 会随发布变动；T001 支持矩阵必须写显式版本 + tag SHA + 完整性，不要写 `latest`。本次两个版本均从 npm 安装到独立目录，安装命令见第 12 节。
@@ -50,9 +51,9 @@
 
 ## 5. 分版本结果摘要
 
-两次**独立完整运行**均 `EXIT=0`（脚本自动计数）：rc.2 `38/38`，alpha.2 `40/40`。不要合并解读两个版本的结论。
+两次**独立完整运行**均 `EXIT=0`（脚本自动计数）：rc.2 `37/37 passed, 0 failed`（notes/N/A 3），alpha.2 `39/39 passed, 0 failed`（notes/N/A 1）。不要合并解读两个版本的结论。
 
-### 5.1 0.1.5-rc.2（install root `/tmp/dsh-015`，label `0.1.5-rc.2`，`assertions: 38/38 passed, 0 failed`）
+### 5.1 0.1.5-rc.2（install root `/tmp/dsh-015`，label `0.1.5-rc.2`，`assertions: 37/37 passed, 0 failed`）
 
 | 编号 | 场景 | 结果 |
 | --- | --- | --- |
@@ -63,9 +64,9 @@
 | S3 | loopback 就绪、token/cookie 鉴权、仅 `127.0.0.1`、`0.0.0.0` 拒绝 | PASS（200 HTML 27,660 字节） |
 | S4 | 端口占用 → exit 1 + `EADDRINUSE`；**无结构化诊断文件** | PASS（见 7.2 差异） |
 | S5 | `SIGTERM`→0、`SIGINT`→130、端口释放、无关进程存活 | PASS |
-| S6 | 回退 symlink 全部锚定安装根；凭据 0600/每环境独立 | PASS（646 链接，0 越界） |
+| S6 | 回退 symlink 全部锚定安装根；凭据 0600/每环境独立 | PASS（482 链接，0 越界） |
 
-### 5.2 0.1.6-alpha.2（install root 本机 checkout，label `0.1.6-alpha.2`，`assertions: 40/40 passed, 0 failed`）
+### 5.2 0.1.6-alpha.2（install root 本机 checkout，label `0.1.6-alpha.2`，`assertions: 39/39 passed, 0 failed`）
 
 | 编号 | 场景 | 结果 |
 | --- | --- | --- |
@@ -76,7 +77,7 @@
 | S3 | loopback 就绪、token/cookie 鉴权、仅 `127.0.0.1`、`0.0.0.0` 拒绝 | PASS（200 HTML 31,187 字节） |
 | S4 | 端口占用 → exit 1 + 结构化 `startup failed` + `logs/startup-*.log` | PASS |
 | S5 | `SIGTERM`→0、`SIGINT`→130、端口释放、无关进程存活 | PASS |
-| S6 | **未创建** `profiles/node_modules`（runtime resolution）；凭据 0600/每环境独立 | PASS（fallback 记为 NOTE） |
+| S6 | **未创建** `profiles/node_modules`（runtime resolution）；凭据 0600/每环境独立 | PASS（fallback 记 N/A，未冒充锚点验证） |
 
 ## 6. 两个版本一致的行为（各自独立复验）
 
@@ -98,7 +99,7 @@
 | | 0.1.5-rc.2 | 0.1.6-alpha.2 |
 | --- | --- | --- |
 | 首次 `web` 启动是否创建 | **是** | **否** |
-| 内容 | 646 个包 symlink（含 `@scope/` 下嵌套），递归全部指向安装根 | 无 |
+| 内容 | 482 个包 symlink（含 `@scope/` 下嵌套），递归全部指向安装根 | 无 |
 | 解析方式 | 磁盘 symlink 回退（`healProfilesModuleFallback`） | runtime resolution（`resolutionMode` 默认 `runtime`，只计算不落盘） |
 | `--dump-config` 是否创建 | 否 | 否 |
 
@@ -118,16 +119,24 @@ rc.2 实测 `$DSH_HOME/profiles/node_modules/@deepseek-ai/dsh-base` → `/privat
 
 ## 8. 受管安装隔离：回退 symlink 与安装锚点
 
-用 [dsh_install_anchor_probes.sh](../../tests/probes/dsh_install_anchor_probes.sh) 对比两个独立安装（两次运行，结果见下）。
+用 [dsh_install_anchor_probes.sh](../../tests/probes/dsh_install_anchor_probes.sh) 对比两个独立安装（两次运行，结果见下）。回退链接计数用单次 `os.walk`（`dirnames + filenames`），与 `find -type d/-type l` 对齐；不适用时打印显式 `N/A` 并在 SUMMARY 标注 `notes/not-applicable` 与 verdict，未真正执行的锚点测试不冒充通过。
+
+### 8.0 计数校正
+
+早期脚本重复统计了顶层 symlink（`os.walk` 计入目录软链接后又对顶层 `os.listdir` 再计一次），rc.2 安装的 `$DSH_HOME/profiles/node_modules` 实际是 **482** 个软链接，不是 646。修正后 helper 与 `find -type l` 一致（真实 rc.2 回退 482；合成树 4 vs 旧实现 6）。`outside_install_root==0` 结论不变。
 
 ### 8.1 同一版本、两个安装目录（A=`/tmp/dsh-015`，B=`/tmp/dsh-015b`，均 0.1.5-rc.2）
 
-- 独立环境：home A 的 646 链接全部锚定 A，home B 全部锚定 B → 每环境独立安装即可独立解析。
+脚本实测：`assertions: 11/11 passed, 0 failed; notes/not-applicable: 1`，verdict 为“已由至少一条断言覆盖”。
+
+- 独立环境：home A 的 482 链接全部锚定 A，home B 全部锚定 B → 每环境独立安装即可独立解析。
 - 共享安装：两个 home C/D 都由 A 启动，二者核心模块都锚定 A → **共享一个安装时，核心 bundle 模块不按环境隔离**。
 - 重新指向：已由 A 初始化的 home A 再用 B 启动后，链接**重新锚定**到 B（`@deepseek-ai/dsh-base` 变为 B 路径）→ 回退是**可变状态，跟随最后一次启动所用的安装**，不是环境自己 pin 的。
 - 凭据：四个 home 各自 `0600`，无越界。
 
 ### 8.2 不同版本（A=`/tmp/dsh-015` 0.1.5-rc.2，B=`/tmp/dsh-016` 0.1.6-alpha.2）
+
+脚本实测：`assertions: 8/8 passed, 0 failed; notes/not-applicable: 3`。home B 的 fallback 不存在，相关逐安装与 re-anchor 断言明确标为 `N/A`，未作为通过计数；home A（rc.2）的锚点断言真实执行。
 
 - home B 无回退链接（alpha.2 行为）。
 - home A 用 alpha.2 重新启动后，磁盘上**遗留** rc.2 的旧链接（仍指向 `/tmp/dsh-015`）；alpha.2 不重写。alpha.2 采用 runtime resolution，该遗留是否被实际采用未验证（见第 11 节）。

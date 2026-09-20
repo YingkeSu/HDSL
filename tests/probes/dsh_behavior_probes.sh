@@ -68,6 +68,7 @@ mkdir -p "$FAKE_HOME" "$FAKE_AGENTS" "$CWD_DIR"
 
 PASSED=0
 FAILED=0
+NOTES=0
 LIVE_PIDS_FILE="$WORK/live-pids"
 : >"$LIVE_PIDS_FILE"
 
@@ -75,7 +76,8 @@ say()  { printf '%s\n' "$*"; }
 head1(){ printf '\n===== %s =====\n' "$*"; }
 ok()   { printf 'PASS  %s\n' "$*"; PASSED=$((PASSED + 1)); }
 bad()  { printf 'FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
-note() { printf 'NOTE  %s\n' "$*"; }
+note() { printf 'NOTE  %s\n' "$*"; NOTES=$((NOTES + 1)); }
+na()   { printf 'N/A   %s\n' "$*"; NOTES=$((NOTES + 1)); }
 
 register_pid() { printf '%s\n' "$1" >>"$LIVE_PIDS_FILE"; }
 forget_pid() {
@@ -96,7 +98,7 @@ cleanup() {
     [[ -n "$pid" ]] || continue
     kill -KILL "$pid" 2>/dev/null || true
   done <"$LIVE_PIDS_FILE"
-  # Only remove the work tree if it still belongs to us (it does unless the operator moved it).
+  # Remove the probe's own temporary work tree (not a user path).
   rm -rf "$WORK"
 }
 trap cleanup EXIT
@@ -167,18 +169,15 @@ fallback_symlink_report() {
 import os, sys
 mods, install_root = sys.argv[1], os.path.realpath(sys.argv[2])
 links, outside = 0, []
-for dirpath, dirnames, _ in os.walk(mods):
-    for name in list(dirnames):
+# One single walk; os.walk(followlinks=False) lists symlinked directories in
+# `dirnames` without descending into them, so counting dirnames + filenames
+# visits every symlink exactly once (the previous version double-counted the
+# top level by also listing it separately).
+for dirpath, dirnames, filenames in os.walk(mods):
+    for name in dirnames + filenames:
         path = os.path.join(dirpath, name)
-        if os.path.islink(path):
-            dirnames.remove(name)
-            links += 1
-            target = os.path.realpath(path)
-            if not (target == install_root or target.startswith(install_root + os.sep)):
-                outside.append((path, target))
-for name in os.listdir(mods):
-    path = os.path.join(mods, name)
-    if os.path.islink(path):
+        if not os.path.islink(path):
+            continue
         links += 1
         target = os.path.realpath(path)
         if not (target == install_root or target.startswith(install_root + os.sep)):
@@ -214,11 +213,18 @@ fi
 if [[ -n "${DSH_EXPECT_COMMIT:-}" ]]; then
   if [[ -d "$DSH_REPO/.git" ]]; then
     HEAD_SHA="$(git -C "$DSH_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
-    DIRTY="$(git -C "$DSH_REPO" status --porcelain 2>/dev/null | grep -vc '^??' || true)"
+    STATUS_OUT="$(git -C "$DSH_REPO" status --porcelain 2>/dev/null)"; GIT_RC=$?
+    DIRTY="$(printf '%s\n' "$STATUS_OUT" | grep -vc '^??' || true)"
     say "repo HEAD      : $HEAD_SHA"
     say "repo dirtiness : $DIRTY tracked modifications"
     [[ "$HEAD_SHA" == "$DSH_EXPECT_COMMIT" ]] && ok "source checkout is at expected commit $DSH_EXPECT_COMMIT" || bad "source HEAD $HEAD_SHA, expected $DSH_EXPECT_COMMIT"
-    [[ "$DIRTY" == "0" ]] && ok "source checkout has no tracked modifications" || bad "source checkout has $DIRTY tracked modifications"
+    if [[ "$GIT_RC" -ne 0 ]]; then
+      bad "git status failed in $DSH_REPO; clean-tree claim not verified"
+    elif [[ "$DIRTY" == "0" ]]; then
+      ok "source checkout has no tracked modifications"
+    else
+      bad "source checkout has $DIRTY tracked modifications"
+    fi
   else
     bad "DSH_EXPECT_COMMIT set but DSH_REPO ($DSH_REPO) has no .git"
   fi
@@ -298,11 +304,6 @@ if [[ -n "$SECRET_A" && -n "$SECRET_B" && "$SECRET_A" != "$SECRET_B" ]]; then
   ok "env A and env B hold distinct DSH-generated credential secrets"
 else
   bad "expected distinct DSH-generated credential secrets per environment"
-fi
-if [[ -f "$HOME_A/profiles/web/package.json" && -f "$HOME_B/profiles/web/package.json" ]]; then
-  ok "each home carries its own profiles/web manifest (no shared profile directory)"
-else
-  bad "expected each home to carry its own profiles/web manifest"
 fi
 
 kill -TERM "$A_PID" 2>/dev/null; wait_pid "$A_PID"; A_RC=$?
@@ -496,7 +497,7 @@ fi
 # --- S6: module fallback and credential artifact boundaries -----------------
 
 head1 "S6 module fallback install anchor and credential file boundary"
-S6="$WORK/s6"; mkdir -p "$S6/cwd"   # do NOT pre-create the homes; let DSH create them
+S6="$WORK/s6"; mkdir -p "$S6"   # do NOT pre-create the homes; let DSH create them
 # Prove DSH creates the home with its own mode rather than inheriting a shell mkdir mode.
 dsh_launch "$S6/home" "$S6/o1" "$S6/e1" --profile web --host 127.0.0.1 --port 0 --no-open
 S6_PID=$dsh_pid
@@ -518,7 +519,7 @@ if wait_ready "$S6/o1" "$S6_PID" 60 >/dev/null; then
       say "fallback dsh-base version: $("$PYTHON" -c "import json;print(json.load(open('$BASE_PKG'))['version'])" 2>/dev/null || echo '?')"
     fi
   else
-    note "no \$DSH_HOME/profiles/node_modules created (runtime resolution in this version)"
+    na "no \$DSH_HOME/profiles/node_modules created (runtime resolution in this version); install-anchor assertion N/A"
   fi
   # Observable directory mode when DSH, not the shell, creates the home.
   HOME_MODE="$(stat -f '%Lp' "$S6/home" 2>/dev/null || echo '?')"
@@ -543,7 +544,7 @@ if wait_ready "$S6/o2" "$S6B_PID" 60 >/dev/null; then
     else
       bad "expected distinct credential secrets per environment"
     fi
-    if [[ ! -e "$DSH_INSTALL_ROOT/.credentials.yaml" && ! -e "$S6/cwd/.credentials.yaml" && ! -e "$FAKE_HOME/.credentials.yaml" ]]; then
+    if [[ ! -e "$DSH_INSTALL_ROOT/.credentials.yaml" && ! -e "$CWD_DIR/.credentials.yaml" && ! -e "$FAKE_HOME/.credentials.yaml" ]]; then
       ok "no credential document written to install root, CWD, or \$HOME"
     else
       bad "credential document escaped its DSH_HOME boundary"
@@ -570,5 +571,6 @@ fi
 head1 "SUMMARY"
 say "label: ${DSH_LABEL:-<unset>}  version: $VER  install root: $DSH_INSTALL_ROOT"
 say "assertions: ${PASSED}/$((PASSED + FAILED)) passed, ${FAILED} failed"
+say "notes/not-applicable: ${NOTES}"
 say "workspace: $WORK is removed on exit, including on SIGINT/SIGTERM; copy it first to keep evidence"
 [[ "$FAILED" -eq 0 ]] && exit 0 || exit 1

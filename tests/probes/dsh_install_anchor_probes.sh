@@ -34,7 +34,8 @@ for b in "$BIN_A" "$BIN_B"; do [[ -f "$b" ]] || { echo "FATAL: missing CLI bin $
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/hdsl-anchor.XXXXXX")"
 FAKE_HOME="$WORK/fakehome"; CWD_DIR="$WORK/cwd"
 mkdir -p "$FAKE_HOME" "$CWD_DIR"
-PASSED=0; FAILED=0
+PASSED=0; FAILED=0; NOTES=0
+ANCHOR_APPLICABLE=0
 LIVE_PIDS_FILE="$WORK/live-pids"
 : >"$LIVE_PIDS_FILE"
 
@@ -42,7 +43,8 @@ say()  { printf '%s\n' "$*"; }
 head1(){ printf '\n===== %s =====\n' "$*"; }
 ok()   { printf 'PASS  %s\n' "$*"; PASSED=$((PASSED + 1)); }
 bad()  { printf 'FAIL  %s\n' "$*"; FAILED=$((FAILED + 1)); }
-note() { printf 'NOTE  %s\n' "$*"; }
+note() { printf 'NOTE  %s\n' "$*"; NOTES=$((NOTES + 1)); }
+na()   { printf 'N/A   %s\n' "$*"; NOTES=$((NOTES + 1)); }
 
 register_pid() { printf '%s\n' "$1" >>"$LIVE_PIDS_FILE"; }
 forget_pid() {
@@ -101,16 +103,13 @@ fallback_all_under() {
 import os, sys
 mods, root = sys.argv[1], os.path.realpath(sys.argv[2])
 links, outside = 0, 0
-for dirpath, dirnames, _ in os.walk(mods):
-    for name in list(dirnames):
+# Single walk; os.walk lists symlinked dirs in dirnames without descending, so
+# dirnames + filenames visits every symlink once (no top-level double count).
+for dirpath, dirnames, filenames in os.walk(mods):
+    for name in dirnames + filenames:
         path = os.path.join(dirpath, name)
-        if os.path.islink(path):
-            dirnames.remove(name); links += 1
-            t = os.path.realpath(path)
-            if not (t == root or t.startswith(root + os.sep)): outside += 1
-for name in os.listdir(mods):
-    path = os.path.join(mods, name)
-    if os.path.islink(path):
+        if not os.path.islink(path):
+            continue
         links += 1
         t = os.path.realpath(path)
         if not (t == root or t.startswith(root + os.sep)): outside += 1
@@ -139,13 +138,20 @@ say "home A fallback: present=$PA target=$TA under_root=$UA dsh-base=$VA"
 say "home B fallback: present=$PB target=$TB under_root=$UB dsh-base=$VB"
 if [[ "$PA" == present ]]; then
   read -r nA outA <<<"$(fallback_all_under "$HA/profiles/node_modules" "$ROOT_A")"
+  ANCHOR_APPLICABLE=1
   [[ "$outA" == "0" ]] && ok "home A: all $nA fallback links under install A root" || bad "home A has $outA links outside install A root"
+else
+  na "home A fallback absent (install A writes no fallback links); per-install anchor assertion N/A"
 fi
 if [[ "$PB" == present ]]; then
   read -r nB outB <<<"$(fallback_all_under "$HB/profiles/node_modules" "$ROOT_B")"
+  ANCHOR_APPLICABLE=1
   [[ "$outB" == "0" ]] && ok "home B: all $nB fallback links under install B root" || bad "home B has $outB links outside install B root"
+else
+  na "home B fallback absent (install B writes no fallback links); per-install anchor assertion N/A"
 fi
 if [[ "$PA" == present && "$PB" == present ]]; then
+  ANCHOR_APPLICABLE=1
   if [[ "$UA" == yes && "$UB" == yes && "$ROOT_A" != "$ROOT_B" ]]; then
     ok "each environment anchors its fallback to its own installation directory"
   else
@@ -166,14 +172,15 @@ read -r PD TD UD VD <<<"$(fallback_anchor "$HD" "$ROOT_A")"
 say "home C fallback anchor: $TC (under A=$UC, dsh-base $VC)"
 say "home D fallback anchor: $TD (under A=$UD, dsh-base $VD)"
 if [[ "$PC" == present && "$PD" == present ]]; then
+  ANCHOR_APPLICABLE=1
   if [[ "$UC" == yes && "$UD" == yes ]]; then
     ok "both environments resolve core modules from the one shared installation A"
     note "sharing one installation means core bundle modules are NOT isolated per environment"
   else
     bad "shared-installation homes did not both anchor to installation A ($TC / $TD)"
   fi
-elif [[ "$PC" == absent && "$PD" == absent ]]; then
-  note "this version writes no fallback links; isolation then depends on runtime resolution, not filesystem anchors"
+else
+  na "no fallback links in this version; shared-installation anchor assertion N/A (isolation then depends on runtime resolution, not filesystem anchors)"
 fi
 
 # --- Case 3: re-pointing an existing home at installation B -----------------
@@ -184,9 +191,10 @@ if [[ "$PA" == present ]]; then
   say "home A after install B: present=$PR target=$TR under_B=$UR dsh-base=$VR"
   if [[ "$PB" == absent ]]; then
     # Installation B never writes fallback links, so it has nothing to re-anchor.
-    note "installation B writes no fallback links; the prior on-disk anchor is left untouched"
+    na "installation B writes no fallback links; re-anchor assertion N/A (prior on-disk anchor left untouched)"
     say "leftover on-disk fallback still points at: $TA (under_B=$UR)"
   elif [[ "$PR" == present ]]; then
+    ANCHOR_APPLICABLE=1
     if [[ "$UR" == yes ]]; then
       ok "existing home's fallback re-anchored to the newly used installation B"
     else
@@ -195,6 +203,8 @@ if [[ "$PA" == present ]]; then
   else
     bad "installation B normally writes fallback links, but home A has none after the re-boot"
   fi
+else
+  na "home A had no fallback to re-anchor; re-anchor assertion N/A"
 fi
 
 # --- Case 4: credential boundary --------------------------------------------
@@ -221,5 +231,10 @@ CWD_AFTER="$(cd "$CWD_DIR" && ls -A 2>/dev/null | sort | tr '\n' ' ')"
 
 head1 "SUMMARY"
 say "A=$VER_A@$ROOT_A  B=$VER_B@$ROOT_B"
-say "assertions: ${PASSED}/$((PASSED + FAILED)) passed, ${FAILED} failed"
+say "assertions: ${PASSED}/$((PASSED + FAILED)) passed, ${FAILED} failed; notes/not-applicable: ${NOTES}"
+if [[ "$ANCHOR_APPLICABLE" -eq 1 ]]; then
+  say "verdict: install-anchor isolation was exercised by at least one assertion"
+else
+  say "verdict: install-anchor isolation N/A for this version (no fallback links written); not claimed as verified"
+fi
 [[ "$FAILED" -eq 0 ]] && exit 0 || exit 1
