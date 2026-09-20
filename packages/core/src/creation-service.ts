@@ -51,7 +51,13 @@ import {
   ensureLayout,
   resolveLayout,
   type AppDataLayout,
+  type GenerationPaths,
 } from './layout.js';
+import {
+  CredentialStore,
+  type CredentialBinding,
+  type LaunchCredentialRequest,
+} from './credential-store.js';
 import {
   DataRootLock,
   type DataRootLockSnapshot,
@@ -158,6 +164,19 @@ export interface CloseReport {
   readonly failure?: CloseFailure;
 }
 
+/** Trusted, internal command to replace an environment's credential bindings. */
+export interface SetEnvironmentCredentialsCommand {
+  readonly environmentId: string;
+  readonly bindings: readonly CredentialBinding[];
+  /** Guards the environment composition revision, like other mutations. */
+  readonly expectedRevision?: number;
+}
+
+export interface ClearEnvironmentCredentialsCommand {
+  readonly environmentId: string;
+  readonly expectedRevision?: number;
+}
+
 interface GenerationView {
   readonly environmentId: string;
   readonly expectedRevision: number;
@@ -215,6 +234,7 @@ export class EnvironmentService {
   readonly #operations: OperationStore;
   readonly #journals: JournalStore;
   readonly #idempotency: IdempotencyStore;
+  readonly #credentials: CredentialStore;
 
   readonly #controllers = new Map<string, AbortController>();
   readonly #pending = new Set<Promise<void>>();
@@ -251,6 +271,7 @@ export class EnvironmentService {
     this.#operations = new OperationStore(this.#layout);
     this.#journals = new JournalStore(this.#layout);
     this.#idempotency = new IdempotencyStore(this.#layout);
+    this.#credentials = new CredentialStore(this.#layout);
   }
 
   /**
@@ -489,6 +510,123 @@ tryReadInstallManifest(
 
   stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
     return this.#beginProcessOperation('stop', command);
+  }
+
+  /**
+   * Trusted, internal API: replaces an environment's credential bindings.
+   *
+   * Guards: the service is open, this instance holds the data-root lease, the
+   * environment exists, is not running/changing and (when supplied) matches
+   * `expectedRevision`. The record only holds references; a secret value is
+   * never accepted or persisted.
+   */
+  writeEnvironmentCredentials(
+    command: SetEnvironmentCredentialsCommand,
+  ): PortOutcome<{ readonly revision: number }> {
+    const guard = this.#guardCredentialMutation(command.environmentId, command.expectedRevision);
+    if (guard !== undefined) {
+      return guard;
+    }
+    const current = this.#credentials.read(command.environmentId);
+    const previousRevision = current.kind === 'valid' ? current.record.revision : 0;
+    try {
+      const record = this.#credentials.write(
+        command.environmentId,
+        command.bindings,
+        previousRevision,
+        this.#now(),
+      );
+      return portOk({ revision: record.revision });
+    } catch (error) {
+      return portFail(
+        'INVALID_INPUT',
+        error instanceof Error ? error.message : 'the credential binding is invalid',
+      );
+    }
+  }
+
+  /** Trusted, internal API: removes an environment's credential bindings. */
+  clearEnvironmentCredentials(command: ClearEnvironmentCredentialsCommand): PortOutcome<void> {
+    const guard = this.#guardCredentialMutation(command.environmentId, command.expectedRevision);
+    if (guard !== undefined) {
+      return guard;
+    }
+    this.#credentials.clear(command.environmentId);
+    return portOk(undefined);
+  }
+
+  #guardCredentialMutation(
+    environmentId: string,
+    expectedRevision: number | undefined,
+  ): PortOutcome<never> | undefined {
+    if (this.#closed) {
+      return portFail('INTERNAL_ERROR', 'the environment service is closed');
+    }
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    if (
+      environment.state === 'starting' ||
+      environment.state === 'running' ||
+      environment.state === 'stopping'
+    ) {
+      return portFail('ENVIRONMENT_BUSY', 'the environment is running or changing');
+    }
+    if (expectedRevision !== undefined && environment.revision !== expectedRevision) {
+      return portFail(
+        'REVISION_CONFLICT',
+        'expectedRevision does not match the current composition revision',
+      );
+    }
+    return undefined;
+  }
+
+  /**
+   * The `@hdsl/runtime` `LaunchCredentialLoader` implementation.
+   *
+   * Reads the environment's stored reference bindings and builds an explicit
+   * base environment from the trusted generation paths. It rejects (fail
+   * closed) when the environment, its generation or its credential record is
+   * missing or corrupt, and never inherits the host `process.env`. The
+   * authoritative keychain/`service#account` enforcement stays in the runtime
+   * credential port.
+   */
+  async launchCredentialRequest(environmentId: string): Promise<LaunchCredentialRequest> {
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      throw new Error('environment was not found');
+    }
+    if (environment.activeGenerationId === null) {
+      throw new Error('environment has no active generation');
+    }
+    const record = this.#credentials.read(environmentId);
+    if (record.kind === 'missing') {
+      throw new Error('no credential binding is configured for this environment');
+    }
+    if (record.kind === 'invalid') {
+      throw new Error(record.message);
+    }
+    const paths = generationPaths(this.#layout, environmentId, environment.activeGenerationId);
+    return {
+      bindings: record.record.bindings,
+      baseEnv: this.#baseLaunchEnvironment(paths),
+    };
+  }
+
+  #baseLaunchEnvironment(paths: GenerationPaths): Readonly<Record<string, string>> {
+    const homeDirectory = paths.homeDirectory;
+    const nodeBin = join(paths.generationDirectory, 'node', 'bin');
+    return {
+      HOME: homeDirectory,
+      DSH_HOME: homeDirectory,
+      DSH_AGENTS_HOME: join(homeDirectory, 'agents'),
+      PATH: `${nodeBin}:/usr/bin:/bin:/usr/sbin:/sbin`,
+      TMPDIR: join(homeDirectory, '.tmp'),
+    };
   }
 
   openWebUI(environmentId: string): PortOutcome<OpenWebUIResult> {
