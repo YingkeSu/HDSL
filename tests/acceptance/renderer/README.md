@@ -1,8 +1,10 @@
 # Renderer slice acceptance (`tests/acceptance/renderer`)
 
-Independent black-box behavior QA for PR #34 (issue #30), reviewed SHA
-`44e5b748ebd67e46319580162d3e91563bd22d28`. QA-only: this directory does not
-modify `apps/desktop/src/renderer/**`, `tests/renderer/**` or root config.
+Independent black-box behavior QA for PR #34 (issue #30). Current baseline:
+fix head `b9d47348251666e9eae1b9f30e888b4634e962ee` (reviewed
+then-red `44e5b748ebd67e46319580162d3e91563bd22d28`). QA-only: this directory
+does not modify `apps/desktop/src/renderer/**`, `tests/renderer/**` or root
+config.
 
 ```bash
 PATH=/Users/suyingke/tools/node-24.21.0/bin:$PATH
@@ -10,7 +12,7 @@ pnpm install --frozen-lockfile
 pnpm exec vitest run tests/acceptance/renderer
 ```
 
-## Files and current results on `44e5b74`
+## Files and results (23 passing on `b9d4734`)
 
 - `controller.acceptance.test.ts` — drives the public `RendererController`
   with a controlled async `RendererContractClient` (deferred responses,
@@ -23,11 +25,13 @@ pnpm exec vitest run tests/acceptance/renderer
     envelope fail closed, invalid outbound DTO rejected, pushed events
     monotonic + terminal, cancel freezes progress, client throw mapped to
     `INTERNAL_ERROR`.
-  - 4 race scenarios fail on `44e5b74` (intended evidence for issue #36,
-    matching reviewer hdsl-8 P2-1/P2-2/P3.1): R1 stale cross-operation poll
-    overwrites the new operation; R2 post-dispose subscribe + state mutation;
-    R3 transient `operations.get` failure permanently stops polling; R4
-    interleaved starts leave two live subscriptions.
+  - R1–R4 (issue #36, reviewer hdsl-8 P2-1/P2-2/P3.1): **red on `44e5b74`,
+    green on `b9d4734` with unchanged expectations** — stale cross-operation
+    poll, post-dispose subscribe/state write, bounded poll retry, interleaved
+    starts subscription residue.
+  - R5–R6: bounded-retry pause + `retryTracking()` recovery to terminal; a
+    subscribe that resolves after dispose is released and mutates no further
+    state.
 - `static-markup.acceptance.test.ts` — DOM-free **real React** render path
   (`renderAppView` -> `react-dom/server`): explicit empty state with no alert,
   failure state as `role="alert"`, native keyboard-operable controls

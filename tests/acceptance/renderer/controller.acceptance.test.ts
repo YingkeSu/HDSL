@@ -419,14 +419,17 @@ describe(`renderer controller acceptance (independent QA @ ${SHA})`, () => {
   });
 });
 
+const FIXED_SHA = 'b9d47348251666e9eae1b9f30e888b4634e962ee';
+
 /**
- * Independent race evidence against the reviewed SHA.
+ * Independent race evidence.
  *
- * These assert the behavior reviewer hdsl-8's P2-1/P2-2/P3 require (see
- * `/tmp/hdsl-pr34-review.md`). They are expected to fail on the reviewed SHA
- * and must go green after the fix with the same expectation; do not weaken.
+ * R1–R4 reproduce reviewer hdsl-8's P2-1/P2-2/P3.1; they were red on the
+ * reviewed SHA `44e5b74` and pass on `b9d4734` with the same expectations.
+ * R5–R6 cover the fix's bounded-retry recovery and late-subscribe release.
+ * See issue #36. Do not weaken.
  */
-describe(`renderer controller race evidence @ ${SHA} (fail until fixed)`, () => {
+describe(`renderer controller race evidence @ ${FIXED_SHA} (green; was red on ${SHA})`, () => {
   const raceSnapshot = (
     id: string,
     sequence: number,
@@ -557,5 +560,70 @@ describe(`renderer controller race evidence @ ${SHA} (fail until fixed)`, () => 
     expect(subscribed - count('operations.unsubscribe')).toBeLessThanOrEqual(1);
     await controller.dispose();
     expect(count('operations.unsubscribe')).toBe(subscribed);
+  });
+
+  it('R5. polling pauses after bounded retries and retryTracking resumes to terminal', async () => {
+    let getIndex = 0;
+    const { client, count } = controlledClient({
+      ...defaultLoadHandlers(),
+      'environments.start': () => ok({ operationId: 'op-1' }),
+      'operations.get': () => {
+        getIndex += 1;
+        if (getIndex === 1) {
+          return ok(raceSnapshot('op-1', 1, 10));
+        }
+        if (getIndex <= 4) {
+          return fail('INTERNAL_ERROR', 'transient');
+        }
+        return ok({ ...raceSnapshot('op-1', 5, 100), phase: 'finished', status: 'succeeded' });
+      },
+      'operations.subscribe': () => ok({ subscriptionId: 'sub-1' }),
+      'operations.unsubscribe': () => ok(null),
+    });
+    const controller = new RendererController({ client, pollIntervalMs: 1, maxPollRetries: 3 });
+    await controller.load();
+    controller.selectEnvironment(ENV_STOPPED);
+    await controller.startSelected();
+
+    await vi.waitFor(() => expect(controller.getState().trackingPaused).toBe(true), {
+      timeout: 400,
+    });
+    expect(controller.getState().trackingError).not.toBeNull();
+    const pausedGets = count('operations.get');
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(count('operations.get')).toBe(pausedGets);
+
+    controller.retryTracking();
+    await vi.waitFor(() => expect(controller.getState().trackedOperation?.status).toBe('succeeded'), {
+      timeout: 400,
+    });
+    await controller.dispose();
+  });
+
+  it('R6. a subscribe that resolves after dispose is released, not left registered', async () => {
+    const subscribeGate = deferred<ContractResponse<unknown>>();
+    const { client, count } = controlledClient({
+      ...defaultLoadHandlers(),
+      'environments.start': () => ok({ operationId: 'op-1' }),
+      'operations.get': () => ok(raceSnapshot('op-1', 1, 10)),
+      'operations.subscribe': () => subscribeGate.promise,
+      'operations.unsubscribe': () => ok(null),
+    });
+    const controller = new RendererController({ client, pollIntervalMs: 1000 });
+    await controller.load();
+    controller.selectEnvironment(ENV_STOPPED);
+    const start = controller.startSelected();
+    await settle();
+    expect(count('operations.subscribe')).toBe(1);
+
+    await controller.dispose();
+    const afterDispose = controller.getState().trackedOperation;
+    subscribeGate.resolve(ok({ subscriptionId: 'sub-late' }));
+    await start;
+    await settle();
+
+    // The late subscription must be released, and dispose must not mutate more.
+    expect(count('operations.unsubscribe')).toBeGreaterThanOrEqual(1);
+    expect(controller.getState().trackedOperation).toEqual(afterDispose);
   });
 });
