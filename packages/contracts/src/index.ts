@@ -1,15 +1,35 @@
 /**
- * `@hdsl/contracts` — shared DTOs, `API_VERSION`, the response envelope and the
- * runtime input validation used by both the Electron main process and the
- * preload bridge.
+ * `@hdsl/contracts` — the versioned local API shared by the Electron main
+ * process and the preload/renderer side.
  *
- * T002 scope: this package only establishes the compiled workspace entry.
- * The actual contract surface (DTO fields, error codes, exact `API_VERSION`
- * matching, idempotency and subscription semantics) is owned by T003
- * (`specs/001-environment-lifecycle/contracts/local-api.md`) and must be
- * frozen there before any consumer relies on it.
+ * Frozen by T003 (issue #3) against
+ * `specs/001-environment-lifecycle/contracts/local-api.md` and
+ * `specs/001-environment-lifecycle/data-model.md`:
  *
- * Nothing is exported yet on purpose: an empty entry is more honest than a
- * guessed contract that later implementations would silently inherit.
+ * - `API_VERSION` is matched exactly; any major/minor mismatch is
+ *   `CONTRACT_VERSION_MISMATCH`.
+ * - shared DTOs validate untrusted data at runtime (unknown fields, illegal
+ *   ids and over-long text are `INVALID_INPUT`).
+ * - state-dependent semantics (idempotency, `expectedRevision`, unknown ids,
+ *   platform support, subscription sequence) run through {@link ContractPort}
+ *   and the dispatcher, not through string schemas.
+ * - error messages are sanitized so secrets and local paths never cross the
+ *   bridge.
+ *
+ * The `testing/` exports are TEST/FIXTURE ONLY and are not persistence or
+ * launcher behavior; T004–T006 implement the real port.
  */
-export {};
+export * from './version.js';
+export * from './schema.js';
+export * from './redaction.js';
+export * from './errors.js';
+export * from './ids.js';
+export * from './platform.js';
+export * from './dto.js';
+export * from './digest.js';
+export * from './events.js';
+export * from './methods.js';
+export * from './context.js';
+export * from './dispatcher.js';
+export * from './testing/reference-port.js';
+export * from './testing/fixtures.js';
