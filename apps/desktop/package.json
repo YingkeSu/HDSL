@@ -24,7 +24,8 @@
     }
   },
   "files": [
-    "dist"
+    "dist",
+    "!dist/main/qa-entry.*"
   ],
   "dependencies": {
     "@hdsl/contracts": "workspace:*",

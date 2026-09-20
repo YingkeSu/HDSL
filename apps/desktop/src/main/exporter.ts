@@ -9,7 +9,7 @@
  * `requestId` returns the original summary and does not write a second file.
  */
 import { randomUUID } from 'node:crypto';
-import { chmodSync, mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, fsyncSync, mkdirSync, openSync, renameSync, rmSync, writeSync } from 'node:fs';
 import { dirname } from 'node:path';
 import {
   portFail,
@@ -55,14 +55,29 @@ export interface CreateDiagnosticsExporterOptions {
   readonly writeFile?: (targetPath: string, content: string) => void;
 }
 
+/**
+ * Atomic `0600` write to the confirmed target path. The temporary file is
+ * created with `O_CREAT | O_EXCL` (so a pre-existing symlink or file at the
+ * unpredictable temp name fails instead of being followed), fsynced and then
+ * renamed over the target. A pre-existing symlink at the target itself is
+ * replaced by the rename rather than written through.
+ */
 const defaultWriteFile = (targetPath: string, content: string): void => {
   mkdirSync(dirname(targetPath), { recursive: true });
   const temporary = `${targetPath}.hdsl-${randomUUID()}.tmp`;
+  let descriptor: number | undefined;
   try {
-    writeFileSync(temporary, content, { encoding: 'utf8', mode: 0o600 });
+    descriptor = openSync(temporary, 'wx', 0o600);
+    writeSync(descriptor, content);
+    fsyncSync(descriptor);
+    closeSync(descriptor);
+    descriptor = undefined;
     chmodSync(temporary, 0o600);
     renameSync(temporary, targetPath);
   } catch (error) {
+    if (descriptor !== undefined) {
+      closeSync(descriptor);
+    }
     rmSync(temporary, { force: true });
     throw error;
   }

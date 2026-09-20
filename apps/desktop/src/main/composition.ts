@@ -114,6 +114,13 @@ export interface DesktopComposition {
   readonly lockSnapshot: () => DataRootLockSnapshot;
   readonly exporterAvailable: boolean;
   /**
+   * True when restart reconciliation left a managed process it could not prove
+   * exited. New create/start mutations are then refused by main until the
+   * residue is resolved; stop/read/export remain available.
+   */
+  readonly recoveryBlocked: boolean;
+  readonly recoveryReasons: readonly string[];
+  /**
    * Verifies ownership synchronously and then awaits the injected main-only
    * authenticated opener. Success is reported only after the opener's real
    * result, so `opened: true` can never precede an async failure. The token-free
@@ -123,6 +130,20 @@ export interface DesktopComposition {
   openWebUi(environmentId: string): Promise<PortOutcome<OpenWebUIResult>>;
   close(): Promise<CloseReport>;
 }
+
+/** Mutations refused while restart reconciliation is unresolved. */
+export const RECOVERY_BLOCKED_METHODS: ReadonlySet<string> = new Set([
+  'environments.create',
+  'environments.start',
+]);
+
+/**
+ * True when a contract method is a new mutation that must wait for a manual
+ * cleanup of an unverifiable managed process. Reads, stop and export stay
+ * available so the residue can be inspected or converged.
+ */
+export const isBlockedByRecovery = (method: string, recoveryBlocked: boolean): boolean =>
+  recoveryBlocked && RECOVERY_BLOCKED_METHODS.has(method);
 
 const noPathChooser: DiagnosticsPathChooser = {
   chooseExportPath: () => null,
@@ -293,6 +314,10 @@ export const createDesktopComposition = async (
   });
 
   const recovery = await service.recover();
+  const recoveryReasons = (recovery.process ?? [])
+    .filter((entry) => entry.resolution === 'unverifiable')
+    .map((entry) => entry.environmentId);
+  const recoveryBlocked = recoveryReasons.length > 0;
 
   const openWebUi = async (environmentId: string): Promise<PortOutcome<OpenWebUIResult>> => {
     const verified = processPort.openWebUI(environmentId);
@@ -316,6 +341,8 @@ export const createDesktopComposition = async (
     processPort,
     available: service.available,
     recovery,
+    recoveryBlocked,
+    recoveryReasons,
     lockSnapshot: () => service.lockSnapshot(),
     exporterAvailable: true,
     openWebUi,

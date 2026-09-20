@@ -15,11 +15,11 @@ import {
   type SenderIdentity,
 } from '../../apps/desktop/src/main/ipc.js';
 
-const PREFIX = 'file:///app/dist/renderer/index.html';
+const DOCUMENT_URL = 'file:///app/dist/renderer/index.html';
 const identity = (webContentsId: number, overrides: Partial<SenderIdentity> = {}): SenderIdentity => ({
   webContentsId,
   isMainFrame: true,
-  frameUrl: PREFIX,
+  frameUrl: DOCUMENT_URL,
   ...overrides,
 });
 
@@ -34,7 +34,7 @@ const buildHost = (maxSubscriptionsPerWindow?: number) => {
   const sent: Record<number, unknown[]> = { 1: [], 2: [] };
   const host = new DesktopIpcHost({
     port,
-    policy: { rendererUrlPrefix: PREFIX },
+    policy: { allowedDocumentUrl: DOCUMENT_URL },
     ...(maxSubscriptionsPerWindow === undefined ? {} : { maxSubscriptionsPerWindow }),
   });
   host.openWindow({ webContentsId: 1, send: (event) => sent[1]?.push(event) });
@@ -44,12 +44,18 @@ const buildHost = (maxSubscriptionsPerWindow?: number) => {
 
 describe('DesktopIpcHost authorization', () => {
   it('rejects a subframe, a foreign URL and an unknown window', () => {
-    expect(isAuthorizedSender(identity(1, { isMainFrame: false }), { rendererUrlPrefix: PREFIX })).toBe(
-      false,
-    );
-    expect(isAuthorizedSender(identity(1, { frameUrl: 'file:///etc/passwd' }), { rendererUrlPrefix: PREFIX })).toBe(
-      false,
-    );
+    const policy = { allowedDocumentUrl: DOCUMENT_URL };
+    expect(isAuthorizedSender(identity(1, { isMainFrame: false }), policy)).toBe(false);
+    expect(isAuthorizedSender(identity(1, { frameUrl: 'file:///etc/passwd' }), policy)).toBe(false);
+    for (const url of [
+      `${DOCUMENT_URL}.evil`,
+      `${DOCUMENT_URL}/../secret`,
+      `${DOCUMENT_URL}%2f..%2fsecret`,
+      `${DOCUMENT_URL}?token=canary`,
+    ]) {
+      expect(isAuthorizedSender(identity(1, { frameUrl: url }), policy)).toBe(false);
+    }
+    expect(isAuthorizedSender(identity(1), policy)).toBe(true);
   });
 
   it('returns a controlled INTERNAL_ERROR envelope for an unauthorized caller', async () => {
@@ -162,7 +168,7 @@ describe('DesktopIpcHost beforeDispatch', () => {
     const { port } = createReferenceRuntime();
     const host = new DesktopIpcHost({
       port,
-      policy: { rendererUrlPrefix: PREFIX },
+      policy: { allowedDocumentUrl: DOCUMENT_URL },
       beforeDispatch: async (context) =>
         context.method === 'environments.openWebUI'
           ? contractFail(API_VERSION, contractErrorForCode('WEBUI_UNAVAILABLE'))

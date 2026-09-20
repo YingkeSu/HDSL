@@ -17,6 +17,7 @@ import type { ManagedProcessPort } from '@hdsl/core';
 import {
   adaptProcessPort,
   createDesktopComposition,
+  isBlockedByRecovery,
   type VerifiedWebUiContext,
   type VerifiedWebUiOpener,
 } from '../../apps/desktop/src/main/composition.js';
@@ -133,6 +134,7 @@ describe('createDesktopComposition', () => {
     const dataRoot = freshRoot('hdsl-comp-');
     const { composition, contexts } = await compose(dataRoot);
     expect(composition.available).toBe(true);
+    expect(composition.recoveryBlocked).toBe(false);
 
     const operationId = await createEnvironment(composition, '接线环境');
     expect(operationId).toMatch(/^op-/);
@@ -265,6 +267,17 @@ describe('createDesktopComposition', () => {
     const contender = await compose(dataRoot);
     expect(contender.composition.available).toBe(false);
     await contender.composition.close();
+  });
+});
+
+describe('restart recovery gate', () => {
+  it('blocks new create/start but leaves stop, reads and export available', () => {
+    expect(isBlockedByRecovery('environments.create', true)).toBe(true);
+    expect(isBlockedByRecovery('environments.start', true)).toBe(true);
+    expect(isBlockedByRecovery('environments.stop', true)).toBe(false);
+    expect(isBlockedByRecovery('operations.get', true)).toBe(false);
+    expect(isBlockedByRecovery('diagnostics.export', true)).toBe(false);
+    expect(isBlockedByRecovery('environments.start', false)).toBe(false);
   });
 });
 

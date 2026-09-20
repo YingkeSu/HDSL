@@ -37,6 +37,7 @@ import {
   HDSL_OPERATION_UPDATED_CHANNEL,
   HDSL_SELECTION_CHANNEL,
 } from '../ipc-channels.js';
+import { isTrustedDocumentUrl, type TrustedUrlPolicy } from './trusted-url.js';
 
 export {
   HDSL_CONTRACT_CHANNEL,
@@ -53,13 +54,11 @@ export interface SenderIdentity {
   readonly frameUrl: string;
 }
 
-export interface SenderPolicy {
-  /** `file://` URL prefix (or exact URL) of this build's renderer document. */
-  readonly rendererUrlPrefix: string;
-}
+export interface SenderPolicy extends TrustedUrlPolicy {}
 
+/** Exact normalized document-URL match; prefix/suffix/traversal/encoding are rejected. */
 export const isAuthorizedSender = (identity: SenderIdentity, policy: SenderPolicy): boolean =>
-  identity.isMainFrame && identity.frameUrl.startsWith(policy.rendererUrlPrefix);
+  identity.isMainFrame && isTrustedDocumentUrl(identity.frameUrl, policy);
 
 export interface OpenedWindow {
   readonly webContentsId: number;

@@ -17,10 +17,11 @@ renderer 也不得提交任意路径或 secret 值。
    文件选择由 main 的**原生**文件对话框完成（`dialog.showOpenDialogSync`），
    renderer 不参与、不接收路径。
 2. **只接受引用、拒绝值**：配置文件为 `{ "schemaVersion": "1", "bindings": [ { "name", "reference": { id, store, key } } ] }`。
-   严格校验：字节上限 16 KiB、未知字段拒绝、`bindings` 1–32 条、变量名复用 runtime 的
-   `CREDENTIAL_NAME_PATTERN` 与 `RESERVED_ENVIRONMENT_NAMES`、重复名拒绝、当前实现只接受
-   `store: "keychain"`。含 `value`/`secret` 等字段即是未知字段，直接拒绝；不扫描“像 secret 的值”，
-   因为格式本身没有放值的位置。
+   严格校验：打开前 `O_NOFOLLOW`（拒符符号链接）+ `O_NONBLOCK`（特殊文件不阻塞）+ `fstat`
+   检查常规文件与 16 KiB 上限，再限定读取 16 KiB+1（无无界读）；未知字段拒绝、`bindings` 1–32 条、
+   变量名复用 runtime 的 `CREDENTIAL_NAME_PATTERN` 与 `RESERVED_ENVIRONMENT_NAMES`、重复名拒绝、
+   当前实现只接受 `store: "keychain"`。含 `value`/`secret` 等字段即是未知字段，直接拒绝；
+   不扫描“像 secret 的值”，因为格式本身没有放值的位置。
 3. **目标环境来自经校验的选择状态**：renderer 通过独立的单向选择通道上报当前环境；
    main 只在 `findEnvironment` 能解析时记录，且在导入执行前**重新读取**环境，
    校验存在性与 state（`creating`/`starting`/`running`/`stopping` 拒绝），
@@ -52,8 +53,7 @@ renderer 也不得提交任意路径或 secret 值。
 
 ## 验证状态
 
-- 实现：`apps/desktop/src/main/credential-import.ts`、`menu.ts`、`index.ts` 菜单接线。
-- 已验证（单元）：严格解析/拒绝矩阵、状态与存在性守卫、只调用引用写入、无 secret 落盘、
-  菜单启用/点击。
-- 待验证（独立安全 review / QA）：真实 Electron 原生菜单 + 对话框的人工/受控运行、
-  与真实 keychain 的端到端启动（归 T008 实机证据）。
+- 实现：`apps/desktop/src/main/credential-import.ts`（严格解析 + `O_NOFOLLOW`/`fstat` 有界读取 + symlink 拒绝）、`menu.ts`、`app.ts` 菜单接线；生产入口 `index.ts` 不读任何导入/导出钩子，headless 注入只在单独测试入口 `qa-entry.ts`（非 package `main`，已从发布 `files` 排除），见 `docs/development/desktop-integration.md`。
+- 已验证（单元）：严格解析/拒绝矩阵、状态与存在性守卫、只调用引用写入、有界读取（oversize/symlink/非普通文件）、无 secret 落盘、菜单启用/点击。
+- 已验证（composition/main 级真实 macOS）：真实 keychain canary `service#account` 解析 + 导入 + 启动/停止（见 `docs/development/desktop-integration.md` 证据）。
+- 待验证：真实 Electron 原生菜单/对话框的人工/受控运行归 QA25；专职安全 review 对新 SHA 重审。

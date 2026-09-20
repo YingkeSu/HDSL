@@ -52,8 +52,12 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 - 双重门禁：`app.requestSingleInstanceLock()`（同 userData 的第二进程直接退出）**与**
   core 跨进程 dataRoot 独占租约（`service.open()`，等待 1500 ms）。
 - 拿不到租约：原生错误框 + 退出，不提供可变更 UI；变更类调用返回 `ENVIRONMENT_BUSY`。
-- 退出：`before-quit` 先 `service.close()`（停止自有进程树 → 释放租约）；close 失败
-  `released: false`，**保留锁**并提示，下次启动 recover 对账。
+- 退出：`before-quit` 先 `service.close()`（停止自有进程树 → 释放租约）。close 成功才正常退出。
+  若 `released: false`（未能证明进程停止，或租约未能确认删除），main **不声称进程退出后仍持有锁**：
+  显示原生告警后 `app.exit(1)`，仅保留 `lease.json`/launch record 作为**残留证据**。下次启动先
+  `recover()`；若存在 `unverifiable` 进程，main 侧**禁止 `environments.create`/`environments.start`**
+  （返回受控 `ENVIRONMENT_BUSY` + 原生提示），只保留 stop/读/导出以便人工处置；不得覆盖归属。
+  人工处置边界：确认并清理残留进程后重启，由 recover 重新对账。
 
 ## 窄 IPC 与 sender 校验
 
@@ -65,10 +69,18 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
   无通用 `send`/`invoke`/`on`。
 - `webPreferences` = `SECURE_WINDOW_DEFAULTS`（`contextIsolation: true`、
   `nodeIntegration: false`、`sandbox: true`）+ `preload: dist/preload/bridge.cjs`。
-- sender 校验：仅本进程创建的窗口、仅 main frame、frame URL 前缀等于 renderer index 的 file URL；
-  子 frame/未知窗口/外来 URL 返回受控 `INTERNAL_ERROR` envelope。
-- 导航：`setWindowOpenHandler` 全拒、`will-navigate` 仅允许 renderer URL、webview 拒绝
+- sender 校验与导航共用**精确可信文档 URL**（`src/main/trusted-url.ts`）：仅本进程创建的窗口、
+  仅 main frame、`frameUrl` 归一化后必须**完全等于** `dist/renderer/index.html` 的 file URL。
+  拒绝前缀路径后缀（`index.html.evil`）、归一化穿越（`index.html/../x`）、编码分隔符（`%2f`/
+  `%5c`）、query/hash、子 frame 与未知窗口；协议层返回受控 `INTERNAL_ERROR` envelope。
+- 导航：`setWindowOpenHandler` 全拒、`will-navigate` 只允许该精确文档 URL、
+  `will-frame-navigate` 拒绝任何子 frame 导航与任何非可信 URL、webview 拒绝
   （`src/main/security.ts`）。
+- `ipcMain.handle` 的异步边界整体 `try/catch`：任何 dialog/core 异常都返回固定受控
+  `INTERNAL_ERROR` envelope，不把原始异常交给 `invoke`；选择通知也 best-effort 不抛出。
+- 账本作用域：幂等账本（`readIdempotency`/`writeIdempotency`）是**进程全局、按 dataRoot 持久化**，
+  同一 `requestId` 从不同窗口重放也返回原结果且不重复副作用（冻结契约以 requestId 为幂等键）；
+  **订阅注册表是每窗口**，跨窗口订阅 id 互不可见。
 - **DSH WebUI 不在 Electron 窗口加载**：`openWebUI` 只返回 token-free origin，真开由 main 原生进行。
 
 ## WebUI 原生打开（含 main-only bootstrap 窄接点）
@@ -100,6 +112,7 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 - canary 负向：`tests/desktop/main-diagnostics.test.ts` 在 credentials.json、`.credentials.yaml`、
   home/logs、sessions 放 canary，并在 operation error/manifest stdout/composition URL 注入 canary，
   断言导出文件不含 canary、不含排除文件名、不含 dataRoot 原文。
+- 输出原子性：导出写到目标同目录的随机临时文件（`openSync('wx', 0o600)`，预置符号链接或已有文件会失败而不被跟随），`fsync` 后 `rename` 覆盖目标；目标本身若是符号链接，`rename` 替换链接而非写穿。
 - 幂等：`requestId` 重放由 dispatcher 账本返回原 `ExportResult`，不再弹窗/覆盖文件。
 
 ## 凭据引用配置（主进程原生菜单，ADR 0004）
@@ -124,26 +137,40 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 }
 ```
 
-限制与失败提示：≤16 KiB；`bindings` 1–32；变量名不得保留/重复/非法；当前实现仅 `keychain`；
-未知字段（含 `value`/`secret`）拒绝；环境 running/starting/stopping 拒绝。失败为原生错误框，
-只显示阶段与受控原因；成功只显示条数与“仅存引用、不读写 secret、不复制原文件”。
+限制与失败提示：打开前先 `O_NOFOLLOW`（拒绝符号链接）、`O_NONBLOCK`（特殊文件不阻塞）、`fstat`
+检查常规文件与 ≤16 KiB，再限定读取 16 KiB+1，不做无界读；`bindings` 1–32；变量名不得保留/重复/
+非法；当前实现仅 `keychain`；未知字段（含 `value`/`secret`）拒绝；环境 running/starting/stopping 拒绝。
+失败为原生错误框，只显示阶段与受控原因；成功只显示条数与“仅存引用、不读写 secret、不复制原文件”。
 无引用的环境启动时 main 只读预检并弹原生提示，指向该菜单；启动仍按 fail-closed 失败。
 
-## 运算符/QA 钩子（非用户功能，未设置则完全惰性）
+## 测试入口注入（仅测试，生产入口不读任何钩子）
 
-| 环境变量 | 作用 |
+生产入口 `src/main/index.ts` 以默认参数启动 `startDesktopApp`（只有原生菜单 + 原生对话框），**不读**
+任何 `HDSL_*` 导入/导出钩子，也不靠 `NODE_ENV` 或任意 env 开关绕过用户确认。
+headless QA 使用单独、显式启动的测试入口 `dist/main/qa-entry.js`（非 package `main`，已从发布
+`files` 排除）：
+
+```bash
+electron apps/desktop/dist/main/qa-entry.js \
+  --hdsl-data-root <dir> --user-data-dir <dir> \
+  [--hdsl-qa-export-path <file>] \
+  [--hdsl-qa-import-path <file>] [--hdsl-qa-import-environment <envId>]
+```
+
+| 参数 | 作用 |
 | --- | --- |
-| `HDSL_DATA_ROOT` / `--hdsl-data-root` | 指定隔离 dataRoot |
-| `HDSL_DIAGNOSTICS_EXPORT_PATH` | 用固定路径替代导出保存对话框（headless 确定性） |
-| `HDSL_CREDENTIAL_IMPORT_PATH` | 替代导入文件选择对话框（路径来自运算符，不来自 renderer） |
-| `HDSL_CREDENTIAL_IMPORT_ENVIRONMENT` | 与上一项同设时，启动后对该已验证环境静默导入一次；只在 stderr 输出 `[hdsl] credential-import hook: applied/rejected …`（无路径/无 secret） |
+| `--hdsl-data-root` / `HDSL_DATA_ROOT` | 指定隔离 dataRoot（生产入口允许，用于实例隔离） |
+| `--hdsl-qa-export-path` | 固定导出路径，替代原生保存对话框 |
+| `--hdsl-qa-import-path` | 固定导入路径，替代原生打开对话框 |
+| `--hdsl-qa-import-environment` | 与上一项同设时对该已验证环境启动后静默导入一次；stderr 只输出 `[hdsl] credential-import: applied/rejected at …`（无路径/无 secret） |
 
-钩子仍走同一严格校验与既有 `writeEnvironmentCredentials`，不绕过引用/状态守卫。
+测试入口仍走同一严格校验、有界读取与既有 `writeEnvironmentCredentials`，不绕过引用/状态守卫。
+这些注入**只算测试列**，正文档不得当原生菜单/对话框验收；后者的真实操作归 \"真实 GUI 操作\"。
 
 ## QA 对接（供 tests/e2e 复用）
 
-- 启动：`node apps/desktop/scripts/smoke-electron.mjs --data-root <dir>`；脚本默认
-  `--remote-debugging-port=9333`，轮询 `http://127.0.0.1:9333/json`，通过 CDP
+- 启动：`node apps/desktop/scripts/smoke-electron.mjs --data-root <dir>`；脚本自动分配空闲 CDP
+  端口与独立 `--user-data-dir`，轮询 `http://127.0.0.1:<port>/json`，通过 CDP
   `Runtime.evaluate` 断言；成功退出码 0、失败 1，并打印 JSON 结果 + Electron 输出。
 - 稳定就绪信号：等 CDP page target 出现后再等 ~1.5 s，断言
   `document.getElementById('root').textContent.length > 0`；`window.hdsl` 三成员精确为
@@ -151,33 +178,43 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 - 受控拒绝可观测形式：协议层一律是受控 envelope（`{ ok:false, apiVersion, error:{ code, … } }`），
   CDP 断言 `code`；单实例第二进程是**进程退出**（`requestSingleInstanceLock`）；dataRoot 被占用是
   原生错误框 + 退出（无 envelope），可用退出码/stderr 观测。失锁后的变更调用返回 `ENVIRONMENT_BUSY`。
-- 诊断导出：设 `HDSL_DIAGNOSTICS_EXPORT_PATH`，通过 `window.hdsl.call({apiVersion:'1.0',
+- 诊断导出：用测试入口 `--hdsl-qa-export-path <file>`，通过 `window.hdsl.call({apiVersion:'1.0',
   method:'diagnostics.export', input:{ requestId, environmentId }})` 触发，断言返回
   `{ exportId, exported:true, redacted:true }` 并检查文件内容。
-- 凭据导入：设 `HDSL_CREDENTIAL_IMPORT_PATH` + `HDSL_CREDENTIAL_IMPORT_ENVIRONMENT` 走静默启动钩子；
-  或在有 GUI 的会话中手动点原生菜单。revision/state 守卫拒绝体现在凭据记录未写入 + 钩子 stderr
+- 凭据导入：用测试入口 `--hdsl-qa-import-path`（+ `--hdsl-qa-import-environment` 走静默启动导入）；
+  或在有 GUI 的会话中手动点原生菜单。revision/state 守卫拒绝体现在凭据记录未写入 + stderr
   `rejected at apply`（native 菜单路径为原生错误框）。
+- 重启对账门禁：构造“退出时 `released:false` 且残留不可证进程”后重启，断言 `environments.start`/
+  `environments.create` 返回受控 `ENVIRONMENT_BUSY` + 原生提示，stop/读/导出仍可用。
 
-## 已验证证据（本地，macOS `Darwin 25.3.0 arm64`）
+## 已验证证据（本地，macOS 26.3 / `Darwin 25.3.0 arm64`）
 
 - 工具链：Node v26.8.1 + pnpm 11.7.0（仓库 `.nvmrc` 为 24.21.0；CI 用该版本）。
 - `pnpm run typecheck`：通过。
 - `pnpm run build` + `pnpm run build:renderer`：通过（`dist/preload/bridge.cjs`、
-  `dist/renderer/app.js` 生成）。
-- `pnpm run test`：**60 passed / 5 skipped，661 tests**（含新增 `tests/desktop/**` 8 文件；
-  合并后的 e2e/integration 场景按各自 skip 规则跳过）。
-- `python3 scripts/check_repository.py`：PASS（27 files / 42 docs / 86 links / 6 JSON / 8 req / 8 tasks）。
-- 真实 Electron 冒烟（`smoke-electron.mjs`，Electron 44.4.3）：
+  `dist/renderer/app.js`、`dist/main/qa-entry.js` 生成）。
+- `pnpm run test`：**61 passed / 5 skipped，680 tests**（含 `tests/desktop/**` 10 文件）。
+- `python3 scripts/check_repository.py`：PASS。
+- 真实 Electron 冒烟（`smoke-electron.mjs`，Electron 44.4.3，生产入口）：
   `hasBridge:true`、成员精确 `call,onOperationUpdated,selectEnvironment`、
   `window.require/process/ipcRenderer` 均 false、`rootTextLength:209`，退出码 0。
+- 真实 macOS 主流程（composition/main 级，脚本 `apps/desktop/scripts/real-main-flow-evidence.mjs`，
+  生产 candidate 后与本批同 commit；用真实 `createRuntimePort()` + 真实 macOS `security` CLI）：
+  真实 install（Node 22.19.0 + DSH 0.1.5-rc.2 npm-ci）→ 同一 `applyCredentialFile` 导入引用 →
+  start 阶段 `spawning`/`waiting-ready`/`finished` 且 state=running → `openWebUI` 经 Main-only
+  `consumeWebUIBootstrap`（bootstrap 303 + Set-Cookie，带 cookie GET origin = 200 / 27660 B）→
+  launch record 无 token/canary → diagnostics 不含 canary/`.credentials.yaml`/`credentials.json`/
+  dataRoot 原文 → stop=stopped → close released=true → 宿主 `~/.dsh` 递归 `name:size:mtime` 快照前后一致。
+  keychain canary 随机 `hdsl-t006-evidence-<hex>#t006`，创建前不存在、secret 经 stdin、
+  finally `delete` 退出码 0 并 `find` 断言不存在（exit 44）通过。
+- **真实 GUI 操作（原生菜单/保存对话框/点击）不在本表**：归 QA25 与人工；测试注入列不冒充它。
 
 ## 未验证 / 缺口（不得读作已完成）
 
-- 真实 UI 主流程 E2E（创建→选择→启停→进度→错误）、真实 DSH 安装与进程、真实 keychain 解析与
-  `service#account` 成功路径：归 QA `tests/e2e/**` 与 T008 实机证据。
-- 认证 WebUI 打开的端到端浏览器 cookie/交互：runtime PR #67（`a16146c`）已合入本分支，接线与
-  `openVerifiedWebUi` 单元语义已验证；真实浏览器 cookie 建立后的可用页与真实 DSH 进程归 QA/实机。
-  本任务不使用 HTTP 303/200 替代真实可用页。
-- 主进程凭据导入入口的真实原生菜单/对话框执行与专职安全 review：见 ADR 0004「待验证」。
+- 真实 Electron GUI 主流程点击（创建→选择→启停→进度→错误）、原生菜单与原生保存/打开对话框的真实
+  人工操作：归 QA25 `tests/e2e/**` 与人工；未被测试注入替代。
+- 认证 WebUI 的浏览器 cookie 建立后的真实 GUI 可用页：composition 级已证 303→cookie→200 页面；
+  但不用 HTTP 303/200 冒充 GUI 可用页，GUI 交互归 QA25。
 - Windows x64：未实现、未测（M2 边界）。
-- 无独立安全 reviewer 在本会话执行；PR 需由编排指派安全 review。
+- 安全 review：8 已对 9b52364 CHANGES_REQUESTED 2/2；本批实现 P2-1/P2-2/P3 后需重新 review 新 SHA。
+

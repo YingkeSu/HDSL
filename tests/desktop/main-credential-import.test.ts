@@ -7,18 +7,31 @@
  * `secret`/`value` fields. The apply path is proven to call the existing trusted
  * core API with references only, under fresh environment state/revision guards.
  */
-import { describe, expect, it, vi } from 'vitest';
+import { mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { portFail, portOk, type EnvironmentSummary, type PortOutcome } from '@hdsl/contracts';
 import type { CredentialBinding, EnvironmentService } from '@hdsl/core';
 import {
   applyCredentialFile,
   applyCredentialImport,
   CREDENTIAL_IMPORT_MAX_BINDINGS,
+  CREDENTIAL_IMPORT_MAX_BYTES,
   hasLaunchCredentialReference,
   parseCredentialImportDocument,
+  readBoundedCredentialFile,
 } from '../../apps/desktop/src/main/credential-import.js';
 
 const ENVIRONMENT_ID = 'env-abc12345';
+
+const roots: string[] = [];
+
+afterEach(() => {
+  for (const root of roots.splice(0)) {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
 
 const reference = (key = 'hdsl.dsh#account-1') => ({
   id: 'cred-abc12345',
@@ -176,7 +189,7 @@ describe('applyCredentialImport', () => {
 describe('applyCredentialFile', () => {
   it('reads, validates and applies without copying or logging the file', () => {
     const writes: RecordedWrite[] = [];
-    const readText = vi.fn(() => validDocument);
+    const readText = vi.fn(() => ({ ok: true, text: validDocument }) as const);
     const result = applyCredentialFile(
       fakeService(environment(), writes),
       ENVIRONMENT_ID,
@@ -193,9 +206,7 @@ describe('applyCredentialFile', () => {
       fakeService(environment(), []),
       ENVIRONMENT_ID,
       '/tmp/missing.json',
-      () => {
-        throw new Error('ENOENT');
-      },
+      () => ({ ok: false, reason: '无法读取所选配置文件' }),
     );
     expect(readFailure).toMatchObject({ ok: false, stage: 'read' });
 
@@ -203,10 +214,64 @@ describe('applyCredentialFile', () => {
       fakeService(environment(), []),
       ENVIRONMENT_ID,
       '/tmp/bad.json',
-      () => document([{ name: 'X', reference: reference(), value: 'secret' }]),
+      () => ({
+        ok: true,
+        text: document([{ name: 'X', reference: reference(), value: 'secret' }]),
+      }),
     );
     expect(parseFailure).toMatchObject({ ok: false, stage: 'parse' });
     expect(JSON.stringify(parseFailure)).not.toContain('secret');
+  });
+});
+
+describe('readBoundedCredentialFile', () => {
+  it('reads a small regular file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hdsl-import-read-'));
+    roots.push(root);
+    const file = join(root, 'references.json');
+    writeFileSync(file, validDocument);
+    const result = readBoundedCredentialFile(file);
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.text).toBe(validDocument);
+    }
+  });
+
+  it('rejects an oversized file before reading it fully', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hdsl-import-read-'));
+    roots.push(root);
+    const file = join(root, 'big.json');
+    writeFileSync(file, 'x'.repeat(CREDENTIAL_IMPORT_MAX_BYTES + 1));
+    const result = readBoundedCredentialFile(file);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('过大');
+    }
+  });
+
+  it('rejects a symlink without following it', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hdsl-import-read-'));
+    roots.push(root);
+    const target = join(root, 'target.json');
+    const link = join(root, 'link.json');
+    writeFileSync(target, validDocument);
+    try {
+      symlinkSync(target, link);
+    } catch {
+      return; // platform without symlink support (not our supported matrix)
+    }
+    const result = readBoundedCredentialFile(link);
+    expect(result.ok).toBe(false);
+  });
+
+  it('rejects a non-regular file', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hdsl-import-read-'));
+    roots.push(root);
+    const result = readBoundedCredentialFile(root);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason).toContain('常规文件');
+    }
   });
 });
 

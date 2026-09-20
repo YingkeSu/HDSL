@@ -13,6 +13,13 @@
  * read, written or enumerated here.
  */
 import {
+  closeSync,
+  constants,
+  fstatSync,
+  openSync,
+  readSync,
+} from 'node:fs';
+import {
   credentialReferenceSchema,
   formatValidationIssues,
   portFail,
@@ -163,24 +170,80 @@ export type CredentialImportFileResult =
       readonly message: string;
     };
 
+export type BoundedReadResult =
+  | { readonly ok: true; readonly text: string }
+  | { readonly ok: false; readonly reason: string };
+
+/**
+ * Reads a credential-reference file with pre-read limits: the path must be a
+ * regular file (not a symlink, FIFO, device or directory) and at most
+ * {@link CREDENTIAL_IMPORT_MAX_BYTES}. `O_NOFOLLOW` rejects a symlink without
+ * following it, `O_NONBLOCK` prevents a special file from blocking, `fstat`
+ * checks the type and size before any read, and the read is bounded to the cap
+ * plus one byte so an oversized file is rejected without unbounded allocation.
+ */
+export const readBoundedCredentialFile = (path: string): BoundedReadResult => {
+  const noFollow = constants.O_NOFOLLOW ?? 0;
+  const nonBlock = constants.O_NONBLOCK ?? 0;
+  let descriptor: number;
+  try {
+    descriptor = openSync(path, constants.O_RDONLY | noFollow | nonBlock);
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ELOOP') {
+      return { ok: false, reason: '不支持符号链接配置文件' };
+    }
+    return { ok: false, reason: '无法读取所选配置文件' };
+  }
+  try {
+    const stat = fstatSync(descriptor);
+    if (!stat.isFile()) {
+      return { ok: false, reason: '配置文件必须是常规文件' };
+    }
+    if (stat.size > CREDENTIAL_IMPORT_MAX_BYTES) {
+      return {
+        ok: false,
+        reason: `配置文件过大（上限 ${String(CREDENTIAL_IMPORT_MAX_BYTES)} 字节）`,
+      };
+    }
+    const buffer = Buffer.alloc(CREDENTIAL_IMPORT_MAX_BYTES + 1);
+    let offset = 0;
+    while (offset < buffer.length) {
+      const read = readSync(descriptor, buffer, offset, buffer.length - offset, offset);
+      if (read === 0) {
+        break;
+      }
+      offset += read;
+    }
+    if (offset > CREDENTIAL_IMPORT_MAX_BYTES) {
+      return {
+        ok: false,
+        reason: `配置文件过大（上限 ${String(CREDENTIAL_IMPORT_MAX_BYTES)} 字节）`,
+      };
+    }
+    return { ok: true, text: buffer.subarray(0, offset).toString('utf8') };
+  } finally {
+    closeSync(descriptor);
+  }
+};
+
 /**
  * Reads and applies one credential-reference file. The path always comes from
  * a native chooser or an operator-controlled hook, never from the renderer.
- * The original file is never copied and the text is never logged.
+ * The original file is never copied and the text is never logged. The default
+ * reader applies the pre-read type/size/symlink limits above.
  */
 export const applyCredentialFile = (
   service: EnvironmentService,
   environmentId: string,
   filePath: string,
-  readText: (path: string) => string,
+  readText: (path: string) => BoundedReadResult = readBoundedCredentialFile,
 ): CredentialImportFileResult => {
-  let text: string;
-  try {
-    text = readText(filePath);
-  } catch {
-    return { ok: false, stage: 'read', message: '无法读取所选配置文件' };
+  const read = readText(filePath);
+  if (!read.ok) {
+    return { ok: false, stage: 'read', message: read.reason };
   }
-  const parsed = parseCredentialImportDocument(text);
+  const parsed = parseCredentialImportDocument(read.text);
   if (!parsed.ok) {
     return { ok: false, stage: 'parse', message: parsed.reason };
   }
