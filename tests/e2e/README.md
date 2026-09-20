@@ -38,7 +38,7 @@ tests/e2e/
   desktop.injected.real.test.ts          # qa-entry test-injection lane (opt-in)
   desktop.browser.real.test.ts           # isolated real-browser authenticated page (opt-in)
   desktop.gui.real.test.ts               # production GUI start/stop (opt-in, injected credential setup)
-  desktop.iframe.real.test.ts            # real-window iframe boundary + always-on layer-classifier negative control (opt-in real case)
+  desktop.iframe.real.test.ts            # real-window iframe boundary + always-on layer-classifier negative control (opt-in real case; no CSP dynamic claim)
   scenarios/
     desktop-e2e-scenario-plan.ts         # 24 planned QA cases with lanes and observations
   support/

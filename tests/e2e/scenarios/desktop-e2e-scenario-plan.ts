@@ -188,10 +188,10 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     evidence: 'injected',
     realUi: true,
     determinismGate: '真实窗口验证 popup 拒绝与 main frame 外部导航拒绝；子 frame 授权仅用 isTrustedDocumentUrl 对 isMainFrame=false 的纯函数断言',
-    negativeControl: '主 frame 的精确文档 URL 必须授权（纯函数）；真实 srcdoc 子 frame 无桥、data: 子 frame 被 CSP 拒；带桥子 frame 的真实 sender 拒绝未覆盖，不得用 popup/nav 或 CSP 结果冒充',
+    negativeControl: '主 frame 的精确文档 URL 必须授权（纯函数）；真实 srcdoc 子 frame 无桥、该 frame 自身的 data: 导航失败；带桥子 frame 的真实 sender 拒绝未覆盖，不得用 popup/nav 或静态 CSP 配置冒充',
     requires: ['electron.window', 'ipc.sender-guard'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @2cdea54/3174447：真实窗口 window.open 返回 null、外部导航被拒且 URL 不变；真实 srcdoc 子 frame 执行但 window.hdsl/require/process/ipcRenderer 全 undefined，data: 子 frame 被 CSP 拒（chrome-error://）；带桥子 frame 的真实 senderFrame 拒绝仍未覆盖（纯函数 isMainFrame=false 已断言，另见 E2E-IFRAME-01）',
+    observation: '已执行 2026-09-20 @2cdea54/3174447：真实窗口 window.open 返回 null、外部导航被拒且 URL 不变；真实 srcdoc 子 frame 执行但 window.hdsl/require/process/ipcRenderer 全 undefined；该 frame 自身的 data: 导航失败（chrome-error://chromewebdata/，按 data: src 归因）；带桥子 frame 的真实 senderFrame 拒绝仍未覆盖（纯函数 isMainFrame=false 已断言，另见 E2E-IFRAME-01）',
   },
   {
     id: 'E2E-TRUST-04',
@@ -416,16 +416,16 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
   },
   {
     id: 'E2E-IFRAME-01',
-    title: '真实窗口 iframe 边界：子 frame 无桥；CSP 与 sender 拒绝分层',
+    title: '真实窗口 iframe 边界：子 frame 无桥、data 导航失败；静态 CSP 配置与 sender 拒绝分层',
     requirements: ['FR-003', 'FR-007'],
     lane: 'synthetic',
     evidence: 'real',
     realUi: true,
     determinismGate: '生产窗口内构造 srcdoc 与 data: 子 frame，有界等待后读取子 frame 文档与上下文；主 frame 调用作前后对照',
-    negativeControl: 'srcdoc 子 frame 若携带 window.hdsl/require/process/ipcRenderer 任一即失败；data: 子 frame 未被 CSP 拒（无 refusal 日志或出现 data: 文档）即失败；带桥子 frame 的 sender 拒绝不在本用例覆盖',
+    negativeControl: 'srcdoc 子 frame 若携带 window.hdsl/require/process/ipcRenderer 任一即失败；该 frame 的 data: 导航若产出请求文档（出现 qa-data）或未落到 error 文档、或 src 非 data: 即失败；带桥子 frame 的 sender 拒绝不在本用例覆盖',
     requires: ['electron.window', 'preload.bridge', 'ipc.sender-guard'],
     status: 'executed',
-    observation: '已执行 2026-09-20 @3174447：srcdoc 子 frame 实际执行（about:srcdoc）且 bridge 全 undefined；data: 子 frame 被 CSP 拒（chrome-error:// + refusal 日志）；主 frame catalog.list 前后 ok。CSP 层已验，main senderFrame 真实拒绝与带桥子 frame 未覆盖',
+    observation: '已执行 2026-09-20 @3174447：srcdoc 子 frame 实际执行（about:srcdoc + 可见 qa-frame）且 bridge 全 undefined；该 frame 的 data: 导航失败（chrome-error://chromewebdata/，按 data: src 归因）；主 frame catalog.list 前后 ok。静态 CSP 配置（default-src none、无 frame-src）另列；main senderFrame 真实拒绝与带桥子 frame 未覆盖',
   },
 ];
 
