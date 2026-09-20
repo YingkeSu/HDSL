@@ -12,6 +12,8 @@ export * from './errors.js';
 export * from './fsx.js';
 export * from './ids.js';
 export * from './layout.js';
+export * from './data-root-lock.js';
+export * from './credential-store.js';
 export * from './environment-store.js';
 export * from './operation-store.js';
 export * from './journal.js';

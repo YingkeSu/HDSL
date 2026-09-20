@@ -17,11 +17,19 @@
  * The credentials module still owns no environment state: `load` is supplied by
  * the process module, which is also the only place that reads the environment
  * store.
+ *
+ * Production binding rule: a keychain reference must name service **and**
+ * account. `security find-generic-password -s <service>` returns the first
+ * matching account, so a service-only reference could read an unrelated item;
+ * this port rejects such a binding before any provider read. The mechanism layer
+ * (`createCredentialInjection`) keeps accepting service-only keys so existing
+ * callers and focused tests are unaffected.
  */
 import { portFail, portOk, type ErrorCode, type PortOutcome } from '@hdsl/contracts';
 import { CredentialFailure } from './errors.js';
 import { createCredentialInjection } from './injection.js';
 import type { SecurityRunner } from './keychain.js';
+import { parseKeychainKey } from './reference.js';
 import type { CredentialBinding, CredentialInjection, LaunchEnvironmentHandle } from './types.js';
 
 /** What the process module loads for one environment before a start. */
@@ -61,6 +69,25 @@ export interface LaunchCredentialPortOptions {
 export const credentialFailureCode = (code: CredentialFailure['code']): ErrorCode =>
   code === 'UNSUPPORTED_PLATFORM' ? 'UNSUPPORTED_COMBINATION' : 'INTERNAL_ERROR';
 
+/**
+ * Production rule: a keychain binding must carry a complete `service#account`
+ * reference. Runs before the provider (or even the injection) is built, so a
+ * service-only binding never reaches a store read. Every other store is left to
+ * the provider selection, which fails closed on unsupported platforms.
+ */
+export const requireCompleteKeychainReference = (binding: CredentialBinding): void => {
+  if (binding.reference.store !== 'keychain') {
+    return;
+  }
+  const locator = parseKeychainKey(binding.reference.key);
+  if (locator.account === undefined) {
+    throw new CredentialFailure(
+      'INVALID_REFERENCE',
+      `keychain reference for "${binding.name}" must include an account (service#account)`,
+    );
+  }
+};
+
 /** Creates the adapter the process owner passes as `credentials`. */
 export const createLaunchCredentialPort = (
   options: LaunchCredentialPortOptions,
@@ -84,6 +111,9 @@ export const createLaunchCredentialPort = (
         return portFail('INTERNAL_ERROR', 'could not load the environment credential binding');
       }
       try {
+        for (const binding of request.bindings) {
+          requireCompleteKeychainReference(binding);
+        }
         const launch = await buildInjection().resolveLaunchEnvironment(request);
         return portOk({ env: launch.env, dispose: launch.dispose });
       } catch (error) {

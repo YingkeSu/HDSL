@@ -63,6 +63,20 @@ describe('resolveLaunchEnvironment', () => {
     expect(provider.reads).toEqual(['hdsl.deepseek']);
   });
 
+  it('keeps service-only references working at the mechanism layer (compatibility only)', async () => {
+    // The production port rejects service-only keychain references; the
+    // environment-agnostic mechanism keeps accepting them so existing callers
+    // and focused store tests are unaffected.
+    const provider = createFakeProvider({ values: { svc: CANARY } });
+    const injection = createCredentialInjection({ provider });
+    const launch = await injection.resolveLaunchEnvironment({
+      bindings: [binding('DEEPSEEK_API_KEY', 'svc')],
+      baseEnv: {},
+    });
+    expect(launch.env['DEEPSEEK_API_KEY']).toBe(CANARY);
+    expect(provider.reads).toEqual(['svc']);
+  });
+
   it('never inherits the host process environment', async () => {
     process.env['HDSL_CREDENTIALS_TEST_SENTINEL'] = 'host-value';
     try {
