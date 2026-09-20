@@ -213,8 +213,10 @@ fi
 if [[ -n "${DSH_EXPECT_COMMIT:-}" ]]; then
   if [[ -d "$DSH_REPO/.git" ]]; then
     HEAD_SHA="$(git -C "$DSH_REPO" rev-parse HEAD 2>/dev/null || echo unknown)"
-    STATUS_OUT="$(git -C "$DSH_REPO" status --porcelain 2>/dev/null)"; GIT_RC=$?
-    DIRTY="$(printf '%s\n' "$STATUS_OUT" | grep -vc '^??' || true)"
+    # --untracked-files=no ignores untracked files; count non-empty lines so an empty
+    # status (clean tree) is 0, not 1. Fail closed when git itself fails.
+    STATUS_OUT="$(git -C "$DSH_REPO" status --porcelain --untracked-files=no 2>/dev/null)"; GIT_RC=$?
+    DIRTY="$(printf '%s\n' "$STATUS_OUT" | grep -c . || true)"
     say "repo HEAD      : $HEAD_SHA"
     say "repo dirtiness : $DIRTY tracked modifications"
     [[ "$HEAD_SHA" == "$DSH_EXPECT_COMMIT" ]] && ok "source checkout is at expected commit $DSH_EXPECT_COMMIT" || bad "source HEAD $HEAD_SHA, expected $DSH_EXPECT_COMMIT"
