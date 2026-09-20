@@ -128,8 +128,8 @@ T004 落地后，新增 `tests/integration/install/install.integration.test.ts` 
 ## 完成报告（本阶段）
 
 - PR：https://github.com/YingkeSu/HDSL/pull/33（独立 QA 测试 PR，需专职 reviewer 审核；作者 hdsl-15 不可 review）
-- head：`c164420ff18c32e4a1c6b8771dffdf987ceb58e9`（`ao/hdsl-18/install-qa-fixtures`，基线 `3e76a49`）
-- checks（GitHub Actions，2026-09-20）：`repository`（两次）pass；`typecheck / build / unit (ubuntu-latest)`（两次）pass；无失败 check
+- head（夹具提交）：`c164420ff18c32e4a1c6b8771dffdf987ceb58e9`（`ao/hdsl-18/install-qa-fixtures`，基线 `3e76a49`）；PR #33 的 CI 对 PR head 运行，后续 doc-only 提交不改变夹具内容
+- checks（GitHub Actions，2026-09-20）：`repository`（两次）pass；`typecheck / build / unit (ubuntu-latest)`（两次）pass；无失败 check（在夹具提交 `c164420` 上）
 - 本地检查：`python3 scripts/check_repository.py` PASS；`pnpm run typecheck` PASS；`pnpm run test` 13 files / 236 tests passed（含 9 项夹具自检）
 - 交付：`tests/integration/install/**`（夹具 + 9 项自检 + 场景函数）、本文件
 - 阻塞：等待 #4 提供稳定接口/精确候选 SHA；到位后恢复 INST-* 运行并回报
