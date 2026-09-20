@@ -12,21 +12,23 @@
  *   idempotency and T004–T006 effects are out of scope here;
  * - "not yet implemented" (DSH, UI) is not treated as a defect.
  *
- * Baseline: fixed PR #21 head `b1904cec62ab022793d572c16f6fe10d639f7d08`
- * (previously frozen `0cfbdbd72d9b01939e20a39c41ade6f927ebff20`), main
- * `5a9d295`, Node `v24.21.0`, pnpm `11.7.0`, darwin/arm64.
+ * Baseline: final candidate PR #21 head
+ * `12416b1cd14e39606cee62c2e39706f1c3171782` (previously `b1904ce`,
+ * frozen `0cfbdbd72d9b01939e20a39c41ade6f927ebff20`), main `5a9d295`,
+ * Node `v24.21.0`, pnpm `11.7.0`, darwin/arm64.
  *
  * Run: `pnpm vitest run tests/acceptance/contracts`
  *
- * Two sections:
+ * Three sections:
  * - `frozen contract behavior` — behavior the contract pins down and that
  *   already held on the frozen SHA.
- * - `contract expectations` — cases that assert the behavior the contract
- *   requires. The original 10 were intentionally red on `0cfbdbd` and pass on
- *   `b1904ce` with unchanged expectations. The `operations.cancel` guard case
- *   (found by hdsl-5 at `b1904ce`) is red until that guard fix lands. The suite
- *   must never be green *because* a defect exists; do not weaken, skip or
- *   `it.fails` these.
+ * - `contract expectations` — the 11 cases that assert the behavior the
+ *   contract requires. 10 were intentionally red on `0cfbdbd`; the
+ *   `operations.cancel` guard case was red on `b1904ce`. All are green on
+ *   `12416b1` with unchanged expectations. The suite must never be green
+ *   *because* a defect exists; do not weaken, skip or `it.fails` these.
+ * - `redaction increment` — the security re-review forms (get/cancel `phase`
+ *   and `.credentials.yaml`/JSON secret assignments) that `12416b1` added.
  */
 import {
   createContractRuntime,
@@ -53,7 +55,7 @@ import {
 } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
-const API_SHA = 'b1904cec62ab022793d572c16f6fe10d639f7d08';
+const API_SHA = '12416b1cd14e39606cee62c2e39706f1c3171782';
 const PRIOR_SHA = '0cfbdbd72d9b01939e20a39c41ade6f927ebff20';
 
 interface Harness {
@@ -300,11 +302,10 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
 describe(`contract expectations @ ${API_SHA} (red on ${PRIOR_SHA})`, () => {
   /**
    * Every case below asserts the behavior the contract text requires. The
-   * original 10 were red on `0cfbdbd` and are green on `b1904ce` with the
-   * same expectation; they remain the regression guards for issues #22 #23
-   * #24 #25 #26 #27 and review F3. The final `[#22/cancel guard]` case is red
-   * on `b1904ce` (hdsl-5 finding, fix in flight) and must go green without an
-   * expectation change. Do not weaken, skip or `it.fails` them.
+   * original 10 were red on `0cfbdbd`; the `[#22/cancel guard]` case was red
+   * on `b1904ce`. All 11 are green on `12416b1` without changing an
+   * expectation, and remain the regression guards for issues #22 #23 #24 #25
+   * #26 #27 and review F3. Do not weaken, skip or `it.fails` them.
    */
 
   it('[#22] a guard rejection must not permanently poison the requestId on corrected parameters', () => {
@@ -521,5 +522,91 @@ describe(`contract expectations @ ${API_SHA} (red on ${PRIOR_SHA})`, () => {
     exists = true;
     const second = runtime.dispatch(request);
     expect(second.ok).toBe(true);
+  });
+});
+
+describe(`redaction increment @ ${API_SHA} (get/cancel phase + credential forms)`, () => {
+  const CANARY = 'canary-SECRET-9f3a';
+
+  const snapshotWith = (phase: string, message?: string): OperationSnapshot => ({
+    id: 'op-leaky',
+    environmentId: FIXTURE_IDS.environment.running,
+    kind: 'start',
+    phase,
+    status: 'failed',
+    sequence: 9,
+    ...(message === undefined
+      ? {}
+      : { error: { code: 'INTERNAL_ERROR' as const, message, retryable: false } }),
+  });
+
+  const leakyRuntime = (snapshot: OperationSnapshot): Harness =>
+    harness({
+      findOperation: () => portOk(snapshot),
+      cancelOperation: () => portOk(snapshot),
+    });
+
+  // Security re-review forms: `.credentials.yaml` uses `secret: <value>`, JSON
+  // carries quoted keys, and DSH cookies use `dsh-auth-<hash>=<value>`.
+  const CREDENTIAL_FORMS = [
+    `secret: ${CANARY}`,
+    `"secret":"${CANARY}"`,
+    `/Users/alice/.config/.credentials.yaml secret: ${CANARY}`,
+    `{"password":"${CANARY}"}`,
+    `dsh-auth-abcd=${CANARY}`,
+  ];
+
+  it.each(CREDENTIAL_FORMS)('operations.get does not echo a leaky phase: %s', (phase) => {
+    const { runtime } = leakyRuntime(snapshotWith(phase));
+    const response = runtime.dispatch(
+      contractRequest('operations.get', { operationId: 'op-leaky' }),
+    );
+    const text = JSON.stringify(response);
+    expect(typeof response.ok).toBe('boolean');
+    expect(text).not.toContain(CANARY);
+    expect(text).not.toContain('/Users/alice');
+  });
+
+  it.each(CREDENTIAL_FORMS)('operations.cancel does not echo a leaky phase: %s', (phase) => {
+    const { runtime } = leakyRuntime(snapshotWith(phase));
+    const response = runtime.dispatch(
+      contractRequest('operations.cancel', {
+        requestId: 'acc-redact-cancel',
+        operationId: 'op-leaky',
+      }),
+    );
+    const text = JSON.stringify(response);
+    expect(typeof response.ok).toBe('boolean');
+    expect(text).not.toContain(CANARY);
+    expect(text).not.toContain('/Users/alice');
+  });
+
+  it.each(CREDENTIAL_FORMS)('nested error messages do not echo a credential: %s', (message) => {
+    const { runtime } = leakyRuntime(snapshotWith('finished', message));
+    const response = runtime.dispatch(
+      contractRequest('operations.get', { operationId: 'op-leaky' }),
+    );
+    const text = JSON.stringify(response);
+    expect(text).not.toContain(CANARY);
+    expect(text).not.toContain('/Users/alice');
+  });
+
+  it('operation.updated events carry the sanitized phase', () => {
+    const { runtime } = leakyRuntime(snapshotWith(`secret: ${CANARY}`));
+    const events: OperationUpdatedEvent[] = [];
+    runtime.subscriptions.onEvent((event) => events.push(event));
+    const subscribed = runtime.dispatch(
+      contractRequest('operations.subscribe', { requestId: 'acc-redact-sub' }),
+    );
+    expect(subscribed.ok).toBe(true);
+    const cancelled = runtime.dispatch(
+      contractRequest('operations.cancel', {
+        requestId: 'acc-redact-cancel-event',
+        operationId: 'op-leaky',
+      }),
+    );
+    expect(cancelled.ok).toBe(true);
+    expect(events.length).toBeGreaterThan(0);
+    expect(JSON.stringify(events)).not.toContain(CANARY);
   });
 });
