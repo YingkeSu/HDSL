@@ -21,10 +21,11 @@ const BEARER = /\b(bearer)\s+[A-Za-z0-9._~+/=-]+/gi;
 /**
  * Matches `name: value` / `name=value` assignments whose key looks secret-like
  * (DSH's `.credentials.yaml` uses `secret: <base64url>`, cookies use
- * `dsh-auth-<hash>=<value>`).
+ * `dsh-auth-<hash>=<value>`). Keys are matched as tokens (no `.`), and an
+ * optional quote around the key covers JSON (`{"secret":"..."}`).
  */
 const SECRET_ASSIGNMENT =
-  /\b([A-Za-z0-9_.-]*(?:secret|password|passwd|pwd|token|api[_-]?key|credential|authorization|auth|cookie)[A-Za-z0-9_.-]*)\s*[:=]\s*("[^"]*"|'[^']*'|(?![Bb]earer\b)[^\s,;{}]+)/gi;
+  /\b([A-Za-z0-9_-]*(?:secret|password|passwd|pwd|token|api[_-]?key|credential|authorization|auth|cookie)[A-Za-z0-9_-]*)["']?\s*[:=]\s*("[^"]*"|'[^']*'|(?![Bb]earer\b)[^\s,;{}]+)/gi;
 
 /** Bare `key=...` assignment (word-bounded, so `monkey=` is untouched). */
 const KEY_ASSIGNMENT = /\b(key=)[^&#\s]*/gi;

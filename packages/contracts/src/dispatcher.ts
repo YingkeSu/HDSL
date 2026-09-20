@@ -53,6 +53,7 @@ import {
   type SubscriptionRef,
 } from './dto.js';
 import { isPlainRecord, type Schema, type ValidationIssue } from './schema.js';
+import { sanitizeContractMessage } from './redaction.js';
 
 const ENVELOPE_KEYS: readonly string[] = ['apiVersion', 'method', 'input'];
 
@@ -132,16 +133,19 @@ const validatePortValue = <T>(schema: Schema<T>, value: unknown, label: string):
 };
 
 /**
- * A nested error carried by a port-produced snapshot is replaced with the
- * controlled message for its code; the port's own text never crosses the bridge.
+ * A port-produced snapshot is normalized before it can cross the bridge: the
+ * free-text `phase` is sanitized (matching the event path) and a nested
+ * error's port message is replaced with the controlled message for its code.
  */
 const sanitizeOperationSnapshot = (snapshot: OperationSnapshot): OperationSnapshot => {
-  if (snapshot.error === undefined || snapshot.error === null) {
-    return snapshot;
+  const phase = sanitizeContractMessage(snapshot.phase);
+  const normalized = phase === snapshot.phase ? snapshot : { ...snapshot, phase };
+  if (normalized.error === undefined || normalized.error === null) {
+    return normalized;
   }
   return {
-    ...snapshot,
-    error: { ...snapshot.error, message: contractErrorForCode(snapshot.error.code).message },
+    ...normalized,
+    error: { ...normalized.error, message: contractErrorForCode(normalized.error.code).message },
   };
 };
 
@@ -311,6 +315,12 @@ const execute = (
     }
     case 'operations.cancel': {
       const typed = input as MethodInputs['operations.cancel'];
+      // Existence is a pure guard: an unknown operationId must not poison the
+      // requestId, matching environments.start/stop (review F1-cancel).
+      const existing = runtime.port.findOperation(typed.operationId);
+      if (!existing.ok) {
+        return guardFailure(existing);
+      }
       markInProgress();
       const outcome = runtime.port.cancelOperation({
         requestId: typed.requestId,
@@ -343,6 +353,9 @@ const execute = (
     }
     case 'operations.unsubscribe': {
       const typed = input as MethodInputs['operations.unsubscribe'];
+      // T003 runs with owner=null, so has() and unsubscribe() agree. T006 must
+      // pass the same trusted owner to both so a mismatched owner cannot report
+      // a successful unsubscribe (see local-api.md).
       if (!runtime.subscriptions.has(typed.subscriptionId)) {
         return { response: failureForCode('NOT_FOUND'), executed: false };
       }

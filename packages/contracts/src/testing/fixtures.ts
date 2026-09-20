@@ -912,6 +912,23 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
       }),
     ],
   },
+  {
+    id: 'operations-cancel-guard-retry',
+    method: 'operations.cancel',
+    kind: 'legal',
+    description: 'an unknown operationId guard rejection does not poison the requestId',
+    request: request('operations.cancel', {
+      requestId: 'req-cancel-retry',
+      operationId: FIXTURE_IDS.operation.running,
+    }),
+    expected: 'ok',
+    prelude: [
+      request('operations.cancel', {
+        requestId: 'req-cancel-retry',
+        operationId: 'op-missing',
+      }),
+    ],
+  },
 ];
 
 export const ALL_CONTRACT_FIXTURES: readonly ContractFixture[] = [

@@ -365,3 +365,93 @@ describe('F5 testing surface is not on the production entry', () => {
     expect(surface['ALL_CONTRACT_FIXTURES']).toBeUndefined();
   });
 });
+
+describe('F1-cancel guard rejection does not write the ledger', () => {
+  it('lets the same requestId retry cancel with a corrected operationId', () => {
+    const { base, runtime } = harness();
+    const unknown = runtime.dispatch(
+      contractRequest('operations.cancel', {
+        requestId: 'acc-cancel-retry',
+        operationId: 'op-missing',
+      }),
+    );
+    expect(errorCode(unknown)).toBe('NOT_FOUND');
+
+    const corrected = runtime.dispatch(
+      contractRequest('operations.cancel', {
+        requestId: 'acc-cancel-retry',
+        operationId: FIXTURE_IDS.operation.running,
+      }),
+    );
+    expect(corrected.ok).toBe(true);
+    expect(base.effects.filter((entry) => entry.startsWith('cancelOperation'))).toHaveLength(1);
+  });
+});
+
+describe('#25 envelope plain-object and own-field rules', () => {
+  it('rejects a prototype-inherited envelope', () => {
+    const { runtime } = harness();
+    const request: Record<string, unknown> = Object.create({
+      apiVersion: '1.0',
+      method: 'catalog.list',
+    });
+    request['input'] = {};
+    expect(errorCode(runtime.dispatch(request))).toBe('INVALID_INPUT');
+  });
+
+  it('rejects an inherited input field', () => {
+    const { runtime } = harness();
+    const input: Record<string, unknown> = Object.create({ name: 'Inherited' });
+    input['requestId'] = 'acc-inherited-input';
+    input['catalogCombinationId'] = FIXTURE_IDS.combination.verified;
+    expect(errorCode(runtime.dispatch(contractRequest('environments.create', input)))).toBe(
+      'INVALID_INPUT',
+    );
+  });
+
+  it('rejects an own "__proto__" key without polluting Object.prototype', () => {
+    const { runtime } = harness();
+    const request = JSON.parse(
+      '{"apiVersion":"1.0","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}',
+    );
+    expect(errorCode(runtime.dispatch(request))).toBe('INVALID_INPUT');
+    expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
+  });
+
+  it('accepts a null-prototype envelope and input', () => {
+    const { runtime } = harness();
+    const request = Object.create(null) as Record<string, unknown>;
+    request['apiVersion'] = '1.0';
+    request['method'] = 'catalog.list';
+    request['input'] = Object.create(null) as Record<string, unknown>;
+    expect(runtime.dispatch(request).ok).toBe(true);
+  });
+});
+
+describe('P2-3 redaction residuals', () => {
+  it.each([
+    'read $DSH_HOME/.credentials.yaml: secret: AAAAsecretVALUE',
+    '{"secret":"AAAAsecretVALUE"}',
+  ])('redacts %s', (message) => {
+    expect(sanitizeContractMessage(message)).not.toContain('AAAAsecretVALUE');
+  });
+});
+
+describe('response phase is sanitized like the event channel', () => {
+  it('does not leak a credential in OperationSnapshot.phase from operations.get', () => {
+    const snapshot: OperationSnapshot = {
+      id: FIXTURE_IDS.operation.running,
+      environmentId: FIXTURE_IDS.environment.running,
+      kind: 'start',
+      phase: `running token=${CANARY}`,
+      status: 'running',
+      sequence: 9,
+    };
+    const { runtime } = harness({ findOperation: () => portOk(snapshot) });
+    const response = runtime.dispatch(
+      contractRequest('operations.get', { operationId: FIXTURE_IDS.operation.running }),
+    );
+    expect(response.ok).toBe(true);
+    expect(containsSecret(JSON.stringify(response), [CANARY])).toBe(false);
+  });
+});
