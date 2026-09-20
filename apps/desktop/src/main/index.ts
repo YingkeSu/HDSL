@@ -23,15 +23,10 @@ import {
   contractErrorForCode,
   contractFail,
   isPlainRecord,
-  portOk,
-  type ErrorCode,
-  type OpenWebUIResult,
-  type PortOutcome,
 } from '@hdsl/contracts';
 import {
   createDesktopComposition,
   type DesktopComposition,
-  type VerifiedWebUiContext,
   type VerifiedWebUiOpener,
 } from './composition.js';
 import {
@@ -50,6 +45,7 @@ import {
 } from './ipc.js';
 import { buildApplicationMenuTemplate } from './menu.js';
 import { applyWindowSecurity, SECURE_WINDOW_DEFAULTS } from './security.js';
+import { createVerifiedWebUiOpener } from './webui.js';
 
 export { SECURE_WINDOW_DEFAULTS } from './security.js';
 export { DATA_ROOT_ENV, DATA_ROOT_FLAG, resolveDataRoot } from './data-root.js';
@@ -73,68 +69,16 @@ export const ENV_IMPORT_PATH = 'HDSL_CREDENTIAL_IMPORT_PATH';
 export const ENV_IMPORT_ENVIRONMENT = 'HDSL_CREDENTIAL_IMPORT_ENVIRONMENT';
 
 /**
- * Runtime capabilities main may use but `ManagedProcessPort` does not declare.
- * `consumeWebUIBootstrap` is owned by the runtime WebUI slice; when it is
- * absent (older runtime or an adopted process with no in-memory bootstrap) main
- * must NOT open the token-free origin, which would only 401.
- */
-interface WebUiBootstrapConsumer {
-  consumeWebUIBootstrap(
-    environmentId: string,
-    open: (bootstrapUrl: string) => void | Promise<void>,
-  ): Promise<PortOutcome<void>>;
-}
-
-const consumeWebUIBootstrap = (
-  context: VerifiedWebUiContext,
-): WebUiBootstrapConsumer['consumeWebUIBootstrap'] | undefined => {
-  const candidate = (context.processPort as { readonly consumeWebUIBootstrap?: unknown })
-    .consumeWebUIBootstrap;
-  if (typeof candidate !== 'function') {
-    return undefined;
-  }
-  return (candidate as WebUiBootstrapConsumer['consumeWebUIBootstrap']).bind(context.processPort);
-};
-
-const portFailCode = (code: ErrorCode, message: string): PortOutcome<never> => ({
-  ok: false,
-  code,
-  message,
-});
-
-/**
  * Default main-only opener. The bootstrap URL is handed only to the OS browser
  * through this callback; it is never returned, logged, persisted or placed in a
  * diagnostic. Success is reported only after `consumeWebUIBootstrap` resolves
  * with the real open result, so a failed open cannot report `opened: true`.
+ * Without the runtime capability main returns `WEBUI_UNAVAILABLE` instead of
+ * opening the token-free origin that would only 401.
  */
-export const openVerifiedWebUi: VerifiedWebUiOpener = async (
-  context: VerifiedWebUiContext,
-): Promise<PortOutcome<OpenWebUIResult>> => {
-  const consume = consumeWebUIBootstrap(context);
-  if (consume === undefined) {
-    return portFailCode(
-      'WEBUI_UNAVAILABLE',
-      'authenticated WebUI bootstrap is unavailable for this managed process',
-    );
-  }
-  let callbackFailure = false;
-  const outcome = await consume(context.environmentId, async (bootstrapUrl: string) => {
-    try {
-      await shell.openExternal(bootstrapUrl);
-    } catch (error) {
-      callbackFailure = true;
-      throw error;
-    }
-  });
-  if (!outcome.ok) {
-    return portFailCode(outcome.code, outcome.message);
-  }
-  if (callbackFailure) {
-    return portFailCode('WEBUI_UNAVAILABLE', 'the authenticated WebUI could not be opened');
-  }
-  return portOk({ loopbackOrigin: context.loopbackOrigin });
-};
+export const openVerifiedWebUi: VerifiedWebUiOpener = createVerifiedWebUiOpener((url) =>
+  shell.openExternal(url),
+);
 
 const dialogPathChooser: DiagnosticsPathChooser = {
   chooseExportPath(defaultFileName: string): string | null {

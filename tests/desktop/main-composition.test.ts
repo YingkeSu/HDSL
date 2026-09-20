@@ -100,6 +100,7 @@ const compose = async (
   dataRoot: string,
   options: {
     process?: ManagedProcessPort;
+    manager?: ProcessManager;
     opener?: VerifiedWebUiOpener;
   } = {},
 ) => {
@@ -117,6 +118,7 @@ const compose = async (
     runtime: syntheticRuntime(),
     allowArtifactsOnly: true,
     process: options.process ?? fakeProcess(),
+    ...(options.manager === undefined ? {} : { manager: options.manager }),
     openWebUi: opener,
     pathChooser: { chooseExportPath: () => null },
     lockWaitTimeoutMs: 300,
@@ -149,6 +151,52 @@ describe('createDesktopComposition', () => {
     expect(contexts[0]?.loopbackOrigin).toBe('http://127.0.0.1:53123');
     expect(contexts[0]?.processPort).toBeDefined();
 
+    await composition.close();
+  });
+
+  it('passes the runtime main-only bootstrap into the opener and never returns the token URL', async () => {
+    const dataRoot = freshRoot('hdsl-comp-');
+    const openedUrls: string[] = [];
+    const manager = {
+      ...fakeProcess(),
+      consumeWebUIBootstrap: async (
+        environmentId: string,
+        open: (bootstrapUrl: string) => void | Promise<void>,
+      ) => {
+        expect(environmentId).toMatch(/^env-/);
+        await open('http://127.0.0.1:53123/?token=canary-bootstrap');
+        return portOk(undefined);
+      },
+      launchesDirectory: '/tmp/launches',
+      readLaunchRecord: () => undefined,
+      listLaunchRecords: () => [],
+    } as unknown as ProcessManager;
+    const { composition, contexts } = await compose(dataRoot, {
+      manager,
+      opener: async (context) => {
+        contexts.push(context);
+        const consume = context.webUiBootstrap?.consumeWebUIBootstrap;
+        if (consume === undefined) {
+          return portFail('WEBUI_UNAVAILABLE', 'missing capability');
+        }
+        const outcome = await consume(context.environmentId, async (url) => {
+          openedUrls.push(url);
+        });
+        return outcome.ok
+          ? portOk({ loopbackOrigin: context.loopbackOrigin })
+          : portFail(outcome.code, outcome.message);
+      },
+    });
+    await createEnvironment(composition, 'bootstrap 环境');
+    const listed = composition.port.listEnvironments();
+    if (!listed.ok || listed.value[0] === undefined) {
+      throw new Error('environment was not listed');
+    }
+    const opened = await composition.openWebUi(listed.value[0].id);
+    expect(opened.ok).toBe(true);
+    expect(contexts[0]?.webUiBootstrap).toBeDefined();
+    expect(openedUrls).toEqual(['http://127.0.0.1:53123/?token=canary-bootstrap']);
+    expect(JSON.stringify(opened)).not.toContain('canary-bootstrap');
     await composition.close();
   });
 
@@ -234,6 +282,7 @@ describe('adaptProcessPort', () => {
       openWebUI: () => portOk({ loopbackOrigin: 'http://127.0.0.1:53123' }),
       recover: async () => ({ entries: [] }),
       close: async () => portOk(undefined),
+      consumeWebUIBootstrap: async () => portOk(undefined),
       launchesDirectory: '/tmp/launches',
       readLaunchRecord: () => undefined,
       listLaunchRecords: () => [],

@@ -48,16 +48,26 @@ import {
   type DiagnosticsPathChooser,
 } from './exporter.js';
 
+/** The main-only runtime capability consumed by the WebUI opener. */
+export interface WebUiBootstrapCapability {
+  consumeWebUIBootstrap(
+    environmentId: string,
+    open: (bootstrapUrl: string) => void | Promise<void>,
+  ): Promise<PortOutcome<void>>;
+}
+
 /** Context handed to the main-only WebUI opener after ownership is verified. */
 export interface VerifiedWebUiContext {
   readonly environmentId: string;
   readonly loopbackOrigin: string;
-  /**
-   * The real managed-process port. A main-only authenticated opener reads its
-   * in-memory bootstrap (e.g. `consumeWebUIBootstrap`) from here; the value is
-   * never returned to the renderer.
-   */
+  /** The core-declared managed-process port (ownership gate). */
   readonly processPort: ManagedProcessPort;
+  /**
+   * Present only when the runtime process manager provides the main-only
+   * authenticated bootstrap. The URL it hands the callback is never returned to
+   * the renderer, logged or persisted.
+   */
+  readonly webUiBootstrap?: WebUiBootstrapCapability;
 }
 
 /**
@@ -296,6 +306,7 @@ export const createDesktopComposition = async (
       environmentId,
       loopbackOrigin: verified.value.loopbackOrigin,
       processPort,
+      ...(manager === undefined ? {} : { webUiBootstrap: manager }),
     });
   };
 

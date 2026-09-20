@@ -76,12 +76,12 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 - 冻结契约 `environments.openWebUI` 同步返回 `{ loopbackOrigin }`。
 - 前置校验：`ProcessManager.openWebUI(envId)` 必须证明“当前自有进程（pid+startToken+command）+
   loopback”；main 再校验 `isLoopbackOrigin`。
-- 打开：`apps/desktop/src/main/index.ts` 的 `openVerifiedWebUi` **结构化**查找
-  `consumeWebUIBootstrap(envId, open)`（runtime 侧 main-only，#5 不重开；SHA
-  `3ca30591236cced134b12f9cdfafac970f64b4dc` / PR #67）。它是 async 且 `await` open 回调，
-  因此 main 在 IPC 前置钩子里 await 结果后才 dispatch，**不会先回 `opened: true` 再异步失败**；
-  回调抛错映射受控 `INTERNAL_ERROR`，URL 不回显。同 `requestId` 重放时先查幂等账本，跳过前置打开，
-  由 dispatcher 返回原结果，不重复开页。
+- 打开：`apps/desktop/src/main/webui.ts` 的 `createVerifiedWebUiOpener` 使用 runtime 已在 main 提供的
+  `ProcessManager.consumeWebUIBootstrap(envId, open)`（mergeCommit
+  `a16146c3b4578889bd72f6d0afd226b74f737935`，PR #67；未改冻结 contracts/core）。它是 async
+  且 `await` open 回调，因此 main 在 IPC 前置钩子里 await 结果后才 dispatch，**不会先回 `opened: true`
+  再异步失败**；回调抛错映射受控 `INTERNAL_ERROR`，URL 不回显。同 `requestId` 重放时先查幂等
+  账本，跳过前置打开，由 dispatcher 返回原结果，不重复开页。
 - bootstrap URL 只经回调交给 `shell.openExternal`，不写 record/日志/错误/事件/诊断/renderer。
 - runtime 未提供该方法（旧版或 adopt/重启无内存 bootstrap）时返回 `WEBUI_UNAVAILABLE`，
   **不回退打开会 401 的 token-free origin**。
@@ -164,7 +164,8 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 - `pnpm run typecheck`：通过。
 - `pnpm run build` + `pnpm run build:renderer`：通过（`dist/preload/bridge.cjs`、
   `dist/renderer/app.js` 生成）。
-- `pnpm run test`：**57 passed / 4 skipped，630 tests**（含新增 `tests/desktop/**` 7 文件 37 用例）。
+- `pnpm run test`：**60 passed / 5 skipped，661 tests**（含新增 `tests/desktop/**` 8 文件；
+  合并后的 e2e/integration 场景按各自 skip 规则跳过）。
 - `python3 scripts/check_repository.py`：PASS（27 files / 42 docs / 86 links / 6 JSON / 8 req / 8 tasks）。
 - 真实 Electron 冒烟（`smoke-electron.mjs`，Electron 44.4.3）：
   `hasBridge:true`、成员精确 `call,onOperationUpdated,selectEnvironment`、
@@ -174,8 +175,9 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 
 - 真实 UI 主流程 E2E（创建→选择→启停→进度→错误）、真实 DSH 安装与进程、真实 keychain 解析与
   `service#account` 成功路径：归 QA `tests/e2e/**` 与 T008 实机证据。
-- 认证 WebUI 打开的端到端浏览器 cookie/交互：依赖 runtime PR #67 合入本分支后由 QA/实机验证；
-  本分支目前已接线但 runtime 能力尚未在其 base 上。
+- 认证 WebUI 打开的端到端浏览器 cookie/交互：runtime PR #67（`a16146c`）已合入本分支，接线与
+  `openVerifiedWebUi` 单元语义已验证；真实浏览器 cookie 建立后的可用页与真实 DSH 进程归 QA/实机。
+  本任务不使用 HTTP 303/200 替代真实可用页。
 - 主进程凭据导入入口的真实原生菜单/对话框执行与专职安全 review：见 ADR 0004「待验证」。
 - Windows x64：未实现、未测（M2 边界）。
 - 无独立安全 reviewer 在本会话执行；PR 需由编排指派安全 review。
