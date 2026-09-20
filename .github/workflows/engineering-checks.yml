@@ -1,0 +1,39 @@
+name: Engineering checks
+
+# T002 scope: typecheck, build and unit tests for the TypeScript workspace on
+# Linux. Path/permission/lock/rename/process-tree behavior is platform-sensitive
+# and belongs to the macOS/Windows evidence in T008 — a green run here must not
+# be read as launcher acceptance. scripts/check_repository.py keeps running in
+# repository-checks.yml and is intentionally not duplicated here.
+#
+# electron 44 has no install script: it downloads its platform binary lazily on
+# the first `require('electron')`. CI only type-checks and builds (types come
+# from the pinned package), so no Electron binary is fetched here.
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  workspace:
+    name: typecheck / build / unit (ubuntu-latest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+      - name: Typecheck
+        run: pnpm run typecheck
+      - name: Build
+        run: pnpm run build
+      - name: Unit tests
+        run: pnpm run test
