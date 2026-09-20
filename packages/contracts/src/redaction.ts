@@ -3,8 +3,13 @@
  *
  * Contract errors are returned to the untrusted renderer, so they must never
  * carry credentials, bearer tokens, WebUI grant query strings or arbitrary
- * local paths (FR-007, ADR 0002). Validators already build value-free messages;
- * this module is the defense-in-depth pass applied by `contractError`.
+ * local paths (FR-007, ADR 0002). Validators already build value-free messages,
+ * and downstream port text is replaced by controlled per-code messages
+ * (`contractErrorForCode`); this module is the defense-in-depth pass applied by
+ * `contractError`.
+ *
+ * This is a denylist, not a guarantee: security review P2-3 is mitigated
+ * primarily by not forwarding downstream text, not by these patterns.
  */
 
 /** Matches `scheme://user:pass@host` credential material. */
@@ -13,11 +18,24 @@ const URL_CREDENTIALS = /([a-zA-Z][a-zA-Z0-9+.-]*:\/\/)[^/@\s]+@/g;
 /** Matches bearer credentials. */
 const BEARER = /\b(bearer)\s+[A-Za-z0-9._~+/=-]+/gi;
 
-/** Matches token-like assignments (e.g. the DSH WebUI `?token=` grant). */
-const TOKEN_QUERY = /\b((?:token|access_token|api_key|apikey|secret|key)=)[^&#\s]*/gi;
+/**
+ * Matches `name: value` / `name=value` assignments whose key looks secret-like
+ * (DSH's `.credentials.yaml` uses `secret: <base64url>`, cookies use
+ * `dsh-auth-<hash>=<value>`).
+ */
+const SECRET_ASSIGNMENT =
+  /\b([A-Za-z0-9_.-]*(?:secret|password|passwd|pwd|token|api[_-]?key|credential|authorization|auth|cookie)[A-Za-z0-9_.-]*)\s*[:=]\s*("[^"]*"|'[^']*'|(?![Bb]earer\b)[^\s,;{}]+)/gi;
 
-/** Absolute paths that must not leak into contract errors. */
-const LOCAL_PATHS = [/\/(?:Users|home|private|var|tmp|opt)\/[^\s"'()]+/g, /[A-Za-z]:\\[^\s"'()]+/g];
+/** Bare `key=...` assignment (word-bounded, so `monkey=` is untouched). */
+const KEY_ASSIGNMENT = /\b(key=)[^&#\s]*/gi;
+
+/** Absolute path roots that must not leak into contract errors. */
+const LOCAL_PATH_ROOT = String.raw`\/(?:Users|home|private|var|tmp|opt|etc|root|Volumes|Applications|Library|System|usr|bin|sbin|mnt|media)`;
+const LOCAL_PATHS = [
+  new RegExp(`${LOCAL_PATH_ROOT}\\/[^\\s"'()]+`, 'g'),
+  /~\/[^\s"'()]+/g,
+  /[A-Za-z]:\\[^\s"'()]+/g,
+];
 
 const REDACTED_PATH = '<path>';
 
@@ -25,7 +43,8 @@ const REDACTED_PATH = '<path>';
 export const sanitizeContractMessage = (message: string): string => {
   let result = message
     .replace(URL_CREDENTIALS, '$1***@')
-    .replace(TOKEN_QUERY, '$1***')
+    .replace(SECRET_ASSIGNMENT, '$1=***')
+    .replace(KEY_ASSIGNMENT, '$1***')
     .replace(BEARER, 'Bearer ***');
   for (const pattern of LOCAL_PATHS) {
     result = result.replace(pattern, REDACTED_PATH);

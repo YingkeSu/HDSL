@@ -55,6 +55,31 @@ const RETRYABLE_CODES: ReadonlySet<ErrorCode> = new Set<ErrorCode>([
 
 export const isRetryable = (code: ErrorCode): boolean => RETRYABLE_CODES.has(code);
 
+/**
+ * Controlled, secret-free message per code. Used for every value that crosses
+ * the boundary from a downstream port: the port's own message text is never
+ * forwarded (security review P2-3), only its code is trusted.
+ */
+export const ERROR_MESSAGES: Record<ErrorCode, string> = {
+  INVALID_INPUT: 'input is invalid',
+  NOT_FOUND: 'the requested resource was not found',
+  IDEMPOTENCY_CONFLICT: 'requestId was already used with different parameters',
+  CONTRACT_VERSION_MISMATCH: 'the request apiVersion does not match the main process',
+  UNSUPPORTED_COMBINATION: 'the requested combination is not supported on this host',
+  REVISION_CONFLICT: 'expectedRevision does not match the current composition revision',
+  ENVIRONMENT_BUSY: 'the environment is busy or a request is already in progress',
+  WEBUI_UNAVAILABLE: 'the managed WebUI endpoint is unavailable',
+  DOWNLOAD_FAILED: 'the download failed',
+  DIGEST_MISMATCH: 'the artifact digest does not match the audited catalog',
+  DISK_FULL: 'there is not enough disk space',
+  START_TIMEOUT: 'the managed process did not become ready in time',
+  PORT_UNAVAILABLE: 'the requested port is not available',
+  PROCESS_EXITED: 'the managed process exited unexpectedly',
+  CANNOT_CANCEL: 'the operation already committed and cannot be cancelled',
+  EXPORT_FAILED: 'the diagnostic export failed',
+  INTERNAL_ERROR: 'unclassified internal error',
+};
+
 export interface ContractError {
   readonly code: ErrorCode;
   readonly message: string;
@@ -73,23 +98,50 @@ export interface ContractErrorOptions {
   readonly operationId?: string | undefined;
 }
 
-/** Builds a secret-free contract error; the message is always sanitized. */
+/** Contract error messages never exceed this length (also enforced by `contractErrorSchema`). */
+export const MAX_ERROR_MESSAGE_LENGTH = 512;
+
+const boundMessage = (message: string): string =>
+  message.length <= MAX_ERROR_MESSAGE_LENGTH
+    ? message
+    : `${message.slice(0, MAX_ERROR_MESSAGE_LENGTH - 1)}…`;
+
+/** Builds a secret-free contract error; the message is always sanitized and bounded. */
 export const contractError = (
   code: ErrorCode,
   message: string,
   options: ContractErrorOptions = {},
 ): ContractError => {
-  const sanitized = sanitizeContractMessage(message);
+  const sanitized = boundMessage(sanitizeContractMessage(message));
   if (options.operationId === undefined) {
     return { code, message: sanitized, retryable: isRetryable(code) };
   }
   return { code, message: sanitized, retryable: isRetryable(code), operationId: options.operationId };
 };
 
+/** Controlled-message error for a downstream result; the port text is dropped. */
+export const contractErrorForCode = (
+  code: ErrorCode,
+  options: ContractErrorOptions = {},
+): ContractError => contractError(code, ERROR_MESSAGES[code], options);
+
+/** Cap on reported validation issues, so untrusted input cannot inflate the response. */
+export const MAX_REPORTED_ISSUES = 20;
+const MAX_ISSUE_PATH_LENGTH = 80;
+
 /** Renders structural issues without echoing any received value. */
 export const formatValidationIssues = (issues: readonly ValidationIssue[]): string => {
-  const summary = issues.map((issue) => `${issue.path}: ${issue.message}`).join('; ');
-  return `invalid input (${summary})`;
+  const shown = issues.slice(0, MAX_REPORTED_ISSUES).map((issue) => {
+    const path =
+      issue.path.length > MAX_ISSUE_PATH_LENGTH
+        ? `${issue.path.slice(0, MAX_ISSUE_PATH_LENGTH)}…`
+        : issue.path;
+    return `${path}: ${issue.message}`;
+  });
+  if (issues.length > MAX_REPORTED_ISSUES) {
+    shown.push(`${issues.length - MAX_REPORTED_ISSUES} more issue(s)`);
+  }
+  return `invalid input (${shown.join('; ')})`;
 };
 
 export const invalidInput = (issues: readonly ValidationIssue[]): ContractError =>

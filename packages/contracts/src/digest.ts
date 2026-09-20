@@ -60,7 +60,13 @@ const compareUtf8Bytes = (left: string, right: string): number => {
  * insignificant whitespace, arrays kept in their semantic order.
  */
 export const canonicalizeJson = (value: unknown): string => {
-  if (value === null || typeof value === 'boolean' || typeof value === 'number') {
+  if (value === null || typeof value === 'boolean') {
+    return JSON.stringify(value);
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) {
+      throw new TypeError('canonicalizeJson: numbers must be finite');
+    }
     return JSON.stringify(value);
   }
   if (typeof value === 'string') {
@@ -89,7 +95,11 @@ const artifactRefSubset = (ref: RuntimeArtifactRef): RuntimeArtifactRef => ({
 
 const comparePluginLocks = (left: PluginLock, right: PluginLock): number => {
   const byId = compareUtf8Bytes(left.id, right.id);
-  return byId !== 0 ? byId : compareUtf8Bytes(left.version, right.version);
+  if (byId !== 0) {
+    return byId;
+  }
+  const byVersion = compareUtf8Bytes(left.version, right.version);
+  return byVersion !== 0 ? byVersion : compareUtf8Bytes(left.sha256, right.sha256);
 };
 
 /**

@@ -16,8 +16,8 @@
  * - error messages are sanitized so secrets and local paths never cross the
  *   bridge.
  *
- * The `testing/` exports are TEST/FIXTURE ONLY and are not persistence or
- * launcher behavior; T004–T006 implement the real port.
+ * The `testing` fixture port is **not** exported here; it lives behind the
+ * `@hdsl/contracts/testing` subpath and is for tests only.
  */
 export * from './version.js';
 export * from './schema.js';
@@ -31,5 +31,3 @@ export * from './events.js';
 export * from './methods.js';
 export * from './context.js';
 export * from './dispatcher.js';
-export * from './testing/reference-port.js';
-export * from './testing/fixtures.js';

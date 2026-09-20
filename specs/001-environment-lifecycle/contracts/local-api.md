@@ -19,7 +19,8 @@
 - 请求包络为 `{ apiVersion, method, input }`；`catalog.list`/`environments.list` 也要求显式 `input: {}`。
 - main 校验顺序固定：包络结构 → `apiVersion` 结构合法 → 与 `API_VERSION` **完全匹配**（不一致 → `CONTRACT_VERSION_MISMATCH`，不执行方法）→ 方法白名单与严格输入（未知字段、非法 ID、超长文本 → `INVALID_INPUT`）→ 幂等与状态校验。产生任何副作用前必须先通过版本匹配。
 - 请求包含 `requestId`（不透明字符串，长度受限），修改类方法包含 `expectedRevision`（`environments.create` 除外）。
-- 幂等：相同 `requestId` + 相同方法 + 相同参数（规范化 JSON 等于）返回原结果，不重复副作用；相同 `requestId` 但方法或参数不同 → `IDEMPOTENCY_CONFLICT`。参数指纹在输入校验通过、进入状态校验前写入；只有实际执行过（含端口返回的失败终态）才写回结果，纯守卫拒绝（版本/输入/未知 ID/修订/平台）不缓存，使参数修正后可用同一 `requestId` 重试。幂等记录在操作日志持久化，保存期限至少覆盖操作与重试窗口，具体策略在实现规格锁定；T003 只证明内存参考语义，不声称跨重启持久化。
+- 幂等：相同 `requestId` + 相同方法 + 相同参数（规范化 JSON 等于）返回原结果，不重复副作用；相同 `requestId` 但方法或参数不同 → `IDEMPOTENCY_CONFLICT`。记录只有两种状态：`in-progress`（全部守卫通过、效果开始前写入）与 `completed`（效果结束后写入结果，包含成功或端口声明的终态失败）。`in-progress` 的重放返回 `ENVIRONMENT_BUSY`（可重试）且**绝不重复效果**；`completed` 的重放返回原结果。纯守卫拒绝（版本/输入/未知 ID/修订/平台）**不写记录**，因此可用修正后的参数复用同一 `requestId`。`retryable: true` 的失败重试必须使用**新** `requestId`；同一 `requestId` 始终重放已记录结果。幂等记录在操作日志持久化，`in-progress` 中断由 T004 的 journal/reconcile 对账；T003 只证明内存参考语义，不声称跨重启持久化。
+- 出站边界：端口返回的成功值必须通过对应 DTO schema 校验（未知字段/非法 ID/越界 → `INTERNAL_ERROR`，不回显原值）；端口异常、配置不当的返回值、事件不符合 schema 或每 operation `sequence` 非递增，均在 main 边界映射为 `INTERNAL_ERROR`。下游端口的错误文本与事件 `phase` 一律替换为受控文案（见错误码表），不把端口原文拼接进响应。错误 `message` 上限 512 字符，校验 issue 数上限 20 条。
 - 未知 `environmentId`/`operationId`/`subscriptionId` → `NOT_FOUND`，不得退化为创建或静默成功。
 - `expectedRevision` 是**组成修订**，语义见 [data-model.md](../data-model.md)；不匹配 → `REVISION_CONFLICT`，不产生副作用。状态迁移由独立的 `stateVersion` 表示，不作为修改类方法的准入条件。
 - 成功 `{ ok: true, apiVersion, value }`；失败 `{ ok: false, apiVersion, error: { code, message, retryable, operationId? } }`。失败包络始终携带 main 的 `apiVersion`。不暴露栈、密钥、token、cookie 或任意本地路径；错误消息在构造时脱敏（URL 凭据、`token=`/`bearer`、本地绝对路径）。
@@ -48,7 +49,7 @@
 | operations.unsubscribe | requestId, subscriptionId | `null` | 退订后不再推送；未知 subscriptionId → NOT_FOUND |
 | diagnostics.export | requestId, environmentId | ExportResult | 由 main 原生选择路径并脱敏；幂等，失败返回 EXPORT_FAILED |
 
-`OpenWebUIResult` 只返回 `{ loopbackOrigin }`；`loopbackOrigin` 为 `http(s)://127.0.0.1:<port>` 或 `[::1]` 形式，**不含 token、cookie 或查询串**。成功即已原生打开，失败一律走错误码，不设 `opened: false` 这种第二套失败表示。main 必须在打开前核对 `LaunchRecord.endpoint` 属于该环境的当前受管进程，且地址为 loopback；否则返回 `WEBUI_UNAVAILABLE`。
+`OpenWebUIResult` 只返回 `{ loopbackOrigin }`；`loopbackOrigin` 为 `http(s)://127.0.0.1:<port>` 或 `[::1]` 形式，端口必须是 1–65535 的**规范十进制**（拒绝 `:0`、`:65536`、`:99999` 与前导零 `:00080`），**不含 token、cookie 或查询串**。成功即已原生打开，失败一律走错误码，不设 `opened: false` 这种第二套失败表示。main 必须在打开前核对 `LaunchRecord.endpoint` 属于该环境的当前受管进程，且地址为 loopback；否则返回 `WEBUI_UNAVAILABLE`。返回体在出站前按 `openWebUIResultSchema` 校验，额外字段（如 `tokenUrl`/`cookie`）会导致 `INTERNAL_ERROR`。
 
 `ExportResult` 为 `{ exportId, exported: true, redacted: true }`，**不含导出路径**。`exportId` 是不透明稳定标识：相同 `requestId` + 相同参数的重复请求 MUST 返回**原成功摘要**且**不重做导出副作用**（不再次弹窗、不覆盖文件）；不同 `requestId` 产生新导出。本版不新增 `diagnostics.reveal` 接口。
 
@@ -58,7 +59,9 @@
 
 ## 事件
 
-事件通道 `operation.updated` 由 `operations.subscribe` 建立，携带：`subscriptionId`、`operationId`、`sequence`、`phase`、`status`、`progress?`。`sequence` 是**每 operation** 单调递增计数（与 `Operation.sequence`、`OperationSnapshot.sequence` 同一域），不是订阅内全局计数；多操作订阅时按 operationId 分组递增，事件必带 operationId。百分比未知时不给假进度；事件不含 token、cookie 或本地路径。客户端重连以 `operations.get` 为准；取消不等于系统回滚。preload 白名单只暴露上述订阅/退订方法，不暴露任意通道发送。
+事件通道 `operation.updated` 由 `operations.subscribe` 建立，携带：`subscriptionId`、`operationId`、`sequence`、`phase`、`status`、`progress?`。`sequence` 是**每 operation** 单调递增计数（与 `Operation.sequence`、`OperationSnapshot.sequence` 同一域），不是订阅内全局计数；多操作订阅时按 operationId 分组递增，事件必带 operationId。百分比未知时不给假进度；事件不含 token、cookie 或本地路径：发布前逐个 `operationUpdatedEventSchema` 校验（`progress` 必须 0–100），`phase` 先脱敏，不合法事件在 dispatcher 边界映射为 `INTERNAL_ERROR`。客户端重连以 `operations.get` 为准；取消不等于系统回滚。preload 白名单只暴露上述订阅/退订方法，不暴露任意通道发送。
+
+订阅注册表与幂等账本在 T003 是**进程级**。`SubscriptionRegistry` 预留不透明 `owner` 接口，供可信调用上下文（例如窗口 id）隔离退订；但 Electron sender 身份校验、按窗口订阅作用域与配额是 **T006** 职责，本版不声称已实现窗口隔离。`operations.subscribe`/`unsubscribe` 的幂等重放：若退订后重放同一 `requestId`，dispatcher 会以**同一** `subscriptionId` 重建订阅再返回原 ref，不返回失效引用。
 
 ## 错误码
 
@@ -84,7 +87,7 @@
 
 ## 契约 fixture 表（T003 实现）
 
-权威的可执行表是 `packages/contracts/src/testing/fixtures.ts` 的 `ALL_CONTRACT_FIXTURES`；`tests/contracts/fixtures.test.ts` 逐条断言观察到的结果与 `expected` 相等，因此下表与实现不能漂移。该表在**仅测试用**的内存端口上运行；真实持久化、安装与进程效果归 T004–T006，内存端口不构成持久化验收。
+权威的可执行表是 `packages/contracts/src/testing/fixtures.ts` 的 `ALL_CONTRACT_FIXTURES`，通过**仅测试用子路径** `@hdsl/contracts/testing` 导出，不在生产入口 `@hdsl/contracts`；`tests/contracts/fixtures.test.ts` 逐条断言观察到的结果与 `expected` 相等，因此下表与实现不能漂移。该表在**仅测试用**的内存端口上运行；真实持久化、安装与进程效果归 T004–T006，内存端口不构成持久化验收。
 
 包络与版本（`ENVELOPE_FIXTURES`）：
 
@@ -105,15 +108,16 @@
 | environments.create | environments-create-legal | name-too-long / name-path / illegal-id / missing-request-id / unknown-field → `INVALID_INPUT`；unknown-combination → `NOT_FOUND`；platform-mismatch / unverified → `UNSUPPORTED_COMBINATION` |
 | environments.start | environments-start-legal | illegal-id / missing-revision / negative-revision → `INVALID_INPUT`；unknown → `NOT_FOUND`；revision → `REVISION_CONFLICT`；busy → `ENVIRONMENT_BUSY` |
 | environments.stop | environments-stop-legal | unknown → `NOT_FOUND`；revision → `REVISION_CONFLICT`；not-running → `ENVIRONMENT_BUSY` |
-| environments.openWebUI | environments-openwebui-legal | missing-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；stopped / token-url → `WEBUI_UNAVAILABLE` |
+| environments.openWebUI | environments-openwebui-legal | missing-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；stopped / token-url / port-zero / port-too-high / port-huge / port-leading-zero → `WEBUI_UNAVAILABLE` |
 | operations.get | operations-get-legal | illegal-id / unknown-field → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | operations.cancel | operations-cancel-legal | missing-request-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；final → `CANNOT_CANCEL` |
 | operations.subscribe | subscribe-legal-operation / subscribe-legal-all | illegal-id / unknown-field → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | operations.unsubscribe | unsubscribe-legal（先 subscribe 的 prelude） | illegal-id → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | diagnostics.export | export-legal | missing-request-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；failed → `EXPORT_FAILED` |
 | idempotency-conflict | — | 同 `requestId` 不同 `name` → `IDEMPOTENCY_CONFLICT` |
+| idempotency-guard-retry | 先 `NOT_FOUND` 再修正参数 | 修正后同 `requestId` → `ok`（守卫拒绝不锁死参数） |
 
-补充行为测试（`tests/contracts/`，不在上表逐条列出）：重复 `requestId` 返回原 `ExportResult` 摘要且副作用计数为 1；参数键顺序不影响指纹；守卫拒绝不缓存；订阅/退订按 operationId 分组递增且严格单调；秘密不进入错误。
+补充行为测试（`tests/contracts/`，不在上表逐条列出）：重复 `requestId` 返回原 `ExportResult` 摘要且副作用计数为 1；参数键顺序不影响指纹；守卫拒绝不记录、`in-progress` 不重做；端口异常/畸形返回/非法出站 DTO/重复 sequence → 脱敏 `INTERNAL_ERROR`；`catalog.list` 过滤未核验组合；订阅/退订按 operationId 分组递增且严格单调、退订后重放重建同一 `subscriptionId`；错误文本长度上限；秘密与本地路径不进入错误与事件。
 
 契约版本标签（T003/T003.1）：`API_VERSION = "1.0"` 在审核合并冻结后由编排者按精确 merge SHA 打标签；本分支不提前 tag 未审 HEAD。
 

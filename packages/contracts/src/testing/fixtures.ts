@@ -114,6 +114,9 @@ export const FIXTURE_SEED: ReferenceSeed = {
   host: { platform: 'darwin', arch: 'arm64' },
   catalog: [
     combination(FIXTURE_IDS.combination.verified, 'darwin', 'arm64', 'verified'),
+    // Fixture-only `verified`: exists to exercise the host/platform mismatch
+    // path. Windows x64 has no T001 host evidence and this is NOT a support
+    // claim (issue #21 review F7).
     combination(FIXTURE_IDS.combination.win32, 'win32', 'x64', 'verified'),
     combination(FIXTURE_IDS.combination.unverified, 'darwin', 'arm64', 'unverified'),
   ],
@@ -132,6 +135,16 @@ const EXPORT_FAILURE_SEED: ReferenceSeed = { ...FIXTURE_SEED, failExport: true }
 const TOKEN_URL_SEED: ReferenceSeed = {
   ...FIXTURE_SEED,
   webUIOriginOverride: 'http://127.0.0.1:53123/?token=canary-token',
+};
+const ZERO_PORT_SEED: ReferenceSeed = { ...FIXTURE_SEED, webUIOriginOverride: 'http://127.0.0.1:0' };
+const TOO_HIGH_PORT_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  webUIOriginOverride: 'http://127.0.0.1:65536',
+};
+const HUGE_PORT_SEED: ReferenceSeed = { ...FIXTURE_SEED, webUIOriginOverride: 'http://127.0.0.1:99999' };
+const LEADING_ZERO_PORT_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  webUIOriginOverride: 'http://127.0.0.1:00080',
 };
 
 export interface FixtureRuntime {
@@ -588,6 +601,54 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     seed: TOKEN_URL_SEED,
   },
   {
+    id: 'environments-openwebui-port-zero',
+    method: 'environments.openWebUI',
+    kind: 'illegal',
+    description: 'port 0 is not a usable loopback endpoint',
+    request: request('environments.openWebUI', {
+      requestId: 'req-webui-port0',
+      environmentId: FIXTURE_IDS.environment.running,
+    }),
+    expected: 'WEBUI_UNAVAILABLE',
+    seed: ZERO_PORT_SEED,
+  },
+  {
+    id: 'environments-openwebui-port-too-high',
+    method: 'environments.openWebUI',
+    kind: 'illegal',
+    description: 'port above 65535 is not a usable loopback endpoint',
+    request: request('environments.openWebUI', {
+      requestId: 'req-webui-porthigh',
+      environmentId: FIXTURE_IDS.environment.running,
+    }),
+    expected: 'WEBUI_UNAVAILABLE',
+    seed: TOO_HIGH_PORT_SEED,
+  },
+  {
+    id: 'environments-openwebui-port-huge',
+    method: 'environments.openWebUI',
+    kind: 'illegal',
+    description: 'five-digit out-of-range port is not a usable loopback endpoint',
+    request: request('environments.openWebUI', {
+      requestId: 'req-webui-porthuge',
+      environmentId: FIXTURE_IDS.environment.running,
+    }),
+    expected: 'WEBUI_UNAVAILABLE',
+    seed: HUGE_PORT_SEED,
+  },
+  {
+    id: 'environments-openwebui-port-leading-zero',
+    method: 'environments.openWebUI',
+    kind: 'illegal',
+    description: 'leading-zero port is rejected',
+    request: request('environments.openWebUI', {
+      requestId: 'req-webui-portzero',
+      environmentId: FIXTURE_IDS.environment.running,
+    }),
+    expected: 'WEBUI_UNAVAILABLE',
+    seed: LEADING_ZERO_PORT_SEED,
+  },
+  {
     id: 'environments-openwebui-missing-id',
     method: 'environments.openWebUI',
     kind: 'illegal',
@@ -817,7 +878,7 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     id: 'idempotency-conflict',
     method: 'environments.create',
     kind: 'illegal',
-    description: 'same requestId with different parameters',
+    description: 'same requestId with different parameters after a committed call',
     request: request('environments.create', {
       requestId: 'req-idem-1',
       name: 'Second name',
@@ -829,6 +890,25 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
         requestId: 'req-idem-1',
         name: 'First name',
         catalogCombinationId: FIXTURE_IDS.combination.verified,
+      }),
+    ],
+  },
+  {
+    id: 'idempotency-guard-retry',
+    method: 'environments.create',
+    kind: 'legal',
+    description: 'a pure guard rejection does not persist the fingerprint, so corrected parameters retry',
+    request: request('environments.create', {
+      requestId: 'req-guard-retry',
+      name: 'Env',
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'ok',
+    prelude: [
+      request('environments.create', {
+        requestId: 'req-guard-retry',
+        name: 'Env',
+        catalogCombinationId: 'combo-missing',
       }),
     ],
   },

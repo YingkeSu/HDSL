@@ -3,15 +3,13 @@
  * unsubscribe cutoff and the strict monotonicity guard.
  */
 import {
-  contractRequest,
-  createReferenceRuntime,
-  FIXTURE_IDS,
   operationUpdatedEventSchema,
   SubscriptionRegistry,
   type OperationUpdatedEvent,
   type SubscriptionRef,
   type ValidationIssue,
 } from '@hdsl/contracts';
+import { contractRequest, createReferenceRuntime, FIXTURE_IDS } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
 describe('subscription registry', () => {
@@ -107,5 +105,42 @@ describe('operations.subscribe through the dispatcher', () => {
     );
 
     expect(received).toHaveLength(1);
+  });
+
+  it('re-establishes a subscription when a replayed subscribe was unsubscribed', () => {
+    const { runtime } = createReferenceRuntime();
+    const received: OperationUpdatedEvent[] = [];
+    runtime.subscriptions.onEvent((event) => received.push(event));
+
+    const request = contractRequest('operations.subscribe', { requestId: 'req-sub-replay' });
+    const first = runtime.dispatch(request);
+    if (!first.ok) {
+      throw new Error(`subscribe failed: ${first.error.code}`);
+    }
+    const firstId = (first.value as SubscriptionRef).subscriptionId;
+
+    runtime.dispatch(
+      contractRequest('operations.unsubscribe', {
+        requestId: 'req-unsub-replay',
+        subscriptionId: firstId,
+      }),
+    );
+    expect(runtime.subscriptions.list()).toEqual([]);
+
+    const replay = runtime.dispatch(request);
+    if (!replay.ok) {
+      throw new Error(`replay failed: ${replay.error.code}`);
+    }
+    const replayId = (replay.value as SubscriptionRef).subscriptionId;
+    expect(replayId).toBe(firstId);
+    expect(runtime.subscriptions.has(replayId)).toBe(true);
+
+    runtime.subscriptions.publish({
+      id: 'op-replay',
+      sequence: 1,
+      phase: 'running',
+      status: 'running',
+    });
+    expect(received.at(-1)?.subscriptionId).toBe(replayId);
   });
 });

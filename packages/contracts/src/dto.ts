@@ -179,6 +179,9 @@ export type OperationRef = Infer<typeof operationRefSchema>;
 export const subscriptionRefSchema = sObject({ subscriptionId: subscriptionIdSchema });
 export type SubscriptionRef = Infer<typeof subscriptionRefSchema>;
 
+export const runtimeCombinationListSchema = sArray(runtimeCombinationSchema);
+export const environmentSummaryListSchema = sArray(environmentSummarySchema);
+
 export const exportResultSchema = sObject({
   exportId: exportIdSchema,
   exported: sBooleanLiteral(true),
