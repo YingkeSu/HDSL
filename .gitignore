@@ -1,0 +1,15 @@
+.DS_Store
+node_modules/
+dist/
+out/
+coverage/
+.env
+.env.*
+!.env.example
+*.log
+.scratch/
+.codex/
+.agents/*
+!.agents/skills/
+__pycache__/
+*.pyc
