@@ -149,6 +149,11 @@ export interface CloseFailure {
 
 export interface CloseReport {
   readonly released: boolean;
+  /**
+   * Managed-process (start/stop) operations that were still in flight when
+   * close began. Core cannot observe the runtime's OS process count; the
+   * runtime owns the actual number of process trees it stopped.
+   */
   readonly stoppedProcesses: number;
   readonly failure?: CloseFailure;
 }
@@ -309,6 +314,16 @@ export class EnvironmentService {
     this.#lock.assertHeld();
   }
 
+  /** Non-throwing form for entry points that return a `PortOutcome`. */
+  #tryAssertLock(): boolean {
+    try {
+      this.#assertLock();
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   readIdempotency(requestId: string) {
     return this.#idempotency.read(requestId);
   }
@@ -392,7 +407,9 @@ tryReadInstallManifest(
     if (this.#closed) {
       return portFail('INTERNAL_ERROR', 'the environment service is closed');
     }
-    if (!this.#lock.held) {
+    // Re-read the published lease before the first durable write, not just the
+    // cached `held` flag, so an abnormally lost lease cannot write new records.
+    if (!this.#tryAssertLock()) {
       return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
     }
     const resolved = this.#runtime.resolveComposition(command.combination);
@@ -520,7 +537,7 @@ tryReadInstallManifest(
     if (this.#closed) {
       return portFail('INTERNAL_ERROR', 'the environment service is closed');
     }
-    if (!this.#lock.held) {
+    if (!this.#tryAssertLock()) {
       return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
     }
     if (this.#process === undefined) {
@@ -699,6 +716,9 @@ tryReadInstallManifest(
   }
 
   cancelOperation(operationId: string): PortOutcome<OperationSnapshot> {
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
     const record = this.#operations.read(operationId);
     if (record === undefined) {
       return notFound('operation was not found');
@@ -928,12 +948,18 @@ tryReadInstallManifest(
 
   async #doClose(): Promise<CloseReport> {
     this.#closed = true;
+    // Count the managed-process operations that were still in flight when close
+    // began; core cannot observe the runtime's OS process count.
+    const stoppedProcesses = this.#operations.list().filter(
+      (operation) =>
+        (operation.kind === 'start' || operation.kind === 'stop') &&
+        !isTerminalStatus(operation.status),
+    ).length;
     for (const controller of this.#controllers.values()) {
       controller.abort();
     }
     await Promise.allSettled([...this.#pending]);
     let failure: CloseFailure | undefined;
-    let stoppedProcesses = 0;
     if (this.#process !== undefined) {
       try {
         const outcome = await this.#process.close();
@@ -948,7 +974,6 @@ tryReadInstallManifest(
       }
     }
     if (failure === undefined) {
-      stoppedProcesses = this.#operations.list().filter((operation) => operation.kind === 'start').length;
       try {
         await this.#lock.release();
       } catch {
@@ -1001,6 +1026,7 @@ tryReadInstallManifest(
     this.#controllers.set(job.operationId, controller);
     const paths = generationPaths(this.#layout, job.environmentId, job.generationId);
     try {
+      this.#assertLock();
       const queued = this.#operations.read(job.operationId);
       if (queued !== undefined && !isTerminalStatus(queued.status)) {
         this.#operations.update(queued, { status: 'running', phase: 'downloading' }, this.#now());
@@ -1031,6 +1057,7 @@ tryReadInstallManifest(
         this.#fail(job, installed.code, installed.message);
         return;
       }
+      this.#assertLock();
       this.#journals.write({ ...job.journal, phase: 'artifacts-installed', updatedAt: this.#now() });
       if (this.#faults.failBeforeCommit === true) {
         this.#fail(job, 'INTERNAL_ERROR', 'creation aborted before commit (injected fault)');
@@ -1053,7 +1080,7 @@ tryReadInstallManifest(
   }
 
   #commit(job: CreateJob, manifestPath: string): void {
-    if (!this.#lock.held) {
+    if (!this.#tryAssertLock()) {
       // The lease was lost abnormally; do not write. The journal stays for the
       // next recover to reconcile.
       return;
@@ -1123,7 +1150,7 @@ tryReadInstallManifest(
 
   /** Terminal failure for a live transaction: fail, mark `error`, drop staging. */
   #fail(job: CreateJob, code: ErrorCode, message: string): void {
-    if (!this.#lock.held) {
+    if (!this.#tryAssertLock()) {
       return;
     }
     const operation = this.#operations.read(job.operationId);

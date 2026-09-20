@@ -16,19 +16,24 @@ import {
   createContractRuntime,
   portFail,
   portOk,
+  type CompositionLock,
   type ContractPort,
   type ContractResponse,
   type OperationRef,
+  type PortOutcome,
   type RuntimeCombination,
 } from '@hdsl/contracts';
 import {
   createManagedInstall,
+  type InstallContext,
+  type InstalledRuntimeArtifacts,
   type ManagedInstall,
   type ManagedProcessPort,
+  type ManagedRuntimePort,
   type ProcessLifecycleRequest,
   type ProcessRecoveryEntry,
 } from '@hdsl/core';
-import { createRuntimePort } from '@hdsl/runtime';
+import { computeCompositionDigest, createRuntimePort, resolveComposition } from '@hdsl/runtime';
 import { sha256, syntheticCombination, syntheticDshTarball, syntheticNodeTarball, writeLocalArtifact } from '../install/synthetic.js';
 
 const nodeTarball = syntheticNodeTarball('22.0.0');
@@ -103,6 +108,58 @@ interface Harness {
   readonly process: FakeProcess;
   readonly dispatch: (method: string, input: unknown) => ContractResponse<unknown>;
 }
+
+/** Runtime whose `install` blocks until the test releases it (writer gate). */
+class GatedRuntime implements ManagedRuntimePort {
+  started = false;
+  settled = false;
+  #release: (() => void) | undefined;
+  readonly #gate: Promise<void>;
+
+  constructor() {
+    this.#gate = new Promise<void>((resolve) => {
+      this.#release = resolve;
+    });
+  }
+
+  resolveComposition(combination: RuntimeCombination): PortOutcome<CompositionLock> {
+    return resolveComposition(combination);
+  }
+
+  compositionDigest(lock: CompositionLock): string {
+    return computeCompositionDigest(lock);
+  }
+
+  async install(
+    _lock: CompositionLock,
+    _destination: string,
+    _context: InstallContext,
+  ): Promise<PortOutcome<InstalledRuntimeArtifacts>> {
+    this.started = true;
+    await this.#gate;
+    this.settled = true;
+    return portFail('INTERNAL_ERROR', 'gated install released by the test');
+  }
+
+  releaseGate(): void {
+    if (this.#release !== undefined) {
+      this.#release();
+      this.#release = undefined;
+    }
+  }
+}
+
+const waitUntil = async (predicate: () => boolean, timeoutMs = 2_000): Promise<void> => {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() >= deadline) {
+      throw new Error('condition was not met in time');
+    }
+    await new Promise((resolve) => {
+      setTimeout(resolve, 5);
+    });
+  }
+};
 
 const roots: string[] = [];
 
@@ -372,5 +429,51 @@ describe('close ordering', () => {
     // The lock is still held; a later instance must not be able to start work.
     expect(harness.managed.service.available).toBe(true);
     expect(harness.managed.lockSnapshot().heldByThisInstance).toBe(true);
+  });
+
+  it('keeps the lease until an in-flight writer settles and blocks a second instance until then', async () => {
+    const dataRoot = freshRoot('hdsl-lifecycle-closegate-');
+    const runtime = new GatedRuntime();
+    const managed = await createManagedInstall({
+      dataRoot,
+      catalog: [combination] as readonly RuntimeCombination[],
+      runtime,
+      fixtures: { allowArtifactsOnly: true },
+      lockWaitTimeoutMs: 150,
+    });
+    const contract = createContractRuntime({ port: managed.port as ContractPort });
+    const created = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'environments.create',
+      input: { requestId: 'req-gate', name: 'gate', catalogCombinationId: combination.id },
+    });
+    expect(created.ok).toBe(true);
+    const operationId = created.ok ? (created.value as OperationRef).operationId : '';
+    await waitUntil(() => runtime.started);
+
+    // close aborts, but the gated writer has not settled yet: the lease must
+    // still be held and a second instance must not be able to acquire it.
+    const closePromise = managed.close();
+    await new Promise((resolve) => {
+      setTimeout(resolve, 20);
+    });
+    expect(managed.lockSnapshot().publishedBy).toBe('this-instance');
+    const second = await createManagedInstall({
+      dataRoot,
+      catalog: [combination] as readonly RuntimeCombination[],
+      runtime: new GatedRuntime(),
+      fixtures: { allowArtifactsOnly: true },
+      lockWaitTimeoutMs: 150,
+    });
+    expect(second.available).toBe(false);
+
+    runtime.releaseGate();
+    const report = await closePromise;
+    expect(runtime.settled).toBe(true);
+    expect(report.released).toBe(true);
+    expect(managed.lockSnapshot().publishedBy).toBe('none');
+    const settled = await managed.waitForOperation(operationId);
+    expect(settled.status).toBe('failed');
+    await second.close();
   });
 });

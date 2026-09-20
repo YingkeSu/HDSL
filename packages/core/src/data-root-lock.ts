@@ -33,17 +33,18 @@
  *   `assertHeld` is defence in depth.
  * - Single host only: a different hostname is always `unknown`/busy. Shared
  *   volumes, containers and cross-host data roots are unsupported.
- * - `win32` is unverified (T008): only the guarded *takeover* is explicitly
- *   refused there. The normal acquire fast path and release are not
- *   platform-gated, so their Windows behavior is unverified; this is neither a
- *   claim that every Windows lock operation fails closed nor a Windows support
- *   claim.
+ * - `win32` is unverified (T008): only the guarded stale *takeover* is
+ *   explicitly refused there. The normal acquire (atomic publish), release and
+ *   heartbeat paths are implemented and reachable but unverified, so no
+ *   Windows cross-process exclusivity is claimed. This is neither "all Windows
+ *   lock operations fail closed" nor a Windows support claim;
+ *   {@link DataRootLockSnapshot.platformVerified} exposes the scope.
  * - A guard port held by a non-HDSL process fails closed; ports are never
  *   silently changed.
  */
 import { createHash, randomUUID } from 'node:crypto';
 import { hostname as osHostname } from 'node:os';
-import { createServer, connect, type Server } from 'node:net';
+import { createServer, connect, type Server, type Socket } from 'node:net';
 import { join, resolve } from 'node:path';
 import {
   closeSync,
@@ -140,6 +141,9 @@ export interface DataRootLockSnapshot {
   readonly state: 'held' | 'free' | 'busy' | 'unknown';
   readonly heldByThisInstance: boolean;
   readonly publishedBy: DataRootLockPublishedBy;
+  readonly platform: NodeJS.Platform;
+  /** False on an unverified platform: no cross-process exclusivity is claimed. */
+  readonly platformVerified: boolean;
   readonly publishedLease?: DataRootLease;
   readonly lastAttempt?: DataRootLockAttempt;
   readonly lastRelease?: DataRootLockReleaseResult;
@@ -190,17 +194,40 @@ const delay = (milliseconds: number): Promise<void> =>
   });
 
 /**
+ * Platforms where cross-process exclusivity has actually been verified. Other
+ * platforms keep the same implementation but make no exclusivity claim; only
+ * the guarded stale-takeover is explicitly refused there, so the normal
+ * acquire/release/heartbeat paths are not silently disabled.
+ */
+export const VERIFIED_LOCK_PLATFORMS: readonly NodeJS.Platform[] = ['darwin', 'linux'];
+
+export const isLockPlatformVerified = (platform: NodeJS.Platform): boolean =>
+  VERIFIED_LOCK_PLATFORMS.includes(platform);
+
+/** Raised when the data root cannot be canonicalized; the lock fails closed. */
+export class DataRootLockCanonicalizationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'DataRootLockCanonicalizationError';
+  }
+}
+
+/**
  * Canonical filesystem identity of a data root. `realpathSync.native` resolves
  * symlinks (`/tmp` -> `/private/tmp`) and returns the on-disk casing, so two
- * spellings of the same directory derive the same lock and guard port.
+ * spellings of the same directory derive the same lock and guard port. A
+ * failure to canonicalize is fatal for the lock (fail closed) instead of
+ * falling back to a path that could derive a different guard port.
  */
 export const canonicalizeDataRoot = (dataRoot: string): string => {
   const resolved = resolve(dataRoot);
+  mkdirSync(resolved, { recursive: true });
   try {
-    mkdirSync(resolved, { recursive: true });
     return realpathSync.native(resolved);
-  } catch {
-    return resolved;
+  } catch (error) {
+    throw new DataRootLockCanonicalizationError(
+      `the data root could not be canonicalized: ${error instanceof Error ? error.message : 'unknown error'}`,
+    );
   }
 };
 
@@ -256,6 +283,7 @@ export class DataRootLock {
   readonly #guardWaitMs: number;
   readonly #guardCloseTimeoutMs: number;
   readonly #platform: NodeJS.Platform;
+  readonly #platformVerified: boolean;
 
   #lease: DataRootLease | undefined;
   #heartbeat: NodeJS.Timeout | undefined;
@@ -285,6 +313,7 @@ export class DataRootLock {
     this.#guardWaitMs = options.guardWaitMs ?? 2_000;
     this.#guardCloseTimeoutMs = options.guardCloseTimeoutMs ?? 1_000;
     this.#platform = options.platform ?? process.platform;
+    this.#platformVerified = isLockPlatformVerified(this.#platform);
   }
 
   get dataRoot(): string {
@@ -470,6 +499,8 @@ export class DataRootLock {
       state,
       heldByThisInstance: this.#lease !== undefined,
       publishedBy,
+      platform: this.#platform,
+      platformVerified: this.#platformVerified,
       ...(published === undefined ? {} : { publishedLease: published }),
       ...(this.#lastAttempt === undefined ? {} : { lastAttempt: this.#lastAttempt }),
       ...(this.#lastRelease === undefined ? {} : { lastRelease: this.#lastRelease }),
@@ -675,7 +706,12 @@ export class DataRootLock {
   async #withGuard<T>(work: () => T): Promise<T> {
     const deadline = Date.now() + this.#guardWaitMs;
     for (;;) {
+      const sockets = new Set<Socket>();
       const server = createServer((socket) => {
+        sockets.add(socket);
+        socket.on('close', () => {
+          sockets.delete(socket);
+        });
         socket.end(`${GUARD_GREETING}\n`);
       });
       // Sockets are created CLOEXEC by Node, so managed children cannot inherit
@@ -685,7 +721,7 @@ export class DataRootLock {
         try {
           return work();
         } finally {
-          await this.#closeServerBounded(server);
+          await this.#closeServerBounded(server, sockets);
         }
       }
       const guardAlive = await this.#probeGuard();
@@ -717,7 +753,12 @@ export class DataRootLock {
     });
   }
 
-  async #closeServerBounded(server: Server): Promise<void> {
+  /**
+   * Closes the guard listener with a bounded wait. If the platform refuses to
+   * finish in time, the tracked sockets are destroyed so the port cannot leak
+   * and block the next acquisition; the next attempt then fails closed.
+   */
+  async #closeServerBounded(server: Server, sockets: ReadonlySet<Socket>): Promise<void> {
     await new Promise<void>((settle) => {
       let settled = false;
       const finish = (): void => {
@@ -726,9 +767,17 @@ export class DataRootLock {
           settle();
         }
       };
-      const timer = setTimeout(finish, this.#guardCloseTimeoutMs);
+      const timer = setTimeout(() => {
+        for (const socket of sockets) {
+          socket.destroy();
+        }
+        finish();
+      }, this.#guardCloseTimeoutMs);
       timer.unref();
-      server.close(finish);
+      server.close(() => {
+        clearTimeout(timer);
+        finish();
+      });
     });
   }
 
@@ -878,6 +927,7 @@ export class DataRootLock {
       }
       fsyncDirectory(temporary);
       renameSync(temporary, this.#lockDirectory);
+      fsyncDirectory(this.#locksDirectory);
     } catch (error) {
       try {
         rmSync(temporary, { recursive: true, force: true });
@@ -983,10 +1033,13 @@ export class DataRootLock {
   }
 
   #recordAttempt(outcome: AcquireAttempt, waitedMs: number): void {
+    const reason = this.#platformVerified
+      ? this.#attemptReason
+      : `${this.#attemptReason} (unverified platform: ${this.#platform}; no cross-process exclusivity claim)`;
     this.#lastAttempt = {
       at: this.#now(),
       outcome,
-      reason: this.#attemptReason,
+      reason,
       waitedMs,
       takeover: this.#attemptTakeover,
       ...(this.#attemptObservedLockId === undefined

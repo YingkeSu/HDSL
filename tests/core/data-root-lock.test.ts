@@ -235,13 +235,24 @@ describe('dataRoot lock takeover safety', () => {
     expect(holder.readPublishedLease()?.lockId).toBe('foreign-lock-0002');
   });
 
-  it('fails closed instead of taking over on Windows, which is unverified', async () => {
+  it('refuses the guarded takeover on Windows without claiming the whole lock is disabled', async () => {
     const root = freshRoot();
     writeLease(root, staleLease());
     const lock = newLock(root, { platform: 'win32', probeProcess: () => 'dead' });
     expect(await lock.acquire({ waitTimeoutMs: 150, pollIntervalMs: 20 })).toBe(false);
     expect(lock.readPublishedLease()?.lockId).toBe('stale-lock-0001');
     expect(lock.lastAttempt?.outcome).toBe('unknown');
+    expect(lock.lastAttempt?.reason).toContain('win32');
+  });
+
+  it('marks unverified platforms in the snapshot and attempt reason', async () => {
+    const root = freshRoot();
+    const lock = newLock(root, { platform: 'win32' });
+    expect(await lock.acquire({ waitTimeoutMs: 200 })).toBe(true);
+    const snapshot = lock.snapshot();
+    expect(snapshot.platform).toBe('win32');
+    expect(snapshot.platformVerified).toBe(false);
+    expect(snapshot.lastAttempt?.reason).toContain('unverified platform');
   });
 
   it('negative control: a mkdir-then-write variant permits two holders (why publish is atomic)', async () => {
