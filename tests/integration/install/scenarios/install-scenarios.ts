@@ -726,17 +726,20 @@ export const scenarioRealClosureCompleteness = async (
 };
 
 /**
- * Issue #39 regression (correct behavior, intentionally red on 9fb42d2):
- * `recover()` must not roll back an operation whose install is still in flight
- * on the same instance. After the dust settles the operation and environment
- * must be consistent — never `operation failed` together with a usable
- * `stopped` environment that has an active generation.
+ * Issue #39 regression (correct behavior, deterministically red on 9fb42d2).
+ *
+ * The download endpoint holds the Node artifact until the test releases it, so
+ * the install is provably in flight (not a timing race). While the active
+ * controller still owns the transaction, `recover()` must NOT touch it:
+ * the operation stays `running` and the durable journal stays present. After
+ * release the transaction commits normally. This asserts an invariant, not
+ * "one of two terminal states".
  */
 export const scenarioRecoverDuringInFlightCreate = async (
   deps: InstallScenarioDeps,
 ): Promise<void> => {
   const fixture = buildComposition(COMPOSITION_A);
-  const routes = fixture.routesWith({ node: 'slow' });
+  const routes = fixture.routesWith({ node: 'hold' });
   await withInstallHarness(
     deps,
     {
@@ -747,31 +750,48 @@ export const scenarioRecoverDuringInFlightCreate = async (
       runtimeOptions: { closureInstall: false, precheck: 'none' },
     },
     async (harness) => {
+      const combination = harness.catalog[0];
+      assert.ok(combination !== undefined);
       const operationId = await createEnvironment(harness, 'inflight', COMPOSITION_A.id, 'req-inflight');
-      let recoverThrew = false;
-      let report: unknown;
-      try {
-        report = await Promise.resolve(harness.install.recover());
-      } catch (error) {
-        recoverThrew = true;
-        report = error instanceof Error ? error.message : String(error);
-      }
+
+      // Block the Node download; the request arriving proves the operation is
+      // already running with an active controller.
+      const nodePath = new URL(combination.artifactLocations.node.url).pathname;
+      await harness.endpoint.waitForRequest(nodePath, 10_000);
+
+      const report = harness.install.recover();
+
+      const during = requireOk(
+        call(harness.api, 'operations.get', { operationId }),
+        'operations.get(during)',
+      ) as { readonly status: string };
+      assert.equal(
+        during.status,
+        'running',
+        'recover() must not terminalize an operation still held by an active controller',
+      );
+      assert.ok(
+        !JSON.stringify(report).includes(operationId),
+        `recover() must not reconcile the active transaction: ${JSON.stringify(report)}`,
+      );
+      const transactions = join(harness.dataRoot, 'transactions');
+      assert.ok(
+        countEntries(transactions) > 0,
+        'the active transaction journal must be preserved while the install is in flight',
+      );
+
+      // Let the held download finish; the transaction must then commit normally.
+      harness.endpoint.release(nodePath);
       const snapshot = await pollTerminalOperation(harness.api, operationId, {
         label: 'in-flight create',
         timeoutMs: 30_000,
       });
+      assert.equal(snapshot.status, 'succeeded', `after release: ${JSON.stringify(snapshot.error ?? null)}`);
       const environment = listEnvironments(harness).find((entry) => entry.name === 'inflight');
-      assert.ok(environment !== undefined, 'the environment row must exist');
-      const usable =
-        (environment.state === 'stopped' || environment.state === 'running') &&
-        environment.activeGenerationId !== null;
-      const consistent =
-        (snapshot.status === 'succeeded' && usable) ||
-        (snapshot.status === 'failed' && environment.state === 'error' && environment.activeGenerationId === null);
-      assert.ok(
-        consistent,
-        `recover() during an in-flight create left a split state: operation=${snapshot.status}(${snapshot.error?.code ?? 'none'}) environment=${environment.state} activeGenerationId=${String(environment.activeGenerationId)} recoverThrew=${String(recoverThrew)} report=${JSON.stringify(report)}`,
-      );
+      assert.ok(environment !== undefined);
+      assert.equal(environment.state, 'stopped');
+      assert.notEqual(environment.activeGenerationId, null);
+      assert.equal(countEntries(transactions), 0, 'the journal is removed after a successful commit');
       harness.assertHostDefaultsUnchanged();
     },
   );

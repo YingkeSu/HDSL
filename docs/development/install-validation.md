@@ -1,8 +1,9 @@
 # 安装创建真实文件边界验证（T007a / issue #31）
 
-状态：**已在 T004 候选 `ccaaeb9` 上接入并真实执行**。合成边界 16 项全绿；两项真实闭包
-opt-in 全绿；共 290 passed / 3 skipped（全仓）。9fb42d2 的旧红证据保留分栏。本文档不把
-合成夹具当成真实 DSH 可运行证据。
+状态：**已在 T004 候选 `ccaaeb9` 上接入并真实执行，并已合并进 `main`（T004 mergeCommit `dbf0ef0`）**。合成边界 16 项全绿；两项真实闭包
+opt-in 全绿；全仓 `pnpm run test` 329 passed / 3 skipped（含 main 的 renderer 测试）。
+#37 在 `9fb42d2` 稳定复现、`ccaaeb9` 通过；#39 初版回归断言不可靠，已改修正后：`9fb42d2` 5/5 稳定红、`ccaaeb9` 5/5 绿。
+本文档不把合成夹具当成真实 DSH 可运行证据。
 
 ## 元数据
 
@@ -11,7 +12,8 @@ opt-in 全绿；共 290 passed / 3 skipped（全仓）。9fb42d2 的旧红证据
 | 任务 | [#31 [T007a] 独立验证安装创建的真实文件边界](https://github.com/YingkeSu/HDSL/issues/31)，父任务 #7 |
 | 冻结契约基线 | `3e76a49694f8dcf4c8bba5d32196a6665a2f394e`（`contracts-v1.0.0`）；QA 夹具已合入 `6da541d` |
 | T004 候选（复验） | `ccaaeb94a691ac943adf7a0ba471285349d1953f`（PR [#35](https://github.com/YingkeSu/HDSL/pull/35)，base `6da541d`，父 `9fb42d2`） |
-| 前一候选（旧证据） | `9fb42d2fd78ea2bcb3cc4aacb629851476624175`（#37/#39 复现基线） |
+| 前一候选（历史红线） | `9fb42d2fd78ea2bcb3cc4aacb629851476624175`（#37 稳定复现；#39 初版断言不可靠，见下） |
+| 生产合并 | T004 PR #35 squash merge → `main` `dbf0ef00a4c090f10928ffad5a1d1ac1cdfd7033`（2026-09-20 10:51:04Z） |
 | QA 分支 / 角色 | `ao/hdsl-18/t004-install-qa`；QA，非 reviewer，不做 PR review；不改生产 |
 | 文件所有权 | `tests/integration/install/**`、`docs/development/install-validation.md` |
 | 执行平台 | macOS 26.3（Darwin 25.3.0 arm64），Node `v24.21.0`，pnpm `11.7.0` |
@@ -55,7 +57,7 @@ re-export，导出消失会编译失败而不是跳过。
 | INST-IDEM-02 requestId 跨重启重放 | PASS | PASS | 新 service 重放同 requestId 仍不重复下载 |
 | INST-CONC-01 同组合并发（慢速交错） | **FAIL**（#37） | **PASS** | 两 create 均成功、缓存最终文件 sha256==catalog、无 `.part`、staging 清空 |
 | INST-CONC-02 同组合并发（一方传输失败） | PASS | PASS | 失败方 `DOWNLOAD_FAILED`、成功方缓存摘要正确、无 `.part` |
-| INST-RECOVER-01 recover 在途调用 | **FAIL**（#39） | **PASS** | recover 不打断在途安装，`operation=succeeded` 与 `environment=stopped+active` 一致 |
+| INST-RECOVER-01 recover 在途调用 | **不可靠（见下）** | **PASS ×5** | 修正为确定性不变量：recover 期间 operation 保持 running、journal 保留；release 后正常提交 |
 
 `INST-DISK-02` 通过 `it.skipIf(process.platform !== 'darwin')` 平台门（Linux CI 无
 非特权小卷；注入版 INST-DISK-01 在所有平台执行）。
@@ -78,14 +80,23 @@ re-export，导出消失会编译失败而不是跳过。
 | ID | 摘要 | 9fb42d2 | ccaaeb9 |
 | --- | --- | --- | --- |
 | [#37](https://github.com/YingkeSu/HDSL/issues/37) | 同组合并发 create 共享 `<sha256>.part`，rename 时序污染缓存 | 独立复现（INST-CONC-01 红：一个 create `INTERNAL_ERROR`） | **通过** INST-CONC-01；断言未弱化，无 `.part`、缓存摘要正确 |
-| [#39](https://github.com/YingkeSu/HDSL/issues/39) | `recover()` 在安装途中回滚活跃事务造成分裂状态 | 独立复现（INST-RECOVER-01 红：`operation=failed` 且 `environment=stopped+active`） | **通过** INST-RECOVER-01；recover 跳过活跃事务 |
+| [#39](https://github.com/YingkeSu/HDSL/issues/39) | `recover()` 在安装途中回滚活跃事务造成分裂状态 | 修正后回归 **5/5 稳定红** | **5/5 稳定绿** INST-RECOVER-01 |
+
+**#39 回归修正（reviewer 反馈）**：初版 INST-RECOVER-01 用「两种终态之一」的宽松断言，
+并靠 `slow` 传输时序，在 `9fb42d2` 上可经 `failed + error + null` 分支误绿，未真正证明 #39。
+现改为确定性不变量：端点以 `hold` 模式阻塞 Node 下载直到测试显式 `release`，证明安装确实在途；
+断言 `recover()` 前后 operation 仍为 `running`、durable journal 仍存在、`recover().details`
+不含该 operation；release 后必须正常提交（`succeeded` + `stopped` + active generation，journal 清除）。
+命令：`pnpm exec vitest run tests/integration/install/install.integration.test.ts -t "INST-RECOVER-01"`。
+结果：`9fb42d2` 独立 worktree ×5 全红（`recover() must not terminalize an operation still held by an active controller`）；
+`ccaaeb9`（经 main 合并）本机 ×5 全绿。旧版「#39 已稳定复现」的表述作废。
 
 按编排要求不关闭 issue；合并前 #37/#39 保持 OPEN。
 
 ## 故障标注（真实 / 注入分栏）
 
 - **真实**：`INST-DISK-02`（挂载 2MB HFS+ 小卷 + 真实 `statfs` 阈值）；`INST-ISO-01`、`INST-COMP-REAL-01` 与作者证据（真实 Node/DSH 产物 + 真实 `npm ci` + 受管 Node 预检）。
-- **注入**：`INST-DISK-01`（`forceDiskFull`）；`INST-DL-01`/`INST-CONC-02`（端点截断传输）；`INST-JRN-01/02`、`INST-RECOVER-01`（`pauseBeforeCommit` 崩溃边界 + 慢速传输）。
+- **注入**：`INST-DISK-01`（`forceDiskFull`）；`INST-DL-01`/`INST-CONC-02`（端点截断传输）；`INST-JRN-01/02`（`pauseBeforeCommit` 崩溃边界）；`INST-RECOVER-01`（端点 `hold` 阻塞传输以确定性制造在途窗口）。
 - **合成夹具**：`tests/integration/install/support/artifacts.ts` 的 tar。只证明下载/摘要/journal/隔离/路径/HOME 边界，**不推断真实 DSH 可运行**。
 
 ## FR → 用例映射（本切片）
@@ -148,9 +159,9 @@ HDSL_REAL_INSTALL=1 pnpm exec vitest run tests/install/real-install.evidence.tes
 
 ## 完成报告
 
-- 复验候选 head：`ccaaeb94a691ac943adf7a0ba471285349d1953f`（base `6da541d`，PR #35）
-- QA 分支：`ao/hdsl-18/t004-install-qa`（堆叠在候选上；scope 仅 `tests/integration/install/**` + 本文件，未改生产）
+- 生产 base：`main`（含 T004 mergeCommit `dbf0ef00a4c090f10928ffad5a1d1ac1cdfd7033`）
+- QA 分支：`ao/hdsl-18/t004-install-qa`（已常规 merge `origin/main`，无冲突；相对 main 仅 `tests/integration/install/**` + 本文件）
 - 注册场景：合成边界 16（含平台门 1）+ 真实闭包 2 = 18；另 9 项夹具自检（`harness.test.ts`）
-- 结果：`ccaaeb9` 合成 16 PASS、真实 2 PASS；全仓 `pnpm run test` 290 passed / 3 skipped
-- 缺陷：#37、#39 均已在 `ccaaeb9` 由同一正确行为断言复验通过；不关闭 issue
-- 局限：未执行真实启停/就绪/凭据；不声称 Windows 或真实 DSH 可运行（仅真实闭包用例与作者证据支持该结论）
+- 结果：合成 16 PASS、真实 2 PASS（在 `ccaaeb9` 完成）；本机 `pnpm run test` 329 passed / 3 skipped
+- 缺陷：#37 在 `ccaaeb9` 复验通过；#39 修正后确定性 INST-RECOVER-01 在 `ccaaeb9` 5/5 通过（`9fb42d2` 5/5 稳定红）；均不关闭 issue
+- 局限：未执行真实启停/就绪/凭据；不声称 Windows 或真实 DSH 可运行（仅真实闭包用例与作者证据支持该结论）；不重复无变化真实网络安装

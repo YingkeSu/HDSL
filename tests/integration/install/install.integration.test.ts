@@ -13,7 +13,12 @@
  *   executed explicitly for the T004 candidate and its evidence recorded in
  *   `docs/development/install-validation.md`.
  *
- * Candidate: `9fb42d2fd78ea2bcb3cc4aacb629851476624175` (PR #35).
+ * Re-verified on production candidate `ccaaeb94a691ac943adf7a0ba471285349d1953f`
+ * (PR #35), which merged to `main` as
+ * `dbf0ef00a4c090f10928ffad5a1d1ac1cdfd7033`. The issue #37/#39 regressions were
+ * first reproduced on the earlier candidate
+ * `9fb42d2fd78ea2bcb3cc4aacb629851476624175`; INST-RECOVER-01 uses a held
+ * download so that regression is deterministic rather than timing-dependent.
  */
 import { createManagedInstall } from '@hdsl/core';
 import { VERIFIED_COMBINATIONS, createRuntimePort } from '@hdsl/runtime';
