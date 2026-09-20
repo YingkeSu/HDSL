@@ -102,7 +102,25 @@ export interface ProcessManagerObservability {
   listLaunchRecords(): readonly ProcessLaunchRecord[];
 }
 
-export interface ProcessManager extends ManagedProcessPort, ProcessManagerObservability {}
+export interface ProcessManager extends ManagedProcessPort, ProcessManagerObservability, WebUIBootstrapPort {}
+
+/**
+ * Main-only WebUI bootstrap capability (T006 prerequisite).
+ *
+ * DSH prints a process-scoped grant token in its ready line and its WebUI
+ * rejects a token-free origin with 401 (T001 R004). The main process therefore
+ * needs the bootstrap URL once to establish the `dsh-auth` cookie. This
+ * capability keeps that URL inside the runtime and only hands it to a callback
+ * after the current environment's own process identity and loopback endpoint
+ * have been re-verified. It is deliberately not exposed through the frozen
+ * `ContractPort` and there is no generic reveal API.
+ */
+export interface WebUIBootstrapPort {
+  consumeWebUIBootstrap(
+    environmentId: string,
+    open: (bootstrapUrl: string) => void | Promise<void>,
+  ): Promise<PortOutcome<void>>;
+}
 
 export interface ProcessManagerOptions {
   /** Application data root; launch records live under `<dataRoot>/process`. */

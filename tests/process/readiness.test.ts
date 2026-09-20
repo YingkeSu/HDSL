@@ -1,6 +1,6 @@
 import { createServer, type Server } from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
-import { parseReadyEndpoint, probeLoopbackTcp } from '@hdsl/runtime';
+import { parseReadyEndpoint, parseReadyTarget, probeLoopbackTcp } from '@hdsl/runtime';
 
 describe('readiness parsing', () => {
   it('parses the upstream ready line into a token-free canonical loopback origin', () => {
@@ -33,6 +33,30 @@ describe('readiness parsing', () => {
 
   it('returns undefined when the line is absent', () => {
     expect(parseReadyEndpoint('nothing here')).toBeUndefined();
+  });
+});
+
+describe('bootstrap target parsing', () => {
+  it('keeps the process-scoped bootstrap URL alongside the token-free origin', () => {
+    const target = parseReadyTarget(
+      'dsh web: http://127.0.0.1:53123/?token=process-scoped-grant\n',
+    );
+    expect(target?.origin).toBe('http://127.0.0.1:53123');
+    expect(target?.bootstrapUrl).toBe('http://127.0.0.1:53123/?token=process-scoped-grant');
+  });
+
+  it('rejects a non-loopback bootstrap host', () => {
+    expect(parseReadyTarget('dsh web: http://example.com:53123/?token=x')).toBeUndefined();
+  });
+
+  it('rejects URL credentials and non-http schemes', () => {
+    expect(parseReadyTarget('dsh web: http://user:pass@127.0.0.1:53123/?token=x')).toBeUndefined();
+    expect(parseReadyTarget('dsh web: file://127.0.0.1:53123/?token=x')).toBeUndefined();
+  });
+
+  it('rejects a non-canonical or out-of-range port', () => {
+    expect(parseReadyTarget('dsh web: http://127.0.0.1:00080/?token=x')).toBeUndefined();
+    expect(parseReadyTarget('dsh web: http://127.0.0.1:0/?token=x')).toBeUndefined();
   });
 });
 

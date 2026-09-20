@@ -43,9 +43,9 @@ import {
 } from './records.js';
 import {
   isManagedLoopbackOrigin,
-  parseReadyEndpoint,
+  parseReadyTarget,
   probeLoopbackTcp,
-  type ReadyEndpoint,
+  type ReadyTarget,
 } from './readiness.js';
 import {
   captureGroupSurvivors,
@@ -72,7 +72,7 @@ interface ActiveTask {
 }
 
 type ReadinessResult =
-  | { readonly kind: 'ready'; readonly endpoint: ReadyEndpoint }
+  | { readonly kind: 'ready'; readonly target: ReadyTarget }
   | {
       readonly kind: 'exit';
       readonly exitCode: number | null;
@@ -82,7 +82,21 @@ type ReadinessResult =
   | { readonly kind: 'timeout' }
   | { readonly kind: 'aborted' }
   | { readonly kind: 'spawn-error' }
-  | { readonly kind: 'loopback-failed'; readonly endpoint: ReadyEndpoint };
+  | { readonly kind: 'loopback-failed'; readonly target: ReadyTarget };
+
+/**
+ * In-memory-only WebUI bootstrap for one launched process (T006 prerequisite).
+ * Bound to the launched identity and the verified loopback endpoint; never
+ * persisted and never exposed through the frozen contract port.
+ */
+interface WebUIBootstrapEntry {
+  readonly url: string;
+  readonly origin: string;
+  readonly host: string;
+  readonly port: number;
+  readonly pid: number;
+  readonly startToken: string;
+}
 
 interface LaunchPatch {
   readonly state?: ProcessLaunchState;
@@ -145,6 +159,9 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
   let closed = false;
   const active = new Map<string, ActiveTask>();
   const tasks = new Set<Promise<unknown>>();
+  // Main-only, in-memory WebUI bootstrap; cleared on stop/close/exit and before
+  // any replacement launch. Never persisted or exposed to the contract port.
+  const bootstraps = new Map<string, WebUIBootstrapEntry>();
 
   const tracked = <T>(promise: Promise<T>): Promise<T> => {
     tasks.add(promise);
@@ -319,13 +336,13 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         if (probing || settled) {
           return;
         }
-        const endpoint = parseReadyEndpoint(stdout);
-        if (endpoint === undefined) {
+        const target = parseReadyTarget(stdout);
+        if (target === undefined) {
           return;
         }
         probing = true;
-        void probeLoopbackTcp(endpoint.host, endpoint.port, 3_000).then((ok) => {
-          finish(ok ? { kind: 'ready', endpoint } : { kind: 'loopback-failed', endpoint });
+        void probeLoopbackTcp(target.host, target.port, 3_000).then((ok) => {
+          finish(ok ? { kind: 'ready', target } : { kind: 'loopback-failed', target });
         });
       };
       const onStdout = (chunk: Buffer): void => {
@@ -359,6 +376,7 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     const environmentId = record.environmentId;
     const expectedPid = record.identity?.pid;
     child.once('exit', (code, sig) => {
+      bootstraps.delete(environmentId);
       const current = launches.read(environmentId);
       if (current === undefined || current.state !== 'running') {
         return;
@@ -491,6 +509,9 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     request: ProcessLifecycleRequest,
     signal: AbortSignal,
   ): Promise<PortOutcome<ProcessStartOutcome>> => {
+    // Replacing this environment's launch invalidates any previous in-memory
+    // bootstrap before the new record is written.
+    bootstraps.delete(request.environmentId);
     const now = new Date().toISOString();
     let record: ProcessLaunchRecord = {
       schemaVersion: '1',
@@ -644,15 +665,25 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
       record = patch(record, {
         state: 'running',
         endpoint: {
-          origin: readiness.endpoint.origin,
-          host: readiness.endpoint.host,
-          port: readiness.endpoint.port,
+          origin: readiness.target.origin,
+          host: readiness.target.host,
+          port: readiness.target.port,
         },
       });
       launches.write(record);
+      // Hold the bootstrap URL in memory only, bound to this launch identity
+      // and verified loopback endpoint. It is never written to the record.
+      bootstraps.set(request.environmentId, {
+        url: readiness.target.bootstrapUrl,
+        origin: readiness.target.origin,
+        host: readiness.target.host,
+        port: readiness.target.port,
+        pid: identity.pid,
+        startToken: identity.startToken,
+      });
       emitPhase(request, 'running');
       watchExit(child, record);
-      return portOk({ pid, loopbackOrigin: readiness.endpoint.origin });
+      return portOk({ pid, loopbackOrigin: readiness.target.origin });
     }
 
     // Every failure path terminates our own tree before the promise resolves.
@@ -715,6 +746,8 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
     signal: AbortSignal,
   ): Promise<PortOutcome<ProcessStopOutcome>> => {
     const environmentId = request.environmentId;
+    // Stopping invalidates any held WebUI bootstrap for this environment.
+    bootstraps.delete(environmentId);
     const record = launches.read(environmentId);
     if (record === undefined) {
       return portFail('INTERNAL_ERROR', 'no managed process is recorded for this environment');
@@ -823,6 +856,7 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
 
   const close = async (): Promise<PortOutcome<void>> => {
     closed = true;
+    bootstraps.clear();
     for (const task of active.values()) {
       task.controller.abort();
     }
@@ -907,12 +941,111 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         );
   };
 
+  /**
+   * Main-only WebUI bootstrap consumption (T006 prerequisite).
+   *
+   * Re-verifies that the environment is running, that the held bootstrap is
+   * bound to the current launch identity and canonical loopback endpoint, and
+   * that it is still current after an asynchronous liveness check, then hands
+   * the bootstrap URL to `open`. The URL is never returned, logged, persisted or
+   * placed in an error/diagnostic. A thrown `open` message is never relayed
+   * because it may contain the URL/token.
+   */
+  const consumeWebUIBootstrap = async (
+    environmentId: string,
+    open: (bootstrapUrl: string) => void | Promise<void>,
+  ): Promise<PortOutcome<void>> => {
+    if (closed) {
+      return portFail('INTERNAL_ERROR', 'the process manager is closed');
+    }
+    const record = launches.read(environmentId);
+    const entry = bootstraps.get(environmentId);
+    if (
+      record === undefined ||
+      record.state !== 'running' ||
+      record.identity === null ||
+      record.endpoint === null ||
+      entry === undefined
+    ) {
+      return portFail(
+        'WEBUI_UNAVAILABLE',
+        'no verified managed WebUI bootstrap is available for this environment',
+      );
+    }
+    if (entry.pid !== record.identity.pid || entry.startToken !== record.identity.startToken) {
+      return portFail(
+        'WEBUI_UNAVAILABLE',
+        'the WebUI bootstrap does not belong to the current managed process',
+      );
+    }
+    if (verifyIdentity(probe, record.identity).owned !== true) {
+      return portFail(
+        'WEBUI_UNAVAILABLE',
+        'the managed process for this WebUI bootstrap is no longer verified',
+      );
+    }
+    if (
+      entry.origin !== record.endpoint.origin ||
+      entry.host !== record.endpoint.host ||
+      entry.port !== record.endpoint.port ||
+      !isManagedLoopbackOrigin(entry.origin)
+    ) {
+      return portFail(
+        'WEBUI_UNAVAILABLE',
+        'the WebUI bootstrap origin does not match the managed endpoint',
+      );
+    }
+    let parsed: URL;
+    try {
+      parsed = new URL(entry.url);
+    } catch {
+      return portFail('WEBUI_UNAVAILABLE', 'the WebUI bootstrap is not a valid URL');
+    }
+    if (
+      parsed.username !== '' ||
+      parsed.password !== '' ||
+      (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') ||
+      parsed.origin !== entry.origin ||
+      parsed.hostname !== entry.host ||
+      Number(parsed.port) !== entry.port
+    ) {
+      return portFail('WEBUI_UNAVAILABLE', 'the WebUI bootstrap is not a canonical loopback URL');
+    }
+    // Final liveness check; then re-validate that the launch is still current so
+    // a restart/close during the check cannot open a stale URL.
+    if (!(await probeLoopbackTcp(entry.host, entry.port, 2_000))) {
+      return portFail('WEBUI_UNAVAILABLE', 'the managed WebUI endpoint is no longer reachable');
+    }
+    if (closed || bootstraps.get(environmentId) !== entry) {
+      return portFail('WEBUI_UNAVAILABLE', 'the managed WebUI bootstrap is no longer current');
+    }
+    const current = launches.read(environmentId);
+    if (
+      current === undefined ||
+      current.state !== 'running' ||
+      current.identity === null ||
+      current.identity.pid !== entry.pid ||
+      current.identity.startToken !== entry.startToken ||
+      verifyIdentity(probe, current.identity).owned !== true
+    ) {
+      return portFail('WEBUI_UNAVAILABLE', 'the managed WebUI bootstrap is no longer current');
+    }
+    try {
+      await open(entry.url);
+    } catch {
+      // A thrown open error can contain the URL/token; never relay it.
+      return portFail('INTERNAL_ERROR', 'the native WebUI open failed');
+    }
+    return portOk(undefined);
+  };
+
   return {
     start,
     stop,
     openWebUI,
     recover,
     close,
+    consumeWebUIBootstrap,
     launchesDirectory: launches.directory,
     readLaunchRecord: (environmentId) => launches.read(environmentId),
     listLaunchRecords: () => launches.list(),
