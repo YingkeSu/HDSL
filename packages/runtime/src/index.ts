@@ -1,13 +1,16 @@
 /**
- * `@hdsl/runtime` — managed runtime artifact installation, composition locks,
- * real DSH process lifecycle and upstream adaptation
- * (see docs/architecture/tdd.md and docs/research/dsh-compatibility.md).
+ * `@hdsl/runtime` — managed runtime artifact catalog, composition locks and the
+ * real installer for the first slice (T004).
  *
- * T002 scope: only the compiled workspace entry exists. Install, process,
- * reconciliation and credential wiring are owned by T004/T005
- * (`packages/runtime/src/{catalog,install,composition,process,reconcile,credentials}/**`).
+ * The verified macOS ARM64 catalog, the exact DSH dependency closure asset and
+ * the download/extract/closure/preflight pipeline live here. The environment
+ * model and transaction journal live in `@hdsl/core`; the two packages are
+ * siblings and are wired together at the composition root
+ * (`createManagedInstall({ runtime: createRuntimePort() })`).
  *
  * This package must not depend on Electron: it runs the managed Node/DSH
  * runtime, which is independent from the application runtime (ADR 0001).
  */
-export {};
+export * from './catalog/index.js';
+export * from './composition/index.js';
+export * from './install/index.js';
