@@ -17,7 +17,7 @@
  * Green here means "the harness is trustworthy", never "the desktop flow works".
  * Run: `pnpm exec vitest run tests/e2e/harness.test.ts`
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -46,11 +46,11 @@ import {
 } from './support/isolated-data-root.js';
 import {
   assertCleanupSucceeded,
-  assertNoResidue,
+  assertRunCleaned,
   CleanupFailureError,
   DuplicateResourceError,
   QaResourceRegistry,
-  ResourceResidueError,
+  RunResidueError,
 } from './support/resources.js';
 import { diffTrees, snapshotTree } from './support/tree.js';
 import {
@@ -71,21 +71,28 @@ const withRegistry = async (body: (registry: QaResourceRegistry) => Promise<void
 };
 
 describe('desktop E2E harness: registered resources', () => {
-  it('removes exactly the registered temp roots and preserves an unregistered sentinel', async () => {
+  it('removes this run\'s roots and preserves an unregistered sentinel outside them', async () => {
     const sentinel = mkdtempSync(join(tmpdir(), 'hdsl-external-sentinel-'));
+    const registry = new QaResourceRegistry();
+    const base = registry.baseDirectory;
     try {
-      await withRegistry(async (registry) => {
-        const first = registry.registerTempRoot('iso-a');
-        const second = registry.registerTempRoot('iso-b');
-        writeFileSync(join(first, 'canary.txt'), 'temp only\n');
-        expect(existsSync(first)).toBe(true);
-        expect(existsSync(second)).toBe(true);
-        expect(registry.registeredCount).toBe(2);
-      });
-      assertNoResidue(tmpdir());
+      const first = registry.registerTempRoot('iso-a');
+      const second = registry.registerTempRoot('iso-b');
+      writeFileSync(join(first, 'canary.txt'), 'temp only\n');
+      expect(existsSync(first)).toBe(true);
+      expect(existsSync(second)).toBe(true);
+      expect(first.startsWith(base)).toBe(true);
+      expect(sentinel.startsWith(base)).toBe(false);
+
+      const report = await registry.cleanup();
+      assertCleanupSucceeded(report);
+      // Only this run's own base directory is checked and removed.
+      expect(existsSync(base)).toBe(false);
+      assertRunCleaned(base);
       expect(existsSync(sentinel)).toBe(true);
     } finally {
       rmSync(sentinel, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
     }
   });
 
@@ -112,14 +119,16 @@ describe('desktop E2E harness: registered resources', () => {
     expect(() => registry.register('dup', () => undefined)).toThrow(DuplicateResourceError);
   });
 
-  it('detects residue instead of reporting a clean run', () => {
-    const leftover = mkdtempSync(join(tmpdir(), 'hdsl-e2e-residue-'));
+  it('detects this run\'s residue instead of reporting a clean run', () => {
+    const registry = new QaResourceRegistry();
+    const base = registry.baseDirectory;
     try {
-      expect(() => assertNoResidue(tmpdir())).toThrow(ResourceResidueError);
+      writeFileSync(join(base, 'left-behind.txt'), 'residue\n');
+      expect(() => assertRunCleaned(base)).toThrow(RunResidueError);
     } finally {
-      rmSync(leftover, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
     }
-    assertNoResidue(tmpdir());
+    assertRunCleaned(base);
   });
 });
 
@@ -147,6 +156,15 @@ describe('desktop E2E harness: host-HOME guard', () => {
       rmSync(file);
       const afterRemove = diffTrees(baseline, snapshotTree(guarded));
       expect(afterRemove.removed).toContain('marker.txt');
+
+      // A symlink is recorded as a symlink, not as its target (lstatSync).
+      const target = join(guarded, 'target.txt');
+      writeFileSync(target, 'target\n');
+      const link = join(guarded, 'link.txt');
+      symlinkSync(target, link);
+      const symlinkEntry = snapshotTree(guarded).find((entry) => entry.relPath === 'link.txt');
+      expect(symlinkEntry?.kind).toBe('symlink');
+      expect(existsSync(link)).toBe(true);
     });
   });
 
@@ -190,10 +208,12 @@ describe('desktop E2E harness: canary and secret oracles', () => {
   });
 
   it('accepts a reference-only config and rejects secret-bearing or oversized ones', () => {
-    const referenceOnly = buildReferenceOnlyConfig(
-      [{ id: 'ref-1', store: 'keychain', key: 'hdsl/env-1/model-api' }],
-      [{ name: 'MODEL_API_KEY', referenceId: 'ref-1' }],
-    );
+    const referenceOnly = buildReferenceOnlyConfig([
+      {
+        name: 'MODEL_API_KEY',
+        reference: { id: 'ref-1', store: 'keychain', key: 'hdsl/env-1/model-api' },
+      },
+    ]);
     expect(findForbiddenConfigKeys(referenceOnly)).toEqual([]);
     expect(isWithinCredentialConfigLimit(referenceOnly)).toBe(true);
 
@@ -265,17 +285,23 @@ describe('desktop E2E harness: candidate readiness detector', () => {
     ).toBe(false);
   });
 
-  it('probes the real workspace consistently and reports the pinned Electron version', () => {
+  it('probes the real workspace and reports the wired candidate honestly', () => {
     const probe = probeDesktopCandidate();
-    expect(probe.assessment.ready).toBe(probe.assessment.blockers.length === 0);
+    // Concrete observation, not a tautology: the candidate at this branch's base
+    // wires the window, IPC handlers and the sandboxed contextBridge, and the
+    // T006 placeholder is gone. A regression here must turn this red.
+    expect(probe.descriptor).toEqual({
+      windowBootstrap: true,
+      ipcHandlers: true,
+      preloadBridge: true,
+      placeholderMarker: false,
+    });
+    expect(probe.assessment).toEqual({ ready: true, blockers: [] });
     expect(probe.electronVersion).not.toBeNull();
+    expect(probe.electronVersion).toBe('44.4.3');
     expect(isExactVersion(probe.electronVersion ?? '')).toBe(true);
-    expect(typeof probe.electronBinaryPresent).toBe('boolean');
-    // Current state is a snapshot fact, not an assertion: this only proves the
-    // probe reports *why* it is blocked when it is.
-    if (!probe.assessment.ready) {
-      expect(probe.assessment.blockers.length).toBeGreaterThan(0);
-    }
+    expect(isExactVersion('44.4.3-beta')).toBe(false);
+    expect(isExactVersion('^44.4.3')).toBe(false);
   });
 });
 

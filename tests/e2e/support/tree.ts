@@ -8,7 +8,7 @@
  * changed and removed entry, so a green guard is never vacuously equal.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { existsSync, lstatSync, readFileSync, readdirSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 
 /** Files above this size are hashed as empty (size still compared). */
@@ -31,7 +31,7 @@ export const snapshotTree = (root: string): readonly TreeEntry[] => {
     for (const name of readdirSync(dir)) {
       const full = join(dir, name);
       const relPath = relative(root, full).split(sep).join('/');
-      const stats = statSync(full, { throwIfNoEntry: false });
+      const stats = lstatSync(full, { throwIfNoEntry: false });
       if (stats === undefined) {
         continue;
       }

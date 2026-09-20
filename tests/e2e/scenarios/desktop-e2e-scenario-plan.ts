@@ -53,8 +53,10 @@ export interface PlannedScenario {
   /** The falsifiable negative control: how this scenario is proven able to fail. */
   readonly negativeControl: string;
   readonly requires: readonly DesktopCapability[];
-  readonly status: 'blocked' | 'ready';
+  readonly status: 'blocked' | 'ready' | 'executed';
   readonly blocker?: string;
+  /** Observed result when the scenario has been executed on a frozen candidate. */
+  readonly observation?: string;
 }
 
 const NOT_WIRED =
@@ -162,8 +164,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '在真实 renderer 上下文中枚举 window 暴露面并与 PRELOAD_CONTRACT_METHODS 逐项比对；无 send/invoke/on 通用入口',
     negativeControl: '故意调用未暴露通道必须抛错/拒绝；若可达则失败',
     requires: ['electron.window', 'preload.bridge', 'ipc.sender-guard'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @2cdea54：真实窗口 window.hdsl 恰为 {call,onOperationUpdated,selectEnvironment}，window.require/process/ipcRenderer/send/invoke/on 均 undefined",
   },
   {
     id: 'E2E-TRUST-02',
@@ -180,16 +182,16 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
   },
   {
     id: 'E2E-TRUST-03',
-    title: '子 frame / 非白名单 origin 被拒',
+    title: '子 frame / 非白名单 origin 被拒（iframe 未在真实窗口驱动）',
     requirements: ['FR-003', 'FR-007'],
     lane: 'synthetic',
     evidence: 'injected',
     realUi: true,
-    determinismGate: '在主窗口内嵌 iframe（或等价子 frame）发起契约调用；main 按 frame 校验拒绝',
-    negativeControl: '主 frame 同调用必须成功；仅在拒绝时不校验“成功路径”会被视为不完整',
+    determinismGate: '真实窗口验证 popup 拒绝与 main frame 外部导航拒绝；子 frame 授权仅用 isTrustedDocumentUrl 对 isMainFrame=false 的纯函数断言',
+    negativeControl: '主 frame 的精确文档 URL 必须授权（纯函数）；iframe/子 frame 未在真实窗口驱动，不得用 popup/nav 结果声称 iframe 已覆盖',
     requires: ['electron.window', 'ipc.sender-guard'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54：真实窗口 window.open 返回 null、外部导航被拒且 URL 不变；子 frame 仅纯函数断言（isMainFrame=false → false），iframe 未测',
   },
   {
     id: 'E2E-TRUST-04',
@@ -201,8 +203,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '真实就绪的 DSH 页面（系统浏览器或受控 webContents）断言 preload 缺失、nodeIntegration 关闭、高权限通道不可达',
     negativeControl: '对启动器自身窗口重复同一探测必须能触达受限桥，证明探测自身有效',
     requires: ['webui.native-open', 'electron.window', 'dsh.managed'],
-    status: 'blocked',
-    blocker: `${NOT_WIRED}；另需 DSH 就绪与 WebUI 打开路径`,
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54（注入 opener 列）：真实浏览器加载 authenticated DSH 页面时 window.hdsl 为 undefined，页面不持有启动器桥；未在 Electron webContents 内加载 DSH',
   },
   {
     id: 'E2E-WEBUI-01',
@@ -211,11 +213,11 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     lane: 'synthetic',
     evidence: 'injected',
     realUi: true,
-    determinismGate: '受管进程记录的 endpoint 是唯一合法来源；main 原生打开，renderer 只拿到 {loopbackOrigin}',
-    negativeControl: '换端口/停进程/非 loopback/携带 token 的 URL 必须 WEBUI_UNAVAILABLE 或 INTERNAL_ERROR，且绝不打开',
+    determinismGate: '受管进程记录的 endpoint 是唯一合法来源；main 在打开前校验 loopback；注入 opener 列用真实浏览器验证落点',
+    negativeControl: '换端口/停进程/非 loopback/无 endpoint 必须 WEBUI_UNAVAILABLE 或 INTERNAL_ERROR，且绝不打开；真实 shell.openExternal 未测',
     requires: ['electron.window', 'webui.native-open', 'dsh.managed'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54（注入 opener 列）：真实受管进程 loopback 经 main-only bootstrap 后落在去 query canonical origin；未知/无 endpoint 时 WEBUI_UNAVAILABLE（IPC 用例）。真实 shell.openExternal 原生打开未测',
   },
   {
     id: 'E2E-WEBUI-02',
@@ -237,11 +239,11 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     lane: 'synthetic',
     evidence: 'injected',
     realUi: true,
-    determinismGate: '受控 main 环境用 fixture 引用配置走原生菜单入口；断言：引用被接受、启动 env 按引用解析、过程无 value 落盘',
+    determinismGate: '执行入口为 qa-entry 测试注入列（--hdsl-qa-import-path / --hdsl-qa-import-environment），不是原生菜单；断言：引用被接受、启动 env 按引用解析、过程无 value 落盘',
     negativeControl: '含 value/secret 字段的配置必须被拒且不落盘；若被接受则失败',
     requires: ['electron.window', 'credentials.menu-import', 'preload.bridge', 'dsh.managed'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54（qa-entry 测试注入列，非原生菜单）：stderr applied；credentials.json 0600、含引用 id/key、无 secret 值。真实原生菜单导入仍未测',
   },
   {
     id: 'E2E-CRED-02',
@@ -253,8 +255,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '逐一投放 malformed JSON、strict-schema 额外字段、超尺寸、含 value/token 字段的配置；断言拒绝 + 目标路径无新文件',
     negativeControl: '合格引用配置必须成功导入，否则“一律拒绝”会伪装成通过',
     requires: ['electron.window', 'credentials.menu-import'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @2cdea54（qa-entry 注入列）：含 value 字段文档 rejected at parse，credentials.json 未生成，secret 不入 stderr",
   },
   {
     id: 'E2E-CRED-03',
@@ -292,8 +294,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '环境 home 预置 .credentials.yaml 与 logs/** canary；导出后扫描产物，断言默认排除集与零命中',
     negativeControl: '故意改宽默认排除（或把 canary 放进导出源）必须使断言失败；导出不得返回本地路径',
     requires: ['electron.window', 'diagnostics.export'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @2cdea54（qa-entry 注入列）：导出 {exportId,exported:true,redacted:true}；文件不含 canary/.credentials.yaml/credentials.json/dataRoot 原文；同 requestId 重放不重写",
   },
   {
     id: 'E2E-ISO-01',
@@ -323,29 +325,29 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
   },
   {
     id: 'E2E-LOCK-01',
-    title: '双实例同一 dataRoot：第二实例在启用 UI 操作前被有界拒绝',
+    title: '同 user-data-dir 第二进程：requestSingleInstanceLock 退出，首实例不受影响',
     requirements: ['FR-001', 'FR-008'],
     lane: 'synthetic',
     evidence: 'injected',
     realUi: true,
-    determinismGate: '实例 A 持锁写 ready 文件；实例 B 启动后 UI 操作不可用且给出明确拒绝，A 的状态不变',
-    negativeControl: 'A 退出后 B 必须能接管，否则“永久拒绝”会伪装成通过',
-    requires: ['electron.single-instance', 'dataRoot.lock', 'electron.window'],
-    status: 'blocked',
-    blocker: `${NOT_WIRED}；#6 补充验收要求单实例/dataRoot 独占门禁`,
+    determinismGate: '同 user-data-dir 启动第二进程；断言其经 requestSingleInstanceLock 退出且首实例仍可服务 catalog.list（dataRoot 级别的拒绝在 LOCK-02）',
+    negativeControl: '不同 user-data-dir 的实例不受该锁影响（与 LOCK-02 分栏）；若第二进程未退出或首实例不可用则失败',
+    requires: ['electron.single-instance', 'electron.window'],
+    status: 'executed',
+    observation: "已执行 2026-09-20 @2cdea54：同 user-data-dir 第二进程经 requestSingleInstanceLock 退出，首实例仍可服务",
   },
   {
     id: 'E2E-LOCK-02',
-    title: '正常退出释放锁且无残留；异常退出显式报告',
-    requirements: ['FR-008'],
+    title: '同一 dataRoot 被占用：第二实例被拒且既有 lease 不被改写',
+    requirements: ['FR-001', 'FR-008'],
     lane: 'synthetic',
     evidence: 'injected',
     realUi: true,
-    determinismGate: '退出后下一实例可获锁；清理只回收登记资源，残留以 assertNoResidue 判定',
-    negativeControl: '注入持锁进程崩溃，断言接管/报告而非静默成功；清理失败必须进入 CleanupReport.failed',
+    determinismGate: '第二实例有界内无 page；同配置在空闲 root 的正控能开窗（归因）；lease.json 的 pid 仍为首实例；终止第二实例后不变',
+    negativeControl: '生产已固定输出脱敏 stderr `[hdsl] data-root unavailable reason=busy`（2cdea54）；若缺失该行、lease 归属变化或正控不开窗则失败',
     requires: ['electron.single-instance', 'dataRoot.lock'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54：第二进程 stderr 含固定行 `[hdsl] data-root unavailable reason=busy`（不含路径/token）；8s 内无 page；lease.json pid 仍为首实例；同配置空闲 root 正控开窗；终止第二进程后 lease 不变',
   },
   {
     id: 'E2E-RESTART-01',
@@ -372,6 +374,45 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     requires: ['electron.window', 'renderer.start-stop', 'dsh.managed', 'operation.progress'],
     status: 'blocked',
     blocker: NOT_WIRED,
+  },
+  {
+    id: 'E2E-BROWSER-01',
+    title: '注入 opener：真实浏览器完成认证并落到可用页面（去 query canonical origin）',
+    requirements: ['FR-004', 'FR-007'],
+    lane: 'real-dsh',
+    evidence: 'real',
+    realUi: true,
+    determinismGate: '真实 Chrome 临时 profile + CDP；bootstrap URL 只经 Page.navigate；有界等最终 location 等于去 query canonical origin',
+    negativeControl: 'Page.navigate 返回不算认证成功：若最终 URL 仍带 token query、或认证后 DOM 为空，断言失败；不开 Network 域、不 dump cookie',
+    requires: ['webui.native-open', 'webui.auth-bootstrap', 'dsh.managed'],
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54（注入 opener 列）：真实受管 DSH 启动后 bootstrap 经 Page.navigate；认证页断言 rc2 身份（title=DeepSeek Harness + #root [data-slot=root] + 新会话/DOM）；cold 无 cookie 的第二 profile 不出现该 shell（负向）；自建随机 keychain canary 删除并复检不存在。不等于真实 shell.openExternal 原生打开',
+  },
+  {
+    id: 'E2E-LOCK-03',
+    title: 'owner 退出后新实例可重新获取同一 dataRoot（释放/再获取与拒绝分栏）',
+    requirements: ['FR-001', 'FR-008'],
+    lane: 'synthetic',
+    evidence: 'injected',
+    realUi: true,
+    determinismGate: '首实例退出后以同 dataRoot 启动新实例；断言 lease.json 的 pid 变为新实例且窗口可服务',
+    negativeControl: '若旧 lease 仍在或新实例无法获取则失败；与 LOCK-02 的拒绝场景分开，不互相代替',
+    requires: ['electron.window', 'dataRoot.lock'],
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54：首实例退出后新实例获取 lease（pid 变更）并可调用 catalog.list',
+  },
+  {
+    id: 'E2E-GUI-STARTSTOP-01',
+    title: 'production 真实 React 点击启停：进度与终态可见（凭据为 setup 注入）',
+    requirements: ['FR-005', 'FR-006'],
+    lane: 'real-dsh',
+    evidence: 'real',
+    realUi: true,
+    determinismGate: 'CDP 真实鼠标点击 production UI 的启动/停止按钮；有界等操作面板出现与状态标签变为运行中/已停止',
+    negativeControl: '按钮禁用或状态标签不变则失败；凭据经已受审 core 接口 setup 注入并明确标注，不冒充原生菜单导入',
+    requires: ['electron.window', 'renderer.start-stop', 'operation.progress', 'dsh.managed'],
+    status: 'executed',
+    observation: '已执行 2026-09-20 @2cdea54：setup 注入引用 + 自建 keychain canary 后，真实点击启动→面板显示启动→状态运行中；点击停止→已停止；契约确认 stopped',
   },
 ];
 
@@ -432,6 +473,15 @@ export const validateScenarioPlan = (
     }
     if (scenario.status === 'ready' && scenario.blocker !== undefined) {
       violations.push({ id: scenario.id, problem: 'ready scenario must not carry a blocker' });
+    }
+    if (
+      scenario.status === 'executed' &&
+      (scenario.blocker !== undefined || (scenario.observation ?? '').trim() === '')
+    ) {
+      violations.push({
+        id: scenario.id,
+        problem: 'executed scenario must record an observation and no blocker',
+      });
     }
   }
   return violations;

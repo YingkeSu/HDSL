@@ -125,20 +125,20 @@ export interface CredentialReferenceEntry {
   readonly key: string;
 }
 
-export interface CredentialBindingEntry {
+export interface CredentialImportBindingEntry {
   readonly name: string;
-  readonly referenceId: string;
+  readonly reference: CredentialReferenceEntry;
 }
 
 /**
- * A valid reference-only config file body: references and bindings, no values.
- * Mirrors the `CredentialReference` shape frozen in ADR 0003 without importing
- * production code (this is an independent oracle).
+ * A valid reference-only import document body: variable names plus OS-store
+ * references, no values. This is the exact shape the T006 import schema accepts
+ * (`{ schemaVersion: "1", bindings: [{ name, reference: { id, store, key } }] }`),
+ * built independently of production code.
  */
 export const buildReferenceOnlyConfig = (
-  references: readonly CredentialReferenceEntry[],
-  bindings: readonly CredentialBindingEntry[],
-): string => `${JSON.stringify({ schemaVersion: 1, references, bindings }, null, 2)}\n`;
+  bindings: readonly CredentialImportBindingEntry[],
+): string => `${JSON.stringify({ schemaVersion: '1', bindings }, null, 2)}\n`;
 
 const FORBIDDEN_CONFIG_KEYS = new Set([
   'value',
