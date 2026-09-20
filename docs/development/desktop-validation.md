@@ -26,6 +26,7 @@
 | E2E-QAENTRY-CRED-01 | ✅ 通过（注入列） | `qa-entry --hdsl-qa-import-path/--hdsl-qa-import-environment`：stderr `credential-import: applied`；`credentials.json` 权限 `0600`、含引用 id/key、无 secret 值 |
 | E2E-QAENTRY-CRED-02 | ✅ 通过（注入列） | 含 `value` 字段的文档 `rejected at parse`；`credentials.json` 未生成；secret 不入 stderr |
 | E2E-BROWSER-01 | ✅ 通过（注入 opener 列） | 真实 Chrome（临时 profile + CDP）作为注入 opener：`createDesktopComposition({openWebUi})` 启动真实受管 DSH，bootstrap URL 仅交给 `Page.navigate`；**认证断言为 rc2 应用身份**（`title=DeepSeek Harness` + `#root [data-slot="root"]` + `新会话`），并有**无 cookie 第二 profile 的负向对照**（不出现该 shell）；自建随机 keychain canary（stdin 写入，删除后复检不存在） |
+| E2E-IFRAME-01 | ✅ 通过（真实窗口子 frame） | 生产窗口内构造真实 `<iframe>`：`srcdoc` 子 frame **实际执行**（`about:srcdoc`，内容渲染）且其上下文 `window.hdsl`/`require`/`process`/`ipcRenderer`/`hdsl.call` **全部 undefined**；`data:` 子 frame 导航被 **CSP** 拒绝（落到 `chrome-error://`，控制台有 CSP refusal）；主 frame 调用前后均正常（对照）。**分层**：CSP 阻断层与 main `senderFrame`/`isMainFrame` 拒绝层分开；带桥子 frame 的真实 IPC 拒绝仍**未覆盖**（生产 preload 不注入子 frame） |
 | E2E-GUI-STARTSTOP-01 | ✅ 通过（setup 注入凭据） | production 真实 React UI：CDP 真实鼠标点击「启动」→ 操作面板显示启动 → 状态标签 `运行中`；点击「停止」→ `已停止`；契约确认 stopped。凭据经已受审 core 接口 setup 注入 + 自建 keychain canary，**不冒充原生菜单导入** |
 | harness 自检 | ✅ 17/17 | 夹具安全自检（登记清理/宿主守卫可失败/canary oracle/gate/候选探测器/隔离 dataRoot/计划校验，含 symlink 识别与负向控制） |
 
@@ -44,15 +45,15 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 ```
 
 机器计数（本机 macOS 26.3 arm64，Node 24.21.0）：
-- 全部 opt-in：`6 passed / 33 tests`。
-- 默认（gated）：`2 passed | 4 skipped; 18 passed | 15 skipped`。
+- 全部 opt-in：`7 files / 34 tests`（本批新增 `E2E-IFRAME-01`；其余 33 条已在 `2cdea54` 复跑全绿）。
+- 默认（gated）：`2 passed | 5 skipped; 18 passed | 16 skipped`。
 
 `HDSL_E2E_DESKTOP=1` / `HDSL_E2E_BROWSER=1` / `HDSL_E2E_GUI=1` 是显式 opt-in 门（同 T004/T005 真实证据测试的模式）：真实矩阵不进入 `pnpm run test` 默认集。默认 CI 跑工程检查 + always-on 夹具自检（17 条）与 always-on 的 Electron binary 探测（共 18 passed），**不含** opt-in 的 15 条。真实矩阵用注册的 `hdsl-e2e-run-*` 临时 base 下的 dataRoot/user-data/profile，不读个人 keychain、不调用模型、不碰用户 `~/.dsh` 或浏览器 profile。
 
 ## 红证据（9b52364）与修复复验
 
 - **AUTH-01（review P2-1）**：在 `9b52364` 上，纯函数授权边界 `isNavigationAllowed`/`isAuthorizedSender` 接受 `<renderer index.html>.attacker` 等共享前缀的不同资源 —— 同断言 RED。**口径**：这是纯函数授权复现，**未**证明 Chromium 规范化层可利用，不称真实利用。`33bfd1e` 改为 `isTrustedDocumentUrl` 精确规范化相等后，同断言 GREEN（并在最终 base `2cdea54` 复验）。
-- **HOOK（review P2-2）**：`9b52364` 上运行期复现（正常启动 + 三个 `HDSL_*` 钩子）在真实 install 步骤超时，**没有干净红**；不补写成功复现。`33bfd1e` 把注入迁到独立 `dist/main/qa-entry.js`，生产入口不再读任何钩子；`E2E-HOOK-01` 独立验证「设置三 env 的正常生产启动无任何读文件/写配置/跳对话框副作用」。
+- **HOOK（review P2-2）**：`9b52364` 上运行期复现（正常启动 + 三个 `HDSL_*` 钩子）在真实 install 步骤超时，**没有干净红**；不补写成功复现。`33bfd1e` 把注入迁到独立 `dist/main/qa-entry.js`；生产入口**不读三个导入/导出授权钩子**（`HDSL_DIAGNOSTICS_EXPORT_PATH`、`HDSL_CREDENTIAL_IMPORT_PATH`、`HDSL_CREDENTIAL_IMPORT_ENVIRONMENT`），而 `HDSL_DATA_ROOT`（`--hdsl-data-root`）是**有意保留**的定位入口，仍走同一独占/校验路径；`E2E-HOOK-01` 独立验证「设置三 env 的正常生产启动无任何读文件/写配置/跳对话框副作用」。
 
 ## F1 拒绝信号（已由生产补齐，`2cdea54`）
 
@@ -75,6 +76,7 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 - **隔离真实浏览器 + opener 注入**（✅ 已执行，`E2E-BROWSER-01`）：真实 Chrome（`/Applications/Google Chrome.app`，注册的临时 profile + CDP）作为注入 opener。真实受管 DSH 经 `createDesktopComposition({ openWebUi: createVerifiedWebUiOpener(async url => browser.send('Page.navigate',{url})) })` 启动；bootstrap URL **只**进入 `Page.navigate`，不打印/不落盘/不开 Network 域/不 dump cookie。**认证断言不是页面长度**：必须出现 rc2 应用身份（`title=DeepSeek Harness`、`#root [data-slot="root"]`、`新会话`），并有**无 cookie 的第二 profile 负向对照**（不出现该 shell）。keychain 用自建随机 `hdsl-qa-24-browser-*`（secret 经 stdin），删除后复检 `find-generic-password` 不存在。**分栏**：这是**注入 opener** 证据，不等于真实 `shell.openExternal` 原生打开；后者未在本切片执行。
 - **GUI 认证后可用页**：composition 级 303→200（hdsl-24）与本切片的**注入 opener 真实浏览器**已分别记录；真实 `shell.openExternal` 系统浏览器打开仍未验证，保留未验证。
 - **真实 DSH 经 UI 启停**（✅ 已执行，`E2E-GUI-STARTSTOP-01`）：凭据用 **setup 注入**（已受审 core 接口 + 自建 keychain canary）准备好后，production 真实 React UI 上 CDP 真实鼠标点击启停，观察到操作面板与 `运行中`/`已停止` 终态；**不代表**原生菜单导入路径已测。
+- **真实窗口 iframe 边界**（✅ 已执行，`E2E-IFRAME-01`）：`srcdoc` 子 frame 实际执行但**无启动器桥**（preload 不注入子 frame）；`data:` 子 frame 被 CSP 拒绝；**未覆盖**：带桥子 frame 的真实 `senderFrame`/`isMainFrame` IPC 拒绝（生产不提供该形态，纯函数层已断言，不在生产窗口伪造 sender）。若需真实 sender 拒绝，必须另设**测试宿主列**（加载生产 handler/bridge 原件、无生产后门），与生产窗口 CSP 列分栏——本切片未做。
 - Windows x64：未测（T008b）。
 - 其余计划场景（`tests/e2e/scenarios/desktop-e2e-scenario-plan.ts`）保持 `blocked`。
 
@@ -83,14 +85,14 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 - PR #65 F1–F5：`lstatSync` 识别 symlink（含正向自检）、去恒真断言改为真实 descriptor 断言、版本精确锚定结尾、计数/PATH 措辞——已落地。
 - PR #69 review F1：LOCK-02 加同配置空闲 root 正控归因；无机器可读拒绝信号已作为可观测性缺口记录（见上）。
 - F2：浏览器认证改为 rc2 应用身份断言 + 无 cookie 负向对照，不以页面长度认证。
-- F3：场景计划与真实证据对齐——LOCK-01（user-data 单实例）与 LOCK-02/03（dataRoot 拒绝、释放后重获）分栏；qa-entry 凭据明确标为测试注入非原生菜单；iframe 未测不用 popup/nav 冒充。
+- F3：场景计划与真实证据对齐——LOCK-01（user-data 单实例）与 LOCK-02/03（dataRoot 拒绝、释放后重获）分栏；qa-entry 凭据明确标为测试注入非原生菜单。iframe 已在真实窗口另行驱动（见 E2E-IFRAME-01），不再用 popup/nav 冒充子 frame 覆盖。
 - F4：残留检查只针对本 run 唯一 base 目录（不再扫描整个 tmpdir，也不删除他人根）。
 - F5：keychain 删除结果与再查不存在均硬断言，setup/spawn 纳入 `try/finally`，cleanup 失败显式报告。
 - F6：失败输出先经 `sanitizeForReport`（去 token/secret、截断），CDP 每次调用有界超时并清理 pending；旧“expected RED”注释与机器计数已更新。
 
 ## 残留
 
-- 真实/注入矩阵：13 条场景 + 17 条夹具自检，opt-in 合计 `6 files / 33 tests` 全绿。
+- 真实/注入矩阵：14 条场景（含 `E2E-IFRAME-01`）+ 17 条夹具自检，opt-in 合计 `7 files / 34 tests`（iframe 本批执行，其余 33 条在 `2cdea54` 复跑）。
 - `CRED-01/CRED-02` 只覆盖 qa-entry 测试注入列；真实原生菜单/对话框仍未验证。
 - 真实 `shell.openExternal` 系统浏览器打开未测（注入 opener 列已验，两者不互代）。
 - LOCK-02 的机器可读拒绝信号缺口保持登记（见上）。
