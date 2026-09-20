@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>hdsl sender-frame test parent</title>
+  </head>
+  <body>
+    <div id="parent">parent</div>
+    <iframe id="child" src="./sender-frame-child.html"></iframe>
+    <script>
+      // Test page for the TEST-ONLY sender-frame host. No CSP here on purpose:
+      // the test host is a defense-in-depth probe for the main-side sender
+      // guard, not the product's first layer (the product renderer CSP and the
+      // absent subframe preload come first; see desktop.iframe.real.test.ts).
+      (async () => {
+        window.addEventListener('message', (event) => {
+          window.__childEnvelope = event.data;
+        });
+        try {
+          window.__mainEnvelope = await window.hdsl.call({
+            apiVersion: '1.0',
+            method: 'catalog.list',
+            input: {},
+          });
+        } catch (error) {
+          window.__mainEnvelope = { thrown: String(error) };
+        }
+      })();
+    </script>
+  </body>
+</html>

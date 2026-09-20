@@ -19,13 +19,13 @@ QA only — no production changes, no `apps/desktop/**` edits, no root config or
 | Isolated real-browser authenticated page (injected opener) | **Executed and passing on `2cdea54`** — real Chrome + temp profile + CDP |
 | Native menu+dialogs / real `shell.openExternal` / Windows x64 | **Blocked / manual** — see the validation doc |
 
-Machine counts: all opt-ins `7 passed / 35 tests`; default (gated) `3 passed | 4 skipped; 19 passed | 16 skipped`.
+Machine counts: all opt-ins `8 passed / 37 tests`; default (gated) `20 passed | 17 skipped (37)`.
 
 `HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a
 real managed install and uses the network, so it is not part of the default `pnpm run test`
 run. The default CI runs the engineering checks plus the always-on fixture harness (17)
-and the always-on Electron-binary probe (18 passed total); the 15 opt-in cases are skipped
-there. The fixture harness is always on. Full results, lanes and blockers:
+plus the always-on Electron-binary probe, the iframe layer-classifier negative control and
+the sender-frame fixture check (20 passed total); the 17 opt-in cases are skipped there. The fixture harness is always on. Full results, lanes and blockers:
 [`docs/development/desktop-validation.md`](../../docs/development/desktop-validation.md).
 
 ## Layout
@@ -39,6 +39,7 @@ tests/e2e/
   desktop.browser.real.test.ts           # isolated real-browser authenticated page (opt-in)
   desktop.gui.real.test.ts               # production GUI start/stop (opt-in, injected credential setup)
   desktop.iframe.real.test.ts            # real-window iframe boundary + always-on layer-classifier negative control (opt-in real case; no CSP dynamic claim)
+  desktop.sender-frame.real.test.ts      # test-only host: real subframe IPC rejected by the production sender guard (opt-in)
   scenarios/
     desktop-e2e-scenario-plan.ts         # 24 planned QA cases with lanes and observations
   support/
@@ -49,6 +50,8 @@ tests/e2e/
     desktop-candidate.ts                 # readiness detector
     prepared-environment.ts              # one real install, cloned for injection tests
     chrome.ts                            # installed-Chrome launcher for the browser lane
+    sender-frame-host.mjs                # TEST-ONLY Electron host for the sender-frame lane
+    fixtures/                            # test-host parent/child pages for that lane
     resources.ts / tree.ts / canary.ts / gates.ts / isolated-data-root.ts
 ```
 
@@ -65,6 +68,7 @@ HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.injected.real.test.ts
 HDSL_E2E_BROWSER=1 pnpm exec vitest run tests/e2e/desktop.browser.real.test.ts
 HDSL_E2E_GUI=1 pnpm exec vitest run tests/e2e/desktop.gui.real.test.ts
 HDSL_E2E_IFRAME=1 pnpm exec vitest run tests/e2e/desktop.iframe.real.test.ts
+HDSL_E2E_SENDERFRAME=1 pnpm exec vitest run tests/e2e/desktop.sender-frame.real.test.ts
 ```
 
 Never substitute a mock port or an SSR render for the real Electron window, never

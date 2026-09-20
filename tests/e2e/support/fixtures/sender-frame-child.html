@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>hdsl sender-frame test child</title>
+  </head>
+  <body>
+    <div id="child">child</div>
+    <script>
+      (async () => {
+        const result = {
+          bridgePresent: typeof window.hdsl === 'object' && window.hdsl !== null,
+          envelopes: {},
+        };
+        const call = async (method, input) => {
+          try {
+            return await window.hdsl.call({ apiVersion: '1.0', method, input });
+          } catch (error) {
+            return { thrown: String(error) };
+          }
+        };
+        result.envelopes.catalog = await call('catalog.list', {});
+        result.envelopes.create = await call('environments.create', {
+          requestId: 'sf-create',
+          name: 'sf-should-not-exist',
+          catalogCombinationId: 'darwin-arm64-node22_19_0-dsh0_1_5-rc_2',
+        });
+        result.envelopes.export = await call('diagnostics.export', {
+          requestId: 'sf-export',
+          environmentId: 'env-does-not-exist',
+        });
+        result.envelopes.openWebUI = await call('environments.openWebUI', {
+          requestId: 'sf-webui',
+          environmentId: 'env-does-not-exist',
+        });
+        parent.postMessage(result, '*');
+      })();
+    </script>
+  </body>
+</html>
