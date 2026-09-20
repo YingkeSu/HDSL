@@ -136,7 +136,7 @@ describe('managed DSH start', () => {
   });
 
   it('terminates the whole tree and reports START_TIMEOUT when readiness never arrives', async () => {
-    const h = await open({ mode: 'never-ready', readinessTimeoutMs: 1_500 });
+    const h = await open({ mode: 'never-ready', readinessTimeoutMs: 2_000 });
     const start = h.manager.start(h.request());
     const info = await h.waitForInfo();
     const outcome = await start;

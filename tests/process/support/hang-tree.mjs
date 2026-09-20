@@ -10,6 +10,8 @@ import { writeFileSync } from 'node:fs';
 const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {
   stdio: 'ignore',
 });
+// Never let a failed grandchild spawn crash the fixture (EAGAIN under CI load).
+grandchild.on('error', () => {});
 const pidFile = process.env.HANG_TREE_PID_FILE;
 if (pidFile !== undefined && grandchild.pid !== undefined) {
   writeFileSync(pidFile, String(grandchild.pid));

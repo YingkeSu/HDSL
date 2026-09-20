@@ -33,6 +33,12 @@ const mode = process.env.FAKE_DSH_MODE ?? 'ready';
 const grandchild = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1 << 30)'], {
   stdio: 'ignore',
 });
+// A failed grandchild spawn (for example EAGAIN under CI load) must not crash
+// the fixture: an unhandled 'error' event would exit this process and turn a
+// readiness-timeout scenario into a spurious early exit.
+grandchild.on('error', () => {
+  // observed through info.grandchildPid === null
+});
 
 const info = {
   grandchildPid: grandchild.pid ?? null,
@@ -98,8 +104,7 @@ if (mode === 'never-ready') {
     response.statusCode = 401;
     response.end('unauthorized');
   });
-  server.on('error', (error) => {
-    process.stderr.write(`fake dsh listen error: ${error.code}\n`);
+  server.on('error', (error) => {    process.stderr.write(`fake dsh listen error: ${error.code}\n`);
     try {
       grandchild.kill('SIGKILL');
     } catch {
