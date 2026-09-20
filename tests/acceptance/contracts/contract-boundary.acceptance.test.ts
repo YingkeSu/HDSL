@@ -12,29 +12,26 @@
  *   idempotency and T004–T006 effects are out of scope here;
  * - "not yet implemented" (DSH, UI) is not treated as a defect.
  *
- * Baseline: PR #21 head `0cfbdbd72d9b01939e20a39c41ade6f927ebff20`
- * (main `5a9d295`), Node `v24.21.0`, pnpm `11.7.0`, darwin/arm64.
+ * Baseline: fixed PR #21 head `b1904cec62ab022793d572c16f6fe10d639f7d08`
+ * (previously frozen `0cfbdbd72d9b01939e20a39c41ade6f927ebff20`), main
+ * `5a9d295`, Node `v24.21.0`, pnpm `11.7.0`, darwin/arm64.
  *
  * Run: `pnpm vitest run tests/acceptance/contracts`
  *
  * Two sections:
  * - `frozen contract behavior` — behavior the contract pins down and that
- *   already holds; regression guards.
- * - `contract expectations not met` — cases that assert the behavior the
- *   contract requires. They **fail on this SHA on purpose**: the suite must
- *   never pass *because* a defect exists. Each failing case links its issue
- *   and must pass unchanged once the fix lands.
+ *   already held on the frozen SHA.
+ * - `contract expectations` — the 10 cases that assert the behavior the
+ *   contract requires. They were intentionally red on `0cfbdbd` and all pass
+ *   on `b1904ce` without changing an expectation. The suite must never be
+ *   green *because* a defect exists; do not weaken or skip these.
  */
 import {
-  contractRequest,
   createContractRuntime,
   containsSecret,
-  FIXTURE_IDS,
-  FIXTURE_SEED,
   isLoopbackOrigin,
   isRetryable,
   portOk,
-  ReferenceContractPort,
   SubscriptionRegistry,
   type ContractPort,
   type ContractResponse,
@@ -45,9 +42,16 @@ import {
   type PortOutcome,
   type SubscriptionRef,
 } from '@hdsl/contracts';
+import {
+  contractRequest,
+  FIXTURE_IDS,
+  FIXTURE_SEED,
+  ReferenceContractPort,
+} from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
-const API_SHA = '0cfbdbd72d9b01939e20a39c41ade6f927ebff20';
+const API_SHA = 'b1904cec62ab022793d572c16f6fe10d639f7d08';
+const PRIOR_SHA = '0cfbdbd72d9b01939e20a39c41ade6f927ebff20';
 
 interface Harness {
   readonly base: ReferenceContractPort;
@@ -58,9 +62,8 @@ interface Harness {
  * Builds a runtime over the documented fixture port, with optional per-method
  * overrides that simulate a faulty/controlled downstream port.
  *
- * NOTE (issue #31): the harness imports the TEST/FIXTURE port from the package
- * root today. When the testing subpath is isolated, only this import block
- * should change.
+ * NOTE: the TEST/FIXTURE port and its fixtures live behind the
+ * `@hdsl/contracts/testing` subpath; only this import block depends on it.
  */
 const harness = (
   overrides: Partial<ContractPort> = {},
@@ -291,12 +294,12 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
   });
 });
 
-describe(`contract expectations not met @ ${API_SHA} (fail until fixed)`, () => {
+describe(`contract expectations @ ${API_SHA} (red on ${PRIOR_SHA})`, () => {
   /**
-   * Every case below asserts the behavior the contract text requires. It is
-   * intentionally red on this SHA. Fixes must make the case pass without
-   * weakening the expectation, and must not be "proven" by a green suite that
-   * depends on the defect. Linked issues: #22 #23 #24 #25 #26 #27.
+   * Every case below asserts the behavior the contract text requires. All 10
+   * were red on `0cfbdbd` and are green on `b1904ce` with the same
+   * expectation; they remain the regression guards for issues #22 #23 #24
+   * #25 #26 #27 and review F3. Do not weaken, skip or `it.fails` them.
    */
 
   it('[#22] a guard rejection must not permanently poison the requestId on corrected parameters', () => {
@@ -322,13 +325,13 @@ describe(`contract expectations not met @ ${API_SHA} (fail until fixed)`, () => 
   });
 
   it('[#22/idempotency ledger] an unpersisted outcome must not repeat the side effect', () => {
-    // Simulates the crash window: fingerprint is persisted, the executed
-    // outcome is not. The same requestId must not run the effect twice.
+    // Simulates the crash window: the in-progress marker is persisted, the
+    // completed outcome is not. A replay must not run the effect twice.
     const store = new Map<string, IdempotencyRecord>();
     const { base, runtime } = harness({
       readIdempotency: (id) => store.get(id),
       writeIdempotency: (id, record) => {
-        if (record.outcome === undefined) {
+        if (record.state === 'in-progress') {
           store.set(id, record);
         }
       },
