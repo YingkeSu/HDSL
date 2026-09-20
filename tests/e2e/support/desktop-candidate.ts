@@ -71,14 +71,18 @@ export interface DesktopWorkspaceProbe {
 }
 
 export const probeDesktopCandidate = (): DesktopWorkspaceProbe => {
+  // The entry is split across `index.ts` (bootstrap) and `app.ts` (composition)
+  // and the sandboxed runtime preload is `bridge.cts`, so all of them are read.
   const main = readSource('apps/desktop/src/main/index.ts');
+  const app = readSource('apps/desktop/src/main/app.ts');
   const mainDir = readSource('apps/desktop/src/main/contract.ts');
-  const preload = readSource('apps/desktop/src/preload/index.ts');
+  const runtimeBridge = readSource('apps/desktop/src/preload/bridge.cts');
+  const typedPreload = readSource('apps/desktop/src/preload/index.ts');
   const descriptor: DesktopCandidateDescriptor = {
-    windowBootstrap: /new\s+BrowserWindow\s*\(/.test(main),
-    ipcHandlers: /ipcMain\.(handle|on)\s*\(/.test(`${main}\n${mainDir}`),
-    preloadBridge: /contextBridge\.exposeInMainWorld\s*\(/.test(preload),
-    placeholderMarker: /is not implemented yet/i.test(main),
+    windowBootstrap: /new\s+BrowserWindow\s*\(/.test(`${main}\n${app}`),
+    ipcHandlers: /ipcMain\.(handle|on)\s*\(/.test(`${main}\n${app}\n${mainDir}`),
+    preloadBridge: /contextBridge\.exposeInMainWorld\s*\(/.test(`${runtimeBridge}\n${typedPreload}`),
+    placeholderMarker: /is not implemented yet/i.test(`${main}\n${app}`),
   };
   return {
     descriptor,
@@ -104,5 +108,5 @@ export const readElectronVersion = (): string | null => {
   return typeof value === 'string' ? value : null;
 };
 
-/** An exact pin has no range operator and no tag (`44.4.3`, never `^44.4.3`). */
-export const isExactVersion = (version: string): boolean => /^\d+\.\d+\.\d+/.test(version);
+/** An exact pin has no range operator and no tag (`44.4.3`, never `^44.4.3` or `44.4.3-beta`). */
+export const isExactVersion = (version: string): boolean => /^\d+\.\d+\.\d+$/.test(version);

@@ -1,41 +1,45 @@
 # Desktop main-flow E2E QA (`tests/e2e`)
 
 Owner: **hdsl-25** (issue [#64](https://github.com/YingkeSu/HDSL/issues/64), T007c; parent [#7](https://github.com/YingkeSu/HDSL/issues/7)).
-Baseline main: `cd8ca74bece8844f00f9988ec5494575f750e577`.
+Candidate: PR [#68](https://github.com/YingkeSu/HDSL/pull/68) head `33bfd1e32d0f121a640ba713a4fa165f906c8ffe`
+(previous frozen head `9b52364d8a999617e1537e6ce97c419fb1ebd04e`).
 Owned paths: this directory and
 [`docs/development/desktop-validation.md`](../../docs/development/desktop-validation.md).
-QA only — no production changes, no `apps/desktop/**` edits, no PR review.
+QA only — no production changes, no `apps/desktop/**` edits, no root config or lockfile changes, no PR review.
 
 ## Status
 
 | Item | State |
 | --- | --- |
-| T006 desktop shell (#6) | **Absent** — `apps/desktop/src/main/index.ts` is still the T002/T006 placeholder (`bootstrapDesktop()` throws, no window, no IPC, no `contextBridge`); `ao/hdsl-24/root` has no commits ahead of `main` |
-| Boundary freeze with #6 | **Requested** — Electron boot / isolated dataRoot / trusted window / progress observation / credential-import ownership sent to hdsl-24; no reply captured yet |
-| Fixture harness | **Done** — 17 self-checks green |
-| Scenario suite | **Not registered** — 24 planned cases, all `blocked` |
+| Real Electron window / IPC / guards / locks / keyboard create | **Executed and passing on `33bfd1e`** — 7 scenarios |
+| Authorization exactness + production hook removal | **Verified on `33bfd1e`**; the old prefix-authorization red is recorded for `9b52364` |
+| Test-injection lane (`qa-entry`) diagnostics/credential | **Executed and passing** (injection lane, not the native menu/dialog) |
+| Fixture harness | **17/17 green**, always on |
+| Isolated real-browser authenticated page / native menu+dialogs / GUI start-stop | **Blocked / manual** — see the validation doc |
 
-The harness proves the QA fixtures are real, deterministic and safe. It does
-**not** validate the desktop app, Electron windows, preload IPC, credentials or
-WebUI. The scenario catalogue lives in
-[`scenarios/desktop-e2e-scenario-plan.ts`](scenarios/desktop-e2e-scenario-plan.ts);
-the full plan, interface expectations and blockers are in
+`HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a
+real managed install and uses the network, so it is not part of the default `pnpm run test`
+run. The fixture harness is always on. Full results, lanes and blockers:
 [`docs/development/desktop-validation.md`](../../docs/development/desktop-validation.md).
 
 ## Layout
 
 ```text
 tests/e2e/
-  harness.test.ts                        # fixture self-checks (real vitest, green)
+  harness.test.ts                        # fixture self-checks (always on, 17 green)
+  desktop.real.test.ts                   # real window/IPC/guards/locks/keyboard create (opt-in)
+  desktop.findings.real.test.ts          # auth exactness + production-hook removal (opt-in)
+  desktop.injected.real.test.ts          # qa-entry test-injection lane (opt-in)
   scenarios/
-    desktop-e2e-scenario-plan.ts         # 24 planned QA cases (blocked until #6 lands)
+    desktop-e2e-scenario-plan.ts         # 24 planned QA cases with lanes and observations
   support/
-    resources.ts                         # registered temp roots/resources; explicit cleanup failures; residue gate
-    tree.ts                              # snapshot/diff used as the host-HOME guard
-    canary.ts                            # canary planting/scanning + diagnostics exclusion and reference-config oracles
-    gates.ts                             # deterministic file gate, bounded waitFor, ordering ledger
-    desktop-candidate.ts                 # readiness detector (window / IPC / preload / placeholder)
-    isolated-data-root.ts                # temp dataRoot + two isolated homes + host guard paths
+    app-harness.ts                       # launch + cleanup harness
+    cdp.ts                               # built-in CDP client (WebSocket)
+    electron-app.ts                      # real Electron launcher (production/qa entry)
+    desktop-ui.ts                        # real DOM/contract helpers
+    desktop-candidate.ts                 # readiness detector
+    prepared-environment.ts              # one real install, cloned for injection tests
+    resources.ts / tree.ts / canary.ts / gates.ts / isolated-data-root.ts
 ```
 
 ## Run
@@ -43,11 +47,15 @@ tests/e2e/
 ```sh
 export PATH=/Users/suyingke/tools/node-24.21.0/bin:$PATH
 pnpm install --frozen-lockfile
-pnpm exec vitest run tests/e2e/harness.test.ts
+pnpm run build:desktop
+pnpm exec vitest run tests/e2e/harness.test.ts          # always on
+HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.real.test.ts
+HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.findings.real.test.ts
+HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.injected.real.test.ts
 ```
 
-Never substitute a mock port or an SSR render for the missing real Electron
-window, never `it.skip` the gap to look green, and never cite these fixture
-checks as desktop acceptance. The real-window suite is opt-in once #6 lands and
-will use a temporary dataRoot plus fixture canaries: no model call, no personal
-keychain, no user `~/.dsh` / DSH instance.
+Never substitute a mock port or an SSR render for the real Electron window, never
+`it.skip` a real scenario to look green, and never cite the fixture checks or a
+composition-level script as desktop acceptance. Real runs use a registered
+`hdsl-e2e-*` temp dataRoot/user-data pair: no model call, no personal keychain,
+no user `~/.dsh` / DSH instance, no user browser profile.

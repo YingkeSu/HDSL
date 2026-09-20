@@ -53,8 +53,10 @@ export interface PlannedScenario {
   /** The falsifiable negative control: how this scenario is proven able to fail. */
   readonly negativeControl: string;
   readonly requires: readonly DesktopCapability[];
-  readonly status: 'blocked' | 'ready';
+  readonly status: 'blocked' | 'ready' | 'executed';
   readonly blocker?: string;
+  /** Observed result when the scenario has been executed on a frozen candidate. */
+  readonly observation?: string;
 }
 
 const NOT_WIRED =
@@ -162,8 +164,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '在真实 renderer 上下文中枚举 window 暴露面并与 PRELOAD_CONTRACT_METHODS 逐项比对；无 send/invoke/on 通用入口',
     negativeControl: '故意调用未暴露通道必须抛错/拒绝；若可达则失败',
     requires: ['electron.window', 'preload.bridge', 'ipc.sender-guard'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e：真实窗口 window.hdsl 恰为 {call,onOperationUpdated,selectEnvironment}，window.require/process/ipcRenderer/send/invoke/on 均 undefined",
   },
   {
     id: 'E2E-TRUST-02',
@@ -188,8 +190,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '在主窗口内嵌 iframe（或等价子 frame）发起契约调用；main 按 frame 校验拒绝',
     negativeControl: '主 frame 同调用必须成功；仅在拒绝时不校验“成功路径”会被视为不完整',
     requires: ['electron.window', 'ipc.sender-guard'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e：window.open 返回 null；location 改 https 被 will-navigate 拒绝且 URL 不变；子 frame 的授权拒绝在纯函数层断言（isTrustedDocumentUrl 对 isMainFrame=false 返回 false）",
   },
   {
     id: 'E2E-TRUST-04',
@@ -240,8 +242,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '受控 main 环境用 fixture 引用配置走原生菜单入口；断言：引用被接受、启动 env 按引用解析、过程无 value 落盘',
     negativeControl: '含 value/secret 字段的配置必须被拒且不落盘；若被接受则失败',
     requires: ['electron.window', 'credentials.menu-import', 'preload.bridge', 'dsh.managed'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e（qa-entry 注入列，非原生菜单）：stderr applied；credentials.json 0600、含引用 id/key、无 secret 值",
   },
   {
     id: 'E2E-CRED-02',
@@ -253,8 +255,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '逐一投放 malformed JSON、strict-schema 额外字段、超尺寸、含 value/token 字段的配置；断言拒绝 + 目标路径无新文件',
     negativeControl: '合格引用配置必须成功导入，否则“一律拒绝”会伪装成通过',
     requires: ['electron.window', 'credentials.menu-import'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e（qa-entry 注入列）：含 value 字段文档 rejected at parse，credentials.json 未生成，secret 不入 stderr",
   },
   {
     id: 'E2E-CRED-03',
@@ -292,8 +294,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '环境 home 预置 .credentials.yaml 与 logs/** canary；导出后扫描产物，断言默认排除集与零命中',
     negativeControl: '故意改宽默认排除（或把 canary 放进导出源）必须使断言失败；导出不得返回本地路径',
     requires: ['electron.window', 'diagnostics.export'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e（qa-entry 注入列）：导出 {exportId,exported:true,redacted:true}；文件不含 canary/.credentials.yaml/credentials.json/dataRoot 原文；同 requestId 重放不重写",
   },
   {
     id: 'E2E-ISO-01',
@@ -331,8 +333,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '实例 A 持锁写 ready 文件；实例 B 启动后 UI 操作不可用且给出明确拒绝，A 的状态不变',
     negativeControl: 'A 退出后 B 必须能接管，否则“永久拒绝”会伪装成通过',
     requires: ['electron.single-instance', 'dataRoot.lock', 'electron.window'],
-    status: 'blocked',
-    blocker: `${NOT_WIRED}；#6 补充验收要求单实例/dataRoot 独占门禁`,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e：同 user-data-dir 第二进程经 requestSingleInstanceLock 退出，首实例仍可服务",
   },
   {
     id: 'E2E-LOCK-02',
@@ -344,8 +346,8 @@ export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
     determinismGate: '退出后下一实例可获锁；清理只回收登记资源，残留以 assertNoResidue 判定',
     negativeControl: '注入持锁进程崩溃，断言接管/报告而非静默成功；清理失败必须进入 CleanupReport.failed',
     requires: ['electron.single-instance', 'dataRoot.lock'],
-    status: 'blocked',
-    blocker: NOT_WIRED,
+    status: 'executed',
+    observation: "已执行 2026-09-20 @33bfd1e：同 dataRoot 第二进程 8s 内无 page target；<dataRoot>/locks/data-root.lock/lease.json 的 pid 仍为首实例 pid，终止第二进程后不变",
   },
   {
     id: 'E2E-RESTART-01',
@@ -432,6 +434,15 @@ export const validateScenarioPlan = (
     }
     if (scenario.status === 'ready' && scenario.blocker !== undefined) {
       violations.push({ id: scenario.id, problem: 'ready scenario must not carry a blocker' });
+    }
+    if (
+      scenario.status === 'executed' &&
+      (scenario.blocker !== undefined || (scenario.observation ?? '').trim() === '')
+    ) {
+      violations.push({
+        id: scenario.id,
+        problem: 'executed scenario must record an observation and no blocker',
+      });
     }
   }
   return violations;
