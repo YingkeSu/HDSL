@@ -260,6 +260,190 @@ describe('RendererController disposal timing (P2-2)', () => {
   });
 });
 
+describe('RendererController initial get failure (issue #40)', () => {
+  it('keeps the real operationId visible when the first operations.get fails, then recovers on retry', async () => {
+    let getCount = 0;
+    const { client, calls } = createStubRendererClient((method) => {
+      switch (method) {
+        case 'catalog.list':
+          return stubOk([]);
+        case 'environments.list':
+          return stubOk([environmentSummary()]);
+        case 'environments.start':
+          return stubOk({ operationId: 'op-1' });
+        case 'operations.get': {
+          getCount += 1;
+          if (getCount === 1) {
+            return stubFail('INTERNAL_ERROR');
+          }
+          return stubOk(runningSnapshot('op-1', 1));
+        }
+        case 'operations.subscribe':
+          return stubOk({ subscriptionId: 'sub-1' });
+        case 'operations.unsubscribe':
+          return stubOk(null);
+        default:
+          return stubFail('INTERNAL_ERROR');
+      }
+    });
+    const controller = new RendererController({ client, pollIntervalMs: 1_000_000 });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+    await controller.startSelected();
+
+    const failed = controller.getState();
+    expect(failed.trackingError?.code).toBe('INTERNAL_ERROR');
+    expect(failed.trackedOperation).toBeNull();
+    expect(failed.pendingOperationId).toBe('op-1');
+
+    controller.retryTracking();
+    await flush();
+
+    const recovered = controller.getState();
+    expect(recovered.trackedOperation?.operationId).toBe('op-1');
+    expect(recovered.trackingError).toBeNull();
+    expect(recovered.pendingOperationId).toBeNull();
+    // The retry only re-observed the same operation; the command is not re-sent.
+    expect(calls.filter((call) => call.method === 'environments.start')).toHaveLength(1);
+
+    await controller.dispose();
+  });
+
+  it('keeps the pending operation across consecutive first-fetch failures before recovering', async () => {
+    let getCount = 0;
+    const { client, calls } = createStubRendererClient((method) => {
+      switch (method) {
+        case 'catalog.list':
+          return stubOk([]);
+        case 'environments.list':
+          return stubOk([environmentSummary()]);
+        case 'environments.start':
+          return stubOk({ operationId: 'op-1' });
+        case 'operations.get': {
+          getCount += 1;
+          if (getCount <= 2) {
+            return stubFail('INTERNAL_ERROR');
+          }
+          return stubOk(runningSnapshot('op-1', 1));
+        }
+        case 'operations.subscribe':
+          return stubOk({ subscriptionId: 'sub-1' });
+        case 'operations.unsubscribe':
+          return stubOk(null);
+        default:
+          return stubFail('INTERNAL_ERROR');
+      }
+    });
+    const controller = new RendererController({ client, pollIntervalMs: 1_000_000 });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+    await controller.startSelected();
+
+    controller.retryTracking();
+    await flush();
+    expect(controller.getState().trackedOperation).toBeNull();
+    expect(controller.getState().trackingError?.code).toBe('INTERNAL_ERROR');
+    expect(controller.getState().pendingOperationId).toBe('op-1');
+
+    controller.retryTracking();
+    await flush();
+    expect(controller.getState().trackedOperation?.operationId).toBe('op-1');
+    expect(controller.getState().pendingOperationId).toBeNull();
+    expect(calls.filter((call) => call.method === 'environments.start')).toHaveLength(1);
+
+    await controller.dispose();
+  });
+
+  it('ignores a stale first-fetch retry that resolves after a newer track', async () => {
+    const harness = createControlledClient();
+    const controller = new RendererController({
+      client: harness.client,
+      pollIntervalMs: 1_000_000,
+    });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+
+    const start = controller.startSelected();
+    await flush();
+    harness.pendingGets[0]!.resolve(stubFail('INTERNAL_ERROR'));
+    await start;
+    expect(controller.getState().pendingOperationId).toBe('op-1');
+
+    controller.retryTracking();
+    await flush();
+    expect(harness.pendingGets).toHaveLength(2);
+
+    // A newer start supersedes the retry's operation before it resolves.
+    const second = controller.startSelected();
+    await flush();
+    expect(harness.pendingGets).toHaveLength(3);
+    harness.pendingGets[2]!.resolve(stubOk(runningSnapshot('op-2', 1)));
+    await second;
+    expect(controller.getState().trackedOperation?.operationId).toBe('op-2');
+
+    harness.pendingGets[1]!.resolve(stubOk(runningSnapshot('op-1', 1)));
+    await flush();
+    expect(controller.getState().trackedOperation?.operationId).toBe('op-2');
+    expect(controller.getState().pendingOperationId).toBeNull();
+
+    await controller.dispose();
+  });
+
+  it('does not subscribe or write state when a first-fetch retry resolves after dispose', async () => {
+    const harness = createControlledClient();
+    const controller = new RendererController({
+      client: harness.client,
+      pollIntervalMs: 1_000_000,
+    });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+
+    const start = controller.startSelected();
+    await flush();
+    harness.pendingGets[0]!.resolve(stubFail('INTERNAL_ERROR'));
+    await start;
+
+    controller.retryTracking();
+    await flush();
+    expect(harness.pendingGets).toHaveLength(2);
+
+    await controller.dispose();
+    harness.pendingGets[1]!.resolve(stubOk(runningSnapshot('op-1', 1)));
+    await flush();
+
+    expect(harness.calls.filter((call) => call.method === 'operations.subscribe')).toHaveLength(0);
+    expect(controller.getState().trackedOperation).toBeNull();
+  });
+
+  it('maps a transport failure on the first get to a controlled error without leaking its message', async () => {
+    const { client } = createStubRendererClient((method) => {
+      switch (method) {
+        case 'catalog.list':
+          return stubOk([]);
+        case 'environments.list':
+          return stubOk([environmentSummary()]);
+        case 'environments.start':
+          return stubOk({ operationId: 'op-1' });
+        case 'operations.get':
+          throw new Error('transport down; /Users/secret/path?token=canary-token');
+        default:
+          return stubFail('INTERNAL_ERROR');
+      }
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+    await controller.startSelected();
+
+    expect(controller.getState().trackingError?.code).toBe('INTERNAL_ERROR');
+    expect(controller.getState().pendingOperationId).toBe('op-1');
+    expect(JSON.stringify(controller.getState())).not.toContain('canary-token');
+    expect(JSON.stringify(controller.getState())).not.toContain('/Users/secret/path');
+
+    await controller.dispose();
+  });
+});
+
 describe('RendererController poll recovery (P3-1)', () => {
   it('retries transient poll failures, then pauses with an explicit retry entry', async () => {
     vi.useFakeTimers();

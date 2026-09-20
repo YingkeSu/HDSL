@@ -208,6 +208,61 @@ describe('AppView state matrix', () => {
     expect(buttonNamed(html, '重试获取状态')).toBeDefined();
   });
 
+  it('renders a failed first fetch with the real operation id and a retry entry, without inventing a snapshot', () => {
+    const html = renderAppView({
+      state: state({
+        pendingOperationId: 'op-1',
+        trackingError: {
+          code: 'INTERNAL_ERROR',
+          message: 'unclassified internal error',
+          retryable: true,
+        },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toMatch(/role="alert"[\s\S]*获取操作状态失败/);
+    expect(html).toContain('op-1');
+    expect(buttonNamed(html, '重试获取状态')).toBeDefined();
+    // No snapshot yet: no fabricated progress and no cancel button.
+    expect(html).not.toContain('<progress');
+    expect(buttonNamed(html, '取消操作')).toBeUndefined();
+  });
+
+  it('renders no operation panel before the first snapshot when there is no tracking error', () => {
+    const html = renderAppView({
+      state: state({ pendingOperationId: 'op-1' }),
+      actions: noopActions,
+    });
+    expect(html).not.toContain('操作 ID');
+    expect(html).not.toContain('重试获取状态');
+  });
+
+  it('keeps a transient poll failure retry automatic (no explicit entry before pause)', () => {
+    const html = renderAppView({
+      state: state({
+        trackedOperation: {
+          operationId: 'op-1',
+          kind: 'start',
+          phase: 'starting',
+          status: 'running',
+          sequence: 1,
+          progress: null,
+          environmentId: 'env-1',
+          error: null,
+        },
+        trackingError: {
+          code: 'INTERNAL_ERROR',
+          message: 'unclassified internal error',
+          retryable: true,
+        },
+        trackingPaused: false,
+      }),
+      actions: noopActions,
+    });
+    expect(html).toMatch(/role="alert"[\s\S]*获取操作状态失败/);
+    expect(buttonNamed(html, '重试获取状态')).toBeUndefined();
+  });
+
   it('disables command buttons while a command is pending', () => {
     const html = renderAppView({
       state: state({
