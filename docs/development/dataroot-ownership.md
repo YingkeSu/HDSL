@@ -116,8 +116,10 @@ OS 原子互斥的 **recovery guard** 内执行：
   `@hdsl/core` 仍只依赖 `@hdsl/contracts`，renderer 不导入。
 - macOS ARM64 与 Linux CI：guard 的 TCP 独占、崩溃自动释放、目录 rename 语义已在本仓库
   测试中实证（见 `tests/core`）。
-- **Windows x64：未实证，fail closed**。`win32` 上不做 guarded takeover（返回
-  `unknown`/busy），不声明跨平台支持；需 T008 实机验证 TCP 独占与目录 rename 语义后再启用。
+- **Windows x64：未实证（T008），按实际范围受限**。代码**只在** `#takeoverGuarded` 拒绝 `win32`
+  的 guard 接管（stale 接管返回 `unknown`/busy）；这**不等于整个 Windows 锁 fail-closed，也不声明
+  Windows 支持**。普通获取快路径与 release 在 win32 上没有平台分支，其可达性与安全性**未验证**，
+  须 T008 实机核定后再决定按实际范围拒绝或明确受限。
 - 跨主机 / 共享卷 / 容器不支持，必须文档化。
 
 ## 10. 验收测试映射

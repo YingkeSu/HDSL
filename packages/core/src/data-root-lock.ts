@@ -33,8 +33,11 @@
  *   `assertHeld` is defence in depth.
  * - Single host only: a different hostname is always `unknown`/busy. Shared
  *   volumes, containers and cross-host data roots are unsupported.
- * - Windows directory-rename exclusivity is unverified (T008); on `win32` the
- *   guarded takeover fails closed instead of guessing.
+ * - `win32` is unverified (T008): only the guarded *takeover* is explicitly
+ *   refused there. The normal acquire fast path and release are not
+ *   platform-gated, so their Windows behavior is unverified; this is neither a
+ *   claim that every Windows lock operation fails closed nor a Windows support
+ *   claim.
  * - A guard port held by a non-HDSL process fails closed; ports are never
  *   silently changed.
  */
@@ -526,7 +529,10 @@ export class DataRootLock {
 
   async #takeoverGuarded(): Promise<AcquireAttempt> {
     if (this.#platform === 'win32') {
-      this.#attemptReason = 'Windows directory rename exclusivity is unverified; failing closed';
+      // Only the guarded stale-takeover is refused here; the normal acquire and
+      // release paths have no win32 branch and remain unverified (T008).
+      this.#attemptReason =
+        'guarded takeover is disabled on win32 until directory-rename exclusivity is verified (T008)';
       return 'unknown';
     }
     try {
