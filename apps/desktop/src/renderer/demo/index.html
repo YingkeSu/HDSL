@@ -1,0 +1,619 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>HDSL renderer 演示（模拟数据）</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --border: #d6d9e0;
+        --muted: #5b6270;
+        --accent: #2456c9;
+        --danger: #b3261e;
+        --ok: #17663a;
+        --bg: #f6f7f9;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        padding: 1.5rem;
+        background: var(--bg);
+        color: #15181e;
+        font: 15px/1.55 system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+      }
+      main {
+        max-width: 60rem;
+        margin: 0 auto;
+      }
+      h1 {
+        font-size: 1.3rem;
+      }
+      h2 {
+        font-size: 1rem;
+        margin: 0 0 0.6rem;
+      }
+      .panel {
+        background: #fff;
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 1rem;
+        margin: 0 0 1rem;
+      }
+      .demo-banner {
+        background: #fff4d6;
+        border: 1px solid #e2b93b;
+        border-radius: 8px;
+        padding: 0.6rem 0.8rem;
+        font-weight: 600;
+      }
+      .notices p {
+        margin: 0.35rem 0;
+        padding: 0.5rem 0.7rem;
+        border-radius: 6px;
+        background: #eef1f6;
+      }
+      .notice-error {
+        background: #fdeceb;
+        color: var(--danger);
+      }
+      .field {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        margin: 0.4rem 0;
+      }
+      .field label {
+        min-width: 6.5rem;
+      }
+      input,
+      select,
+      button {
+        font: inherit;
+        padding: 0.4rem 0.6rem;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: #fff;
+      }
+      button {
+        cursor: pointer;
+      }
+      button:focus-visible,
+      input:focus-visible,
+      select:focus-visible {
+        outline: 2px solid var(--accent);
+        outline-offset: 1px;
+      }
+      button[disabled] {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .scenario-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .environment-list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        display: grid;
+        gap: 0.5rem;
+      }
+      .environment-list button {
+        width: 100%;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        text-align: left;
+      }
+      .environment-list button[aria-pressed="true"] {
+        border-color: var(--accent);
+        background: #eef3ff;
+      }
+      .state-badge {
+        font-size: 0.85rem;
+        color: var(--muted);
+      }
+      .state-running {
+        color: var(--ok);
+        font-weight: 600;
+      }
+      .state-error {
+        color: var(--danger);
+        font-weight: 600;
+      }
+      dl.environment-detail {
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 0.2rem 1rem;
+        margin: 0 0 0.8rem;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+      }
+      .action-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      .progress-row {
+        display: flex;
+        align-items: center;
+        gap: 0.6rem;
+      }
+      progress {
+        width: 16rem;
+        max-width: 100%;
+      }
+      .boundary-note {
+        color: var(--muted);
+        font-size: 0.9rem;
+      }
+      code {
+        background: #f0f2f6;
+        border-radius: 4px;
+        padding: 0 0.25rem;
+      }
+    </style>
+  </head>
+  <body>
+    <main class="hdsl-app" aria-labelledby="app-heading">
+      <p role="note" class="demo-banner">
+        演示模式（模拟数据）— 这是 renderer 交互预览，不是真实 DSH 进程或 Electron 实机运行结果。
+      </p>
+      <h1 id="app-heading">HDSL 环境管理（组件演示）</h1>
+      <p class="boundary-note">
+        本页只用于验证列表、创建、选择、启停进度、错误、WebUI 入口与诊断摘要的键盘操作与空态/失败态；
+        不访问网络、Node、文件系统或任意 IPC。
+      </p>
+
+      <section aria-labelledby="scenario-heading" class="panel">
+        <h2 id="scenario-heading">模拟场景</h2>
+        <div class="scenario-row">
+          <button type="button" id="scenario-empty">空态</button>
+          <button type="button" id="scenario-failed">加载失败</button>
+          <button type="button" id="scenario-busy">启停进行中</button>
+          <button type="button" id="scenario-reset">重置</button>
+        </div>
+      </section>
+
+      <div class="notices" id="notices"></div>
+
+      <section aria-labelledby="create-heading" class="panel">
+        <h2 id="create-heading">创建环境</h2>
+        <form id="create-form">
+          <p class="field">
+            <label for="create-name">环境名称</label>
+            <input id="create-name" name="name" type="text" maxlength="80" autocomplete="off" />
+          </p>
+          <p class="field">
+            <label for="create-combination">运行时组合</label>
+            <select id="create-combination" name="catalogCombinationId"></select>
+          </p>
+          <button type="submit">创建</button>
+        </form>
+      </section>
+
+      <section aria-labelledby="environments-heading" class="panel">
+        <h2 id="environments-heading">环境列表</h2>
+        <p id="environment-empty" hidden>还没有环境。使用上方表单创建第一个环境。</p>
+        <ul class="environment-list" id="environment-list"></ul>
+      </section>
+
+      <section aria-labelledby="detail-heading" class="panel" id="detail-panel" hidden>
+        <h2 id="detail-heading">环境详情</h2>
+        <dl class="environment-detail" id="environment-detail"></dl>
+        <div class="action-row">
+          <button type="button" id="action-start">启动</button>
+          <button type="button" id="action-stop">停止</button>
+          <button type="button" id="action-webui">打开 WebUI（主进程原生打开）</button>
+          <button type="button" id="action-export">导出诊断</button>
+        </div>
+        <p id="webui-origin" hidden></p>
+        <p id="export-result" hidden></p>
+      </section>
+
+      <section aria-labelledby="operation-heading" class="panel" id="operation-panel" hidden>
+        <h2 id="operation-heading">当前操作</h2>
+        <p id="operation-meta"></p>
+        <p role="status" aria-live="polite" id="operation-status"></p>
+        <p class="progress-row" id="operation-progress-row" hidden>
+          <label for="operation-progress">进度</label>
+          <progress id="operation-progress" max="100" value="0"></progress>
+          <span id="operation-progress-label"></span>
+        </p>
+        <p id="operation-progress-unknown" hidden>进度未知，暂不显示百分比。</p>
+        <p role="alert" class="notice-error" id="operation-error" hidden></p>
+        <button type="button" id="operation-cancel">取消操作</button>
+      </section>
+
+      <footer class="boundary-note">
+        <p>
+          键盘操作：Tab 在控件间移动，Enter/Space 激活按钮与选择项，名称输入框内 Enter 提交表单。
+          生产 renderer 使用相同状态机（<code>apps/desktop/src/renderer/controller.ts</code>）与原生控件。
+        </p>
+      </footer>
+    </main>
+    <script type="module">
+      // Self-contained mock demo. It mirrors the production view model and
+      // actions from apps/desktop/src/renderer/, but it is NOT the Electron app
+      // and it uses no contract, Node or network access.
+      const CATALOG = [
+        {
+          id: 'combo-darwin-arm64',
+          node: '24.21.0',
+          dsh: '0.1.5-rc.2',
+          platform: 'darwin',
+          arch: 'arm64',
+        },
+        {
+          id: 'combo-win32-x64',
+          node: '24.21.0',
+          dsh: '0.1.5-rc.2',
+          platform: 'win32',
+          arch: 'x64',
+        },
+      ];
+      const STATE_LABELS = {
+        stopped: '已停止',
+        starting: '启动中',
+        running: '运行中',
+        stopping: '停止中',
+        error: '错误',
+      };
+      const STATUS_LABELS = {
+        queued: '排队中',
+        running: '进行中',
+        succeeded: '成功',
+        failed: '失败',
+        cancelled: '已取消',
+      };
+      const KIND_LABELS = { create: '创建', start: '启动', stop: '停止', export: '导出诊断' };
+
+      let nextId = 3;
+      let operationTimer = null;
+      let state = resetState();
+
+      function resetState() {
+        return {
+          phase: 'ready',
+          catalog: CATALOG.slice(),
+          environments: [
+            {
+              id: 'env-1',
+              name: '研究环境',
+              revision: 3,
+              stateVersion: 5,
+              state: 'running',
+              compositionDigest: 'a'.repeat(64),
+            },
+            {
+              id: 'env-2',
+              name: '脚本环境',
+              revision: 1,
+              stateVersion: 2,
+              state: 'stopped',
+              compositionDigest: 'b'.repeat(64),
+            },
+          ],
+          selectedId: 'env-1',
+          createName: '',
+          createCombinationId: CATALOG[0].id,
+          loadError: null,
+          actionError: null,
+          createError: null,
+          notice: null,
+          operation: null,
+          webUIOrigin: null,
+          exportResult: null,
+        };
+      }
+
+      const el = (id) => document.getElementById(id);
+      const selected = () => state.environments.find((env) => env.id === state.selectedId) ?? null;
+
+      function renderNotices() {
+        const notices = el('notices');
+        notices.replaceChildren();
+        const add = (text, className, role) => {
+          const p = document.createElement('p');
+          p.textContent = text;
+          p.className = className;
+          if (role) p.setAttribute('role', role);
+          notices.append(p);
+        };
+        if (state.loadError) add('加载失败：' + state.loadError, 'notice-error', 'alert');
+        if (state.actionError) add('操作失败：' + state.actionError, 'notice-error', 'alert');
+        if (state.createError) add('创建参数无效：' + state.createError, 'notice-error', 'alert');
+        if (state.notice) {
+          const p = document.createElement('p');
+          p.textContent = state.notice;
+          p.setAttribute('role', 'status');
+          p.setAttribute('aria-live', 'polite');
+          notices.append(p);
+        }
+      }
+
+      function renderCreate() {
+        const select = el('create-combination');
+        select.replaceChildren();
+        for (const combo of state.catalog) {
+          const option = document.createElement('option');
+          option.value = combo.id;
+          option.textContent = `Node ${combo.node} / DSH ${combo.dsh}（${combo.platform}/${combo.arch}）`;
+          select.append(option);
+        }
+        select.value = state.createCombinationId ?? '';
+      }
+
+      function renderList() {
+        const list = el('environment-list');
+        list.replaceChildren();
+        el('environment-empty').hidden = state.environments.length > 0;
+        for (const env of state.environments) {
+          const li = document.createElement('li');
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.setAttribute('aria-pressed', String(env.id === state.selectedId));
+          button.addEventListener('click', () => {
+            state.selectedId = env.id;
+            state.actionError = null;
+            state.webUIOrigin = null;
+            state.exportResult = null;
+            render();
+          });
+          const name = document.createElement('span');
+          name.textContent = env.name;
+          const badge = document.createElement('span');
+          badge.className = 'state-badge state-' + env.state;
+          badge.textContent = STATE_LABELS[env.state] ?? env.state;
+          button.append(name, badge);
+          li.append(button);
+          list.append(li);
+        }
+      }
+
+      function renderDetail() {
+        const env = selected();
+        const panel = el('detail-panel');
+        panel.hidden = env === null;
+        if (env === null) return;
+        const detail = el('environment-detail');
+        detail.replaceChildren();
+        const rows = [
+          ['名称', env.name],
+          ['环境 ID', env.id],
+          ['状态', STATE_LABELS[env.state] ?? env.state],
+          ['组成修订', String(env.revision)],
+          ['状态版本', String(env.stateVersion)],
+          ['组成摘要', env.compositionDigest.slice(0, 12) + '…'],
+        ];
+        for (const [label, value] of rows) {
+          const dt = document.createElement('dt');
+          dt.textContent = label;
+          const dd = document.createElement('dd');
+          dd.textContent = value;
+          detail.append(dt, dd);
+        }
+        const busy = state.operation !== null && !isTerminal(state.operation.status);
+        el('action-start').disabled = busy || !(env.state === 'stopped' || env.state === 'error');
+        el('action-stop').disabled = busy || !(env.state === 'running' || env.state === 'starting');
+        el('action-webui').disabled = env.state !== 'running';
+        const origin = el('webui-origin');
+        origin.hidden = state.webUIOrigin === null;
+        origin.textContent =
+          state.webUIOrigin === null
+            ? ''
+            : 'WebUI loopback 地址：' + state.webUIOrigin + '（由主进程打开；renderer 不接收携带 token 的 URL）';
+        const exportResult = el('export-result');
+        exportResult.hidden = state.exportResult === null;
+        exportResult.textContent =
+          state.exportResult === null
+            ? ''
+            : `最近导出：${state.exportResult.exportId}（exported=true, redacted=true；不含本地路径）`;
+      }
+
+      function isTerminal(status) {
+        return status === 'succeeded' || status === 'failed' || status === 'cancelled';
+      }
+
+      function renderOperation() {
+        const operation = state.operation;
+        const panel = el('operation-panel');
+        panel.hidden = operation === null;
+        if (operation === null) return;
+        el('operation-meta').textContent =
+          `操作 ID：${operation.id}；类型：${KIND_LABELS[operation.kind] ?? operation.kind}；阶段：${operation.phase}`;
+        el('operation-status').textContent =
+          `状态：${STATUS_LABELS[operation.status] ?? operation.status}（sequence ${operation.sequence}）`;
+        const known = typeof operation.progress === 'number';
+        el('operation-progress-row').hidden = !known;
+        el('operation-progress-unknown').hidden = known;
+        if (known) {
+          el('operation-progress').value = operation.progress;
+          el('operation-progress-label').textContent = operation.progress + '%';
+        }
+        const error = el('operation-error');
+        error.hidden = operation.error === null;
+        error.textContent = operation.error === null ? '' : `操作失败：${operation.error}`;
+        el('operation-cancel').hidden = isTerminal(operation.status);
+      }
+
+      function render() {
+        renderNotices();
+        renderCreate();
+        renderList();
+        renderDetail();
+        renderOperation();
+      }
+
+      function stopOperationTimer() {
+        if (operationTimer !== null) {
+          clearInterval(operationTimer);
+          operationTimer = null;
+        }
+      }
+
+      function runOperation(kind, onDone) {
+        stopOperationTimer();
+        state.operation = {
+          id: 'op-' + nextId++,
+          kind,
+          phase: kind === 'start' ? 'starting' : 'stopping',
+          status: 'running',
+          sequence: 1,
+          progress: 0,
+          error: null,
+        };
+        render();
+        operationTimer = setInterval(() => {
+          const operation = state.operation;
+          if (operation === null || isTerminal(operation.status)) return;
+          operation.progress = Math.min(100, operation.progress + 20);
+          operation.sequence += 1;
+          if (operation.progress >= 100) {
+            operation.phase = 'finished';
+            operation.status = 'succeeded';
+            stopOperationTimer();
+            onDone();
+          }
+          render();
+        }, 220);
+      }
+
+      el('create-form').addEventListener('submit', (event) => {
+        event.preventDefault();
+        const name = el('create-name').value;
+        state.createError = null;
+        state.actionError = null;
+        state.notice = null;
+        if (name.trim().length === 0 || name.length > 80 || /[\\/]/.test(name)) {
+          state.createError = 'name: must be 1-80 characters and must not contain path separators';
+          render();
+          return;
+        }
+        const id = 'env-' + nextId++;
+        state.environments.push({
+          id,
+          name,
+          revision: 0,
+          stateVersion: 0,
+          state: 'stopped',
+          compositionDigest: 'c'.repeat(64),
+        });
+        state.selectedId = id;
+        el('create-name').value = '';
+        state.createName = '';
+        state.operation = {
+          id: 'op-' + nextId++,
+          kind: 'create',
+          phase: 'created',
+          status: 'succeeded',
+          sequence: 1,
+          progress: 100,
+          error: null,
+        };
+        render();
+      });
+
+      el('action-start').addEventListener('click', () => {
+        const env = selected();
+        if (env === null) return;
+        state.actionError = null;
+        state.notice = null;
+        runOperation('start', () => {
+          env.state = 'running';
+          env.stateVersion += 1;
+          renderList();
+        });
+      });
+
+      el('action-stop').addEventListener('click', () => {
+        const env = selected();
+        if (env === null) return;
+        state.actionError = null;
+        state.notice = null;
+        runOperation('stop', () => {
+          env.state = 'stopped';
+          env.stateVersion += 1;
+          state.webUIOrigin = null;
+          renderList();
+        });
+      });
+
+      el('action-webui').addEventListener('click', () => {
+        const env = selected();
+        if (env === null) return;
+        state.actionError = null;
+        if (env.state !== 'running') {
+          state.actionError = 'WEBUI_UNAVAILABLE：the managed WebUI endpoint is unavailable';
+          render();
+          return;
+        }
+        state.webUIOrigin = 'http://127.0.0.1:53123';
+        state.notice = 'WebUI 已由主进程打开；此处只显示已验证的 loopback 地址。';
+        render();
+      });
+
+      el('action-export').addEventListener('click', () => {
+        state.actionError = null;
+        state.exportResult = { exportId: 'export-1' };
+        state.notice = '诊断导出完成（已脱敏；结果不含本地路径）。';
+        render();
+      });
+
+      el('operation-cancel').addEventListener('click', () => {
+        const operation = state.operation;
+        if (operation === null || isTerminal(operation.status)) return;
+        stopOperationTimer();
+        operation.status = 'cancelled';
+        operation.phase = 'cancelled';
+        operation.sequence += 1;
+        render();
+      });
+
+      el('scenario-empty').addEventListener('click', () => {
+        state.environments = [];
+        state.selectedId = null;
+        state.operation = null;
+        state.webUIOrigin = null;
+        state.exportResult = null;
+        state.loadError = null;
+        state.actionError = null;
+        render();
+      });
+
+      el('scenario-failed').addEventListener('click', () => {
+        state.loadError = 'INTERNAL_ERROR：the local service could not be reached';
+        render();
+      });
+
+      el('scenario-busy').addEventListener('click', () => {
+        const env = selected() ?? state.environments[0];
+        if (!env) return;
+        state.selectedId = env.id;
+        runOperation('start', () => {
+          env.state = 'running';
+          env.stateVersion += 1;
+          renderList();
+        });
+      });
+
+      el('scenario-reset').addEventListener('click', () => {
+        stopOperationTimer();
+        state = resetState();
+        el('create-name').value = '';
+        render();
+      });
+
+      state.createName = '';
+      render();
+    </script>
+  </body>
+</html>
