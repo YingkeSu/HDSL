@@ -8,6 +8,7 @@
 - `lifecycle.test.ts`：受控子进程上的真实 spawn/就绪/端点归属/幂等/端口冲突/超时/取消/意外退出/整树停止/close。
 - `reconcile.test.ts`：崩溃遗留的进程与安装子进程对账；不可证明归属不杀；非本实例不动。
 - `run-command.test.ts`：安装/预检子进程超时/取消的整树终止与身份 journal。
+- `credentials-integration.test.ts`：真实 T005b `createLaunchCredentialPort` 适配器接入 manager，验证 env 注入与 `dispose()` 在成功/spawn 失败/取消各一次。
 - `real-process.evidence.test.ts`：opt-in，使用真实受审 DSH 安装（不调模型）。
 
 受控与真实的边界：`support/fake-dsh.mjs` 复现上游可观测协议（就绪行、`EADDRINUSE`、

@@ -52,18 +52,20 @@ interface ManagedProcessPort {
 - **锁生命周期**：实例级 dataRoot 独占锁完全由 core 持有；runtime 永不加锁、不假设锁安全。`recover()` 由 core 在自认持锁且确认无其他活跃实例时调用；`isRecoveryPermitted()` 返回 false 时 runtime 不做任何修改。
 - **close**：按 hdsl-2 决定，正常关闭必须停止本实例可证明自有/adopted 的 DSH 与仍持有的安装/预检子树并 await 退出；无法证明归属且 pid 存活、或确认不了退出时返回 `portFail(INTERNAL_ERROR)`，core 只有在 `close().ok` 后才释放 dataRoot 锁。
 
-### 凭据注入（T005b #44）
+### 凭据注入（T005b #44，已整合）
 
 ```ts
-interface LaunchEnvironment { env: Readonly<Record<string,string>>; dispose(): void }
+interface LaunchEnvironmentHandle { env: Readonly<Record<string,string>>; dispose(): void }
 interface LaunchCredentialPort {
-  resolveLaunchEnvironment(environmentId: string): Promise<PortOutcome<LaunchEnvironment>>;
+  resolveLaunchEnvironment(environmentId: string): Promise<PortOutcome<LaunchEnvironmentHandle>>;
 }
 ```
 
+- `runtime/src/index.ts` 已导出 `./credentials/index.js`（#44 merge `ead40c1`）；进程侧 `import type` 复用 `LaunchCredentialPort` / `LaunchEnvironmentHandle`，不重复声明，避免同名导出歧义。
 - runtime 在 spawn 前解析；`handle.env` 与受管隔离变量合并为显式子进程 env；`spawn` 同步拷贝后在同一 `try/finally` 中调用 `handle.dispose()`，覆盖成功、隔离校验失败、spawn 抛错与取消。
 - 凭据只走显式 env，绝不进入 argv、`LaunchRecord`、日志或事件；`env` 只在 launch 局部存在，随后清空引用。
-- 前置条件（#44 文档）：受管生产绑定必须由 loader 提供完整 `service#account` 引用；service-only 仅为兼容/测试形式，runtime 不读凭据配置。
+- loader 前置条件（#44 文档）：受管生产绑定必须由 loader 提供完整 `service#account` 引用并强校验；service-only 仅为兼容形式，runtime 不读凭据配置。
+- 互操作证据：`tests/process/credentials-integration.test.ts` 用真实 `createLaunchCredentialPort`（测试内 OS provider）驱动 manager，断言 env 来自适配器、`dispose()` 在成功/spawn 失败/取消三条路径各执行一次。
 
 ## 进程记录
 
@@ -121,7 +123,7 @@ interface LaunchCredentialPort {
 pnpm install --frozen-lockfile
 pnpm run typecheck     # PASS
 pnpm run build         # PASS
-pnpm run test          # 30 files passed / 2 skipped; 395 passed / 4 skipped（含 tests/process 43 项）
+pnpm run test          # 36 files passed / 3 skipped; 475 passed / 5 skipped（含 tests/process 46 项）
 python3 scripts/check_repository.py   # PASS
 ```
 
@@ -133,7 +135,7 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
   pnpm exec vitest run tests/process/real-process.evidence.test.ts --reporter=verbose
 ```
 
-结果：`1 passed`，4.3s。运行于本分支提交 `0d299b7134d296f8f4f089e74a1ec034e1eaf366`（基线 `7fbdc1e2`）。
+结果：`1 passed`，3.6s。运行于提交 `9927af8cb35731f93122e438b1f1a308b0ea695f`（含 #44 凭据适配器整合，基线 `7fbdc1e2`）。
 
 ```json
 {
@@ -142,7 +144,7 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
   "nodeVersion": "22.19.0",
   "dshVersion": "0.1.5-rc.2",
   "installMode": "npm-ci",
-  "origin": "http://127.0.0.1:64111",
+  "origin": "http://127.0.0.1:49882",
   "httpStatus": 401,
   "launchRecordState": "running",
   "startTokenPresent": true,
@@ -162,7 +164,7 @@ HDSL_REAL_PROCESS_DATA_ROOT=/tmp/hdsl-t004-evidence \
 - **Windows x64 未测**：`process/**` 使用 POSIX 进程组与 `ps`；`createPosixProcessProbe` 未在 Windows 验证，`detached` 语义不同。未声称支持。
 - **Linux 未实机验收**：CI（ubuntu）只跑 typecheck/build/unit；进程组与 `ps` 在 Linux 可用，但真实 DSH 启停未在 Linux 留证。
 - **跨实例/跨进程 dataRoot 锁**：归 #43（core）；本模块只注入并不自定锁。锁设计仍在审核（目录主锁 + TCP loopback guard），本文件不把该设计当作已安全。
-- **core 整合未完成**：`EnvironmentService` 尚未注入本端口（#43 分支）；`runtime/src/index.ts` 预留 `./credentials/index.js` 导出，待 #44 合入后由本文件作者补上。
+- **core 整合未完成**：`EnvironmentService` 尚未注入本端口（#43 分支）。凭据适配器（#44，#46 merge `ead40c1`）已接入并由 runtime 根 index 导出。
 - **adopted 后 openWebUI 的存活复核**：采用 loopback TCP 可达 + 身份匹配；未覆盖 DSH 进程存活但 HTTP 层挂起的场景（会落到 reconcile 的停止路径）。
 - **子进程 stdout/stderr 不落盘**：因此没有 DSH 启动诊断文件；T006 的诊断导出需另行设计（不在本切片）。
 - 未在真实“启动后取消”与“就绪后立即停止”的时序上做穷尽并发压测；关键分支由确定性门控覆盖，无 `skip`/`it.fails` 冒充。
