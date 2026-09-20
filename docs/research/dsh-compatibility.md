@@ -46,17 +46,19 @@
 
 注意区分：**`engines` 来自固定 rc.2 tag 的源码仓库根，不等于已发布 npm CLI 的声明约束**（发布包 `engines` 为空）。Node 启动矩阵见 R002。
 
-下载验证方式：
+下载验证方式（以下数值独立从 rc.2 tarball 重新计算，未复用其他 PR/会话的数值）：
 
 ```sh
 # 0.1.5-rc.2 发布 tarball
 curl -sL https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.5-rc.2.tgz -o dsh-0.1.5-rc.2.tgz
 shasum -a 256 dsh-0.1.5-rc.2.tgz
 # -> f4c54839d69e82bf1c3a5a41a910c3ce1405cd9e9d97d753c0c04f406c7d7480
+openssl dgst -sha512 -binary dsh-0.1.5-rc.2.tgz | openssl base64 -A   # 与 npm integrity 比对
+tar xzOf dsh-0.1.5-rc.2.tgz package/package.json                        # version=0.1.5-rc.2
 ```
 
 - npm `dist.integrity`（sha512-…）：`sha512-8Xc8hCQHcIWRmTCVU/xZdp6/qMsWMeAd2ObChKDEsfhUPJFXx6H0lgeb1DxUMD86HZrrVN+1bCvn1ppjZ/fOxw==`；`dist.shasum`（sha1）= `2c78db39568d910868f1e4f34062a4f346d4815d`。
-- 实测下载的 tarball SHA-256 与上表一致，sha1 与 `dist.shasum` 一致。
+- 实测下载的 tarball SHA-256 与上表一致，sha1 与 `dist.shasum` 一致，openssl sha512 与 npm `integrity` 完全一致；tarball 内 `package.json` 的 `name`/`version`/`license` 为 `@deepseek-ai/dsh` / `0.1.5-rc.2` / `MIT`。
 - **无 npm provenance 证明**：`registry.npmjs.org/-/npm/v1/attestations/@deepseek-ai%2Fdsh@0.1.5-rc.2` 返回 `{"error":"Not found"}`，且发布元数据无 `gitHead`。因此 npm 完整性只证明“传输/内容一致”，不自动证明来源可信；HDSL catalog 仍需自行记录 provenance。
 
 观察：发布 tarball 的 `dsh.configTrees` 指向 `../../packages/preset/agent-presets/presets`（仓库相对路径，不在 tarball 内）。这是发布布局观察，不影响本地启动，但说明不能假设发布包是仓库的完整镜像。
