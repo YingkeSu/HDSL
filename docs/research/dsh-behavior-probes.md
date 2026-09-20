@@ -23,8 +23,8 @@
 | hdsl-3 候选版本 | tag `dsh-v0.1.5-rc.2` = `fb2c4b9e698e30edb738bca4cf0618587db7d203` | `git ls-remote --tags origin 'dsh-v0.1.5-rc.2'`，与 hdsl-3 提供一致 |
 | 本机已构建版本 | tag `dsh-v0.1.6-alpha.2` = `ddefc45fbc7f8e46dd73185e68295696d1297887` | `git rev-parse HEAD` 与 `git ls-remote --tags` 一致；GitHub Release 2026-09-17 Pre-release |
 | npm dist-tags | `latest=0.1.5-rc.2`，`alpha=0.1.6-alpha.2`，`next=0.1.5-rc.2` | `npm view @deepseek-ai/dsh dist-tags` |
-| npm 完整性（`0.1.5-rc.2`） | integrity `sha512-8Xc8hCQHcIWRmTCVU/xZdp6/qMsWMeAd2ObChKDEsfhUPJFXx6H0lgeb1DxUMD86HZrrVN+1bCvn1ppjZ/fOxw==`，shasum `2c78db39568d910868f1e4f34062a4f346d4815d` | `npm view @deepseek-ai/dsh@0.1.5-rc.2 dist.integrity dist.shasum`；`curl https://registry.npmjs.org/@deepseek-ai%2Fdsh` 读 packument；实下载 tarball 复算 `sha1`/`sha512`（三处一致） |
-| npm 完整性（`0.1.6-alpha.2`） | integrity `sha512-PHR/3ZHpJNWXlDQ3UweFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==`，shasum `37d635377c9807c47d49d662ca00d6d5ea5792de` | 同上（`@0.1.6-alpha.2`） |
+| npm 完整性（`0.1.5-rc.2`） | integrity `sha512-8Xc8hCQHcIWRmTCVU/xZdp6/qMsWMeAd2ObChKDEsfhUPJFXx6H0lgeb1DxUMD86HZrrVN+1bCvn1ppjZ/fOxw==`，shasum `2c78db39568d910868f1e4f34062a4f346d4815d` | 由 [tests/probes/verify_dsh_npm_integrity.py](../../tests/probes/verify_dsh_npm_integrity.py) 机器生成：registry packument 与实下载 tarball 复算的 `sha1`/`sha512` 一致，并校验本文记录值 |
+| npm 完整性（`0.1.6-alpha.2`） | integrity `sha512-PHR/3ZHpJNWXlDQ3U9weFb7calWbSMJd2GD3z2iPJ8zAKL7ipuzyPy5xGbaXf2OA8hc0SAGJeoUW7nfatCNOYw==`，shasum `37d635377c9807c47d49d662ca00d6d5ea5792de` | 同上（`@0.1.6-alpha.2`） |
 | Node engine | `^22.19.0 \|\| >=24.0.0` | 仓库根 `package.json` `engines.node` |
 
 **注意**：npm `latest` 会随发布变动；T001 支持矩阵必须写显式版本 + tag SHA + 完整性，不要写 `latest`。本次两个版本均从 npm 安装到独立目录，安装命令见第 12 节。
@@ -36,6 +36,7 @@
 - 不读写操作者真实 `~/.dsh`、settings 或凭据；每次启动都在临时 CWD；不发起模型请求；输出中 `?token=` 与 `dsh-auth-*` cookie 脱敏。
 - 进程只对自己 `spawn` 且未被 `wait` 回收的 PID 发信号：`wait` 成功后立即移出存活集合，`cleanup` 不会向陈旧 PID 发信号。
 - 硬断言版本（`DSH_EXPECT_VERSION`）、来源 commit 与干净树（`DSH_EXPECT_COMMIT`）、Node（`DSH_EXPECT_NODE`）；自动累计并打印 `assertions: N/M passed`；`curl`/`lsof`/`pgrep` 缺失即 FATAL，不会假通过。
+- npm 完整性值一律由 [tests/probes/verify_dsh_npm_integrity.py](../../tests/probes/verify_dsh_npm_integrity.py) 机器生成并回校本文，不手写长哈希。
 - 临时目录在退出时清理，**SIGINT/SIGTERM 中断也会清理**；需保留现场请先复制工作目录。
 - 未覆盖 Windows：没有 Windows 主机，未在 WSL/虚拟机执行，不产生任何 Windows 结论。
 
@@ -184,6 +185,9 @@ mkdir -p /tmp/dsh-015 /tmp/dsh-016
   npm_config_cache=/tmp/dsh-npm-cache npm install --no-save @deepseek-ai/dsh@0.1.5-rc.2 )
 ( cd /tmp/dsh-016 && printf '{"private":true}\n' > package.json && \
   npm_config_cache=/tmp/dsh-npm-cache npm install --no-save @deepseek-ai/dsh@0.1.6-alpha.2 )
+
+# 机器核验 npm 完整性（registry == tarball == 本文记录值）
+python3 tests/probes/verify_dsh_npm_integrity.py --doc docs/research/dsh-behavior-probes.md
 
 # 单版本行为探针（每个版本单独运行，不要混用输出）
 # 来源 checkout 版本须同时绑定 commit 与 Node；npm 版本无 .git 时跳过 commit 断言
