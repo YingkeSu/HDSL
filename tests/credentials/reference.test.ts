@@ -61,6 +61,7 @@ describe('keychain key encoding', () => {
     ['empty service', { service: '' }],
     ['separator in service', { service: 'a#b' }],
     ['empty account', { service: 'a', account: '' }],
+    ['separator in account', { service: 'a', account: 'b#c' }],
     ['control character', { service: 'a\u0000b' }],
   ])('rejects %s when encoding', (_label, locator) => {
     expect(codeOf(() => keychainKey(locator))).toBe('INVALID_REFERENCE');

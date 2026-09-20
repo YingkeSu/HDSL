@@ -41,12 +41,13 @@ HDSL 受管用户凭据（如模型 API key）只保存为 OS 凭据存储**引�
 | 成功 | `find-generic-password -s <svc> [-a <acct>] -w`，exit 0，secret 在 **stdout** | 返回 `stdout`（去掉一个行尾换行） |
 | 条目不存在 | exit `44`（`errSecItemNotFound`），stderr `… could not be found in the keychain.` | `CREDENTIAL_NOT_FOUND` |
 | 用户取消授权 | 非零 + stderr 含 `User canceled` | `CREDENTIAL_ACCESS_CANCELLED` |
-| 其它拒绝/错误 | 非零 | `CREDENTIAL_ACCESS_DENIED`（stderr 经脱敏 + 512 字符上限） |
+| 其它拒绝/错误 | 非零 | `CREDENTIAL_ACCESS_DENIED`（固定文案，只带退出码，**不转发** `security` stderr 原文） |
+| 输出超限 | stdout+stderr 捕获量超 64 KiB | `CREDENTIAL_STORE_UNAVAILABLE`，立即 SIGKILL 并丢弃已捕获文本（绝不返回被截断的值） |
 | 认证 UI 阻塞 | runner 超时（默认 10s，canary 用 5s）→ SIGKILL | `RESOLUTION_TIMEOUT`，不与被阻塞的 UI 交互 |
 | 空值 | exit 0 但 stdout 为空/仅换行 | `CREDENTIAL_NOT_FOUND`（上游规则：空值等同未配置） |
 
 - secret **从不出现在命令行参数**：读取只用 `-w`（stdout），测试写入 canary 时把密码写到 `security` 的 stdin（`-w` 作为最后一个参数触发提示），不落 argv。
-- 子进程只继承最小环境 `{ HOME, PATH }`；`security` 的 stderr 在不成功分支才作为脱敏诊断，成功分支的 stdout 只作为 secret 返回，不记录。
+- 子进程只继承最小环境 `{ HOME, PATH }`；成功分支的 stdout 只作为 secret 返回，不记录。失败分支**只使用退出码与固定分类文案**，stderr 仅用于内部归类（`could not be found`/`User cancel`），不进入任何对外 message，避免裸 secret 文本经错误通道外泄。
 - 探针实测最小环境（`HOME` + `PATH`）即可读写登录钥匙串。
 
 ## 4. Keychain 引用编码
@@ -55,7 +56,8 @@ HDSL 受管用户凭据（如模型 API key）只保存为 OS 凭据存储**引�
 
 - `key = "<service>"`：只按 service 查找；
 - `key = "<service>#<account>"`：按 service + account 查找；
-- service 不得为空/含 `#`/控制字符；`#` 后 account 不得为空；总长 ≤ 256（与冻结 DTO 一致）。
+- service 不得为空/含 `#`/控制字符；`#` 后 account 不得为空；**account 也不得含 `#`**；总长 ≤ 256（与冻结 DTO 一致）。编码器与解析器对同一组非法输入一致拒绝，不生成读不回来的引用。
+- 受管生产绑定**必须**使用带 account 的完整形式（`service#account`）；`service`-only 可能命中首个同名条目，仅保留为兼容/测试便捷形式（见第 9 节 P3-4）。
 
 辅助函数：`keychainKey({ service, account? })`、`parseKeychainKey(key)`（均在 `packages/runtime/src/credentials/reference.ts`）。
 
@@ -73,21 +75,24 @@ interface CredentialInjection {
 }
 ```
 
-环境作用域适配层（`packages/runtime/src/credentials/port.ts`），直接符合协商签名：
+环境作用域适配层（`packages/runtime/src/credentials/port.ts`），直接符合与 #20 确认的签名：
 
 ```ts
+interface LaunchEnvironmentHandle {
+  readonly env: Readonly<Record<string, string>>; // 完整显式子进程环境 = baseEnv + 凭据变量
+  dispose(): void;                                  // 幂等；擦除 env 中的凭据值
+}
 interface LaunchCredentialPort {
-  resolveLaunchEnvironment(environmentId: string): Promise<PortOutcome<Readonly<Record<string, string>>>>;
+  resolveLaunchEnvironment(environmentId: string): Promise<PortOutcome<LaunchEnvironmentHandle>>;
 }
 // createLaunchCredentialPort({ load: (environmentId) => Promise<{ bindings, baseEnv }>, ... })
 ```
 
 - `load` 由进程模块提供（environmentId → 该环境的凭据引用 + 显式基础环境）；凭据模块不读 core/环境存储，也不持有环境状态。
-- 成功返回 `portOk(env)`：`env` 是 `baseEnv` 合并凭据变量后的**显式子进程环境**（不继承宿主 `process.env`）。
+- 成功返回 `portOk({ env, dispose })`：`env` 是 `baseEnv` 合并凭据变量后的**显式子进程环境**（不继承宿主 `process.env`）。
+- **释放时序（必须）**：`spawn` 同步拷贝 `env`，所以 `try { child = spawn(command, { env: handle.env }) } finally { handle.dispose() }`；覆盖成功、spawn 抛错、隔离校验失败与取消分支。**不得先 dispose 再 spawn**（否则子进程拿到空值），也不得保留 `handle`/`env` 引用、不写 record/日志。
 - 失败返回 `portFail(code, message)`：`message` 已是无值消息。错误码映射：`UNSUPPORTED_PLATFORM → UNSUPPORTED_COMBINATION`，其余 → `INTERNAL_ERROR`（冻结契约无凭据专用码）。
 - 常量 `DEFAULT_MODEL_API_KEY_VARIABLE = 'DEEPSEEK_API_KEY'` 供双方复用，避免二次硬编码。
-
-进程模块需要在 spawn 后立刻丢弃 `env` 引用；机制层 `LaunchEnvironment.dispose()` 可额外尝试擦除（见局限）。
 
 ## 6. 校验规则（全部在读取存储前完成）
 
@@ -132,7 +137,7 @@ HDSL_KEYCHAIN_CANARY_EVIDENCE {"platform":"darwin","service":"hdsl.canary.creden
 - canary 值经 stdin 写入，不进 argv；不进日志（只打印布尔与 code）。
 - 若系统弹认证 UI，provider 超时失败并终止，不与弹窗交互；若用户已有条目/钥匙串不可用，测试在创建前断言阶段即以明确错误停止，不继续读取。
 
-单测覆盖（`tests/credentials/`，65 项，1 项 opt-in 跳过）：引用语法与编码、`security` 退出码映射、取消/超时/拒绝、显式 env 合并与擦除、不继承宿主环境、保留名/冲突/重复/store 不匹配、`PortOutcome` 映射、以及源码级防线（无 `console.*`、无 `process.env`、无文件写入）。
+单测覆盖（`tests/credentials/`，70 项，1 项 opt-in 跳过）：引用语法与编码（含 account 内 `#` 对称拒绝）、`security` 退出码映射、取消/超时/拒绝、超限闭合捕获、显式 env 合并与句柄幂等释放、不继承宿主环境、保留名/冲突/重复/store 不匹配、`PortOutcome<LaunchEnvironmentHandle>` 映射、以及源码级防线（无 `console.*`、无 `process.env`、无文件写入）。
 
 ## 9. 明确局限与未测
 
@@ -140,7 +145,9 @@ HDSL_KEYCHAIN_CANARY_EVIDENCE {"platform":"darwin","service":"hdsl.canary.creden
 - **Linux 未实现**。
 - **GUI 认证 UI 无法被可靠检测**：只能用超时终止；若用户在超时内取消，映射为 `CREDENTIAL_ACCESS_CANCELLED`。不使用任何绕过 ACL 的手段。
 - **ACL 提示**：用户自建、且 ACL 不信任 `security` 工具的条目仍可能触发一次系统授权；HDSL 不静默处理，超时即失败并报告。
-- **`dispose()` 是尽力擦除**：JS 字符串不可变，引擎/GC 内可能短期留存副本；真正保证是“不持久化 + 不跨进程传播”，不是内存擦除。
+- **`dispose()` 是尽力擦除**：JS 字符串不可变，引擎/GC 内可能短期留存副本；真正保证是“不持久化 + 不跨进程传播 + 端口返回可调用的幂等释放句柄”，不是内存擦除。
+- **service-only 引用歧义（P3-4）**：`security find-generic-password -s <svc> -w` 在同一 service 有多个 account 时命中“首个”条目。凭据模块不读环境配置；受管生产绑定的 loader/环境配置**必须提供完整 `service` + `account` 引用**（`service#account`）。`service`-only 仅保留为兼容/测试便捷形式，不用于受管生产绑定（已与 #20 确认：loader 归环境配置侧，runtime 进程模块只调 `resolveLaunchEnvironment(environmentId)`，不读凭据配置）。
+- **locale 分类差异（P3-5）**：取消/未找到的归类依赖 `security` 的英文 stderr（`User cancel`/`could not be found`）；非英文 locale 下可能落到 `CREDENTIAL_ACCESS_DENIED`，仍是失败闭合，仅分类不同。
 - 未做真实的“有 key 的模型请求”验证；本切片不调用付费模型 API。
 - 未验证锁定钥匙串、无登录会话（SSH/CI）下的行为；这些在 CI 上会被跳过。
 - runtime 根 `index.ts` 未导出本模块（由 #5 整合），因此消费方暂不能从 `@hdsl/runtime` 顶层导入；测试用相对源码路径，`tsc -b` 仍会编译 `src/**`。

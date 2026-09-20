@@ -38,14 +38,24 @@ export interface CredentialBinding {
  * `env` is a fresh object containing exactly the caller's `baseEnv` plus the
  * resolved credential variables — never the host process environment. The
  * secret values live only here, so the caller MUST call `dispose()` right after
- * the child has been spawned; `dispose()` is a best-effort wipe (JavaScript
- * strings are immutable, so a copy may survive in the engine until GC).
+ * the child has been spawned; `spawn` copies the env synchronously, so
+ * `try { spawn(...) } finally { dispose() }` covers success, spawn errors and
+ * cancellation alike. `dispose()` is idempotent and a best-effort wipe
+ * (JavaScript strings are immutable, so a copy may survive until GC).
  */
-export interface LaunchEnvironment {
-  /** Environment for `spawn(..., { env })`: explicit, not inherited from the host. */
-  readonly env: Readonly<Record<string, string>>;
+export interface LaunchEnvironment extends LaunchEnvironmentHandle {
   /** Names of the credential variables that were injected (never the values). */
   readonly injectedVariables: readonly string[];
+}
+
+/**
+ * The release handle the process owner consumes (`LaunchCredentialPort`
+ * payload): the explicit child environment plus the idempotent wipe. Kept free
+ * of audit-only fields so the port contract stays minimal.
+ */
+export interface LaunchEnvironmentHandle {
+  /** Environment for `spawn(..., { env })`: explicit, not inherited from the host. */
+  readonly env: Readonly<Record<string, string>>;
   /** Best-effort wipe of the resolved values; idempotent and safe to call twice. */
   dispose(): void;
 }

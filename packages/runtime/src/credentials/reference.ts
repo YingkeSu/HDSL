@@ -75,8 +75,11 @@ export const keychainKey = (locator: KeychainLocator): string => {
   if (service.length === 0 || hasControlCharacter(service) || service.includes(KEYCHAIN_KEY_SEPARATOR)) {
     throw new CredentialFailure('INVALID_REFERENCE', 'keychain service is empty or contains control characters');
   }
-  if (account !== undefined && (account.length === 0 || hasControlCharacter(account))) {
-    throw new CredentialFailure('INVALID_REFERENCE', 'keychain account is empty or contains control characters');
+  if (account !== undefined && (account.length === 0 || hasControlCharacter(account) || account.includes(KEYCHAIN_KEY_SEPARATOR))) {
+    throw new CredentialFailure(
+      'INVALID_REFERENCE',
+      'keychain account is empty or contains control characters or the separator',
+    );
   }
   const key = account === undefined ? service : `${service}${KEYCHAIN_KEY_SEPARATOR}${account}`;
   if (key.length > KEY_MAX_LENGTH) {

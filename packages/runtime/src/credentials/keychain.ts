@@ -25,7 +25,31 @@ export const SECURITY_EXECUTABLE = '/usr/bin/security';
 export const SECURITY_ITEM_NOT_FOUND = 44;
 
 const DEFAULT_TIMEOUT_MS = 10_000;
-const MAX_CAPTURED_BYTES = 64 * 1024;
+
+/** Hard cap on captured `security` output; exceeding it fails closed. */
+export const MAX_CAPTURED_BYTES = 64 * 1024;
+
+/** Result of appending one captured chunk under the byte cap. */
+export interface BoundedAppend {
+  readonly text: string;
+  readonly captured: number;
+  readonly overflow: boolean;
+}
+
+/**
+ * Appends one chunk under a hard byte cap. On overflow it drops the accumulated
+ * text and reports `overflow`, so the caller fails closed instead of returning a
+ * truncated value that could be a partial secret.
+ */
+export const appendBounded = (
+  current: string,
+  chunk: Buffer,
+  captured: number,
+  limit: number = MAX_CAPTURED_BYTES,
+): BoundedAppend =>
+  captured + chunk.byteLength > limit
+    ? { text: '', captured: 0, overflow: true }
+    : { text: current + chunk.toString('utf8'), captured: captured + chunk.byteLength, overflow: false };
 
 /** Captured result of one `security` invocation. */
 export interface SecurityCommandResult {
@@ -57,15 +81,30 @@ const createDefaultRunner = (timeoutMs: number): SecurityRunner => (args) =>
     let stdout = '';
     let stderr = '';
     let captured = 0;
+    let overflowed = false;
     let settled = false;
 
-    const append = (current: string, chunk: Buffer): string => {
-      captured += chunk.byteLength;
-      if (captured > MAX_CAPTURED_BYTES) {
-        return current;
-      }
-      return current + chunk.toString('utf8');
-    };
+    const onData =
+      (channel: 'stdout' | 'stderr') =>
+      (chunk: Buffer): void => {
+        if (overflowed) {
+          return;
+        }
+        const next = appendBounded(channel === 'stdout' ? stdout : stderr, chunk, captured);
+        if (next.overflow) {
+          overflowed = true;
+          stdout = '';
+          stderr = '';
+          child.kill('SIGKILL');
+          return;
+        }
+        captured = next.captured;
+        if (channel === 'stdout') {
+          stdout = next.text;
+        } else {
+          stderr = next.text;
+        }
+      };
 
     const finish = (): void => {
       if (settled) {
@@ -81,18 +120,18 @@ const createDefaultRunner = (timeoutMs: number): SecurityRunner => (args) =>
       reject(new CredentialFailure('RESOLUTION_TIMEOUT', `security did not answer within ${String(timeoutMs)}ms`));
     }, timeoutMs);
 
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout = append(stdout, chunk);
-    });
-    child.stderr?.on('data', (chunk: Buffer) => {
-      stderr = append(stderr, chunk);
-    });
+    child.stdout?.on('data', onData('stdout'));
+    child.stderr?.on('data', onData('stderr'));
     child.on('error', () => {
       finish();
       reject(new CredentialFailure('CREDENTIAL_STORE_UNAVAILABLE', 'could not start the security CLI'));
     });
     child.on('close', (code, signal) => {
       finish();
+      if (overflowed) {
+        reject(new CredentialFailure('CREDENTIAL_STORE_UNAVAILABLE', 'security output exceeded the capture limit'));
+        return;
+      }
       resolve({
         exitCode: code ?? (signal === null ? -1 : 128),
         stdout,
@@ -147,6 +186,9 @@ export const createMacOsKeychainProvider = (
         throw new CredentialFailure('CREDENTIAL_STORE_UNAVAILABLE', 'security invocation failed');
       }
 
+      if (Buffer.byteLength(result.stdout, 'utf8') > MAX_CAPTURED_BYTES || Buffer.byteLength(result.stderr, 'utf8') > MAX_CAPTURED_BYTES) {
+        throw new CredentialFailure('CREDENTIAL_STORE_UNAVAILABLE', 'security output exceeded the capture limit');
+      }
       if (result.exitCode === 0) {
         const value = stripTrailingLineEnding(result.stdout);
         if (value.length === 0) {
@@ -160,11 +202,11 @@ export const createMacOsKeychainProvider = (
       if (mapsToCancelled(result)) {
         throw new CredentialFailure('CREDENTIAL_ACCESS_CANCELLED');
       }
-      // `security` stderr for these failures is a diagnostic, not the secret;
-      // the redactor and bound keep it value-free and short.
+      // The store tool's stderr can contain arbitrary text (a bare secret is
+      // not impossible), so the outbound message carries only the exit code.
       throw new CredentialFailure(
         'CREDENTIAL_ACCESS_DENIED',
-        `security exited with code ${String(result.exitCode)}${result.stderr.trim().length > 0 ? `: ${result.stderr.trim()}` : ''}`,
+        `security exited with code ${String(result.exitCode)}`,
       );
     },
   };

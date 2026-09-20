@@ -9,6 +9,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   CredentialFailure,
+  MAX_CAPTURED_BYTES,
+  appendBounded,
   createMacOsKeychainProvider,
   type SecurityCommandResult,
   type SecurityRunner,
@@ -109,13 +111,33 @@ describe('macOS keychain provider', () => {
     expect(failure.message).not.toContain(CANARY);
   });
 
-  it('maps other denials to CREDENTIAL_ACCESS_DENIED without the secret', async () => {
+  it('maps other denials to CREDENTIAL_ACCESS_DENIED without forwarding store text', async () => {
     const provider = createMacOsKeychainProvider({
       runner: recording(() => result(1, '', 'security: SecKeychainSearchCopyNext: The user name or passphrase you entered is not correct.')).runner,
     });
     const failure = await expectFailure(provider.read(makeReference('svc')));
     expect(failure.code).toBe('CREDENTIAL_ACCESS_DENIED');
     expect(failure.message).not.toContain(CANARY);
+    expect(failure.message).not.toContain('passphrase');
+  });
+
+  it('never forwards a bare secret printed on stderr', async () => {
+    const provider = createMacOsKeychainProvider({
+      runner: recording(() => result(1, '', `security: ${CANARY}`)).runner,
+    });
+    const failure = await expectFailure(provider.read(makeReference('svc')));
+    expect(failure.code).toBe('CREDENTIAL_ACCESS_DENIED');
+    expect(failure.message).not.toContain(CANARY);
+  });
+
+  it('fails closed when the store output exceeds the capture cap', async () => {
+    const oversize = 'x'.repeat(MAX_CAPTURED_BYTES + 1);
+    const provider = createMacOsKeychainProvider({
+      runner: recording(() => result(0, oversize)).runner,
+    });
+    const failure = await expectFailure(provider.read(makeReference('svc')));
+    expect(failure.code).toBe('CREDENTIAL_STORE_UNAVAILABLE');
+    expect(failure.message).not.toContain(oversize.slice(0, 32));
   });
 
   it('propagates an injected timeout', async () => {
@@ -143,5 +165,19 @@ describe('macOS keychain provider', () => {
     const provider = createMacOsKeychainProvider({ runner: recorder.runner });
     expect((await expectFailure(provider.read(makeReference('svc#')))).code).toBe('INVALID_REFERENCE');
     expect(recorder.calls).toHaveLength(0);
+  });
+});
+
+describe('bounded capture', () => {
+  it('accumulates chunks under the cap', () => {
+    const first = appendBounded('', Buffer.from('abc'), 0, 10);
+    expect(first).toEqual({ text: 'abc', captured: 3, overflow: false });
+    const second = appendBounded(first.text, Buffer.from('def'), first.captured, 10);
+    expect(second).toEqual({ text: 'abcdef', captured: 6, overflow: false });
+  });
+
+  it('drops the accumulated text and reports overflow past the cap', () => {
+    const next = appendBounded('abc', Buffer.from('defg'), 3, 6);
+    expect(next).toEqual({ text: '', captured: 0, overflow: true });
   });
 });

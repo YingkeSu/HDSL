@@ -24,20 +24,30 @@ const request = (key: string): LaunchCredentialRequest => ({
 });
 
 describe('createLaunchCredentialPort', () => {
-  it('returns the explicit merged launch environment', async () => {
+  it('returns an explicit merged launch handle with an idempotent dispose', async () => {
+    const provider = createFakeProvider({ values: { 'hdsl.deepseek': CANARY } });
     const port = createLaunchCredentialPort({
       load: () => Promise.resolve(request('hdsl.deepseek')),
-      injection: { store: 'keychain', resolveLaunchEnvironment: async (input) => ({
-        env: { ...input.baseEnv, DEEPSEEK_API_KEY: CANARY },
-        injectedVariables: ['DEEPSEEK_API_KEY'],
-        dispose: () => undefined,
-      }) },
+      injection: createCredentialInjection({ provider }),
     });
     const outcome = await port.resolveLaunchEnvironment('env-1');
-    expect(outcome).toEqual({
-      ok: true,
-      value: { HOME: '/tmp/home', DSH_HOME: '/tmp/home/.dsh', PATH: '/usr/bin', DEEPSEEK_API_KEY: CANARY },
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      throw new Error('expected a successful outcome');
+    }
+    expect(outcome.value.env).toEqual({
+      HOME: '/tmp/home',
+      DSH_HOME: '/tmp/home/.dsh',
+      PATH: '/usr/bin',
+      DEEPSEEK_API_KEY: CANARY,
     });
+
+    // The process owner can wipe the secret through the returned handle; the
+    // handle carries no audit-only fields from the mechanism layer.
+    expect(Object.keys(outcome.value).sort()).toEqual(['dispose', 'env']);
+    outcome.value.dispose();
+    outcome.value.dispose();
+    expect(outcome.value.env['DEEPSEEK_API_KEY']).toBe('');
   });
 
   it('fails as INTERNAL_ERROR when no reference is configured', async () => {
