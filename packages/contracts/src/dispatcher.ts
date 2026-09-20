@@ -4,19 +4,24 @@
  * port.
  *
  * Ordering is deliberate and frozen:
- *   1. envelope shape (object, known keys)        → INVALID_INPUT
- *   2. `apiVersion` well-formedness               → INVALID_INPUT
- *   3. exact `API_VERSION` match                  → CONTRACT_VERSION_MISMATCH
- *   4. method whitelist and strict method input    → INVALID_INPUT
- *   5. idempotency fingerprint / replay            → IDEMPOTENCY_CONFLICT
- *   6. resource, revision, platform guards         → NOT_FOUND / REVISION_CONFLICT / UNSUPPORTED_COMBINATION
- *   7. port effect and loopback re-check           → domain codes / WEBUI_UNAVAILABLE
+ *   1. envelope shape (plain object, own known keys) → INVALID_INPUT
+ *   2. `apiVersion` well-formedness                 → INVALID_INPUT
+ *   3. exact `API_VERSION` match                    → CONTRACT_VERSION_MISMATCH
+ *   4. method whitelist and strict method input      → INVALID_INPUT
+ *   5. idempotency fingerprint / replay              → IDEMPOTENCY_CONFLICT
+ *   6. resource, revision, platform guards           → NOT_FOUND / REVISION_CONFLICT / UNSUPPORTED_COMBINATION
+ *   7. in-progress marker, port effect, DTO re-validation → domain codes / INTERNAL_ERROR
  *
- * No side effect can happen before step 3, and a replayed request returns the
- * original result without calling the port again.
+ * No side effect can happen before step 3. Guard rejections write no ledger
+ * entry, so corrected parameters can reuse the `requestId`. Executed calls are
+ * recorded `in-progress` before the effect and `completed` after, so a replay
+ * can never repeat an effect (security/semantic review F1). Every downstream
+ * exception or malformed port result is mapped to a controlled, sanitized
+ * `INTERNAL_ERROR` envelope instead of escaping `dispatch` (F2 / P1-2).
  */
 import {
   contractError,
+  contractErrorForCode,
   contractFail,
   contractOk,
   invalidInput,
@@ -34,19 +39,44 @@ import {
 } from './methods.js';
 import { formatHostPlatform, isHostPlatformSupported, type HostPlatform } from './platform.js';
 import { API_VERSION, isWellFormedApiVersion } from './version.js';
-import type {
-  ContractPort,
-  StoredOutcome,
-} from './context.js';
-import type { RuntimeCombination } from './dto.js';
-import type { ValidationIssue } from './schema.js';
+import type { ContractPort, StoredOutcome } from './context.js';
+import {
+  environmentSummaryListSchema,
+  exportResultSchema,
+  openWebUIResultSchema,
+  operationRefSchema,
+  operationSnapshotSchema,
+  runtimeCombinationListSchema,
+  subscriptionRefSchema,
+  type OperationSnapshot,
+  type RuntimeCombination,
+  type SubscriptionRef,
+} from './dto.js';
+import { isPlainRecord, type Schema, type ValidationIssue } from './schema.js';
 
 const ENVELOPE_KEYS: readonly string[] = ['apiVersion', 'method', 'input'];
 
 /** `http(s)://127.0.0.1:<port>` or `[::1]`, with no token, query or fragment. */
-export const LOOPBACK_ORIGIN_PATTERN = /^https?:\/\/(?:127\.0\.0\.1|\[::1\]):\d{1,5}$/;
+export const LOOPBACK_ORIGIN_PATTERN = /^https?:\/\/(?:127\.0\.0\.1|\[::1\]):(\d{1,5})$/;
 
-export const isLoopbackOrigin = (value: string): boolean => LOOPBACK_ORIGIN_PATTERN.test(value);
+/**
+ * Valid loopback origin. The port must be canonical decimal 1–65535: `:0`,
+ * `:65536`, `:99999` are out of range, and a leading zero (`:00080`) is a
+ * non-canonical representation of `:80` and is rejected so one endpoint has one
+ * textual form.
+ */
+export const isLoopbackOrigin = (value: string): boolean => {
+  const match = LOOPBACK_ORIGIN_PATTERN.exec(value);
+  if (match === null) {
+    return false;
+  }
+  const port = match[1];
+  if (port === undefined || (port.length > 1 && port.startsWith('0'))) {
+    return false;
+  }
+  const numeric = Number(port);
+  return numeric >= 1 && numeric <= 65535;
+};
 
 interface Execution {
   readonly response: ContractResponse<unknown>;
@@ -67,21 +97,53 @@ export interface ContractRuntime {
 
 interface PortFailureLike {
   readonly code: ErrorCode;
-  readonly message: string;
 }
 
 const failure = (code: ErrorCode, message: string): ContractResponse<never> =>
   contractFail(API_VERSION, contractError(code, message));
 
+/** Controlled-message failure; downstream port text is never forwarded. */
+const failureForCode = (code: ErrorCode): ContractResponse<never> =>
+  contractFail(API_VERSION, contractErrorForCode(code));
+
 const guardFailure = (outcome: PortFailureLike): Execution => ({
-  response: failure(outcome.code, outcome.message),
+  response: failureForCode(outcome.code),
   executed: false,
 });
 
 const executedFailure = (outcome: PortFailureLike): Execution => ({
-  response: failure(outcome.code, outcome.message),
+  response: failureForCode(outcome.code),
   executed: true,
 });
+
+/**
+ * A downstream port returned a value that does not match the shared schema.
+ * It is a programming error in T004–T006, never surfaced verbatim.
+ */
+class ContractPortViolation extends Error {}
+
+const validatePortValue = <T>(schema: Schema<T>, value: unknown, label: string): T => {
+  const issues: ValidationIssue[] = [];
+  const parsed = schema(value, label, issues);
+  if (parsed === undefined) {
+    throw new ContractPortViolation(`${label} returned an invalid DTO`);
+  }
+  return parsed;
+};
+
+/**
+ * A nested error carried by a port-produced snapshot is replaced with the
+ * controlled message for its code; the port's own text never crosses the bridge.
+ */
+const sanitizeOperationSnapshot = (snapshot: OperationSnapshot): OperationSnapshot => {
+  if (snapshot.error === undefined || snapshot.error === null) {
+    return snapshot;
+  }
+  return {
+    ...snapshot,
+    error: { ...snapshot.error, message: contractErrorForCode(snapshot.error.code).message },
+  };
+};
 
 export const unsupportedCombinationReason = (
   host: HostPlatform,
@@ -105,29 +167,61 @@ const materialize = (outcome: StoredOutcome): ContractResponse<unknown> =>
 const toStoredOutcome = (response: ContractResponse<unknown>): StoredOutcome =>
   response.ok ? { ok: true, value: response.value } : { ok: false, error: response.error };
 
+/**
+ * A stored `operations.subscribe` result whose subscription has since been
+ * removed cannot be replayed as a dead reference; the dispatcher reinstates the
+ * same subscription id before returning the original ref.
+ */
+const isStaleSubscriptionReplay = (
+  method: ContractMethod,
+  outcome: StoredOutcome,
+  runtime: ContractRuntime,
+): boolean => {
+  if (method !== 'operations.subscribe' || !outcome.ok) {
+    return false;
+  }
+  const reference = outcome.value as SubscriptionRef | null;
+  return reference === null || !runtime.subscriptions.has(reference.subscriptionId);
+};
+
 const publishIfKnown = (runtime: ContractRuntime, operationId: string): void => {
   const snapshot = runtime.port.findOperation(operationId);
-  if (snapshot.ok) {
-    runtime.subscriptions.publish(snapshot.value);
+  if (!snapshot.ok) {
+    return;
   }
+  const validated = validatePortValue(operationSnapshotSchema, snapshot.value, 'operation.updated');
+  runtime.subscriptions.publish(sanitizeOperationSnapshot(validated));
 };
 
 const execute = (
   runtime: ContractRuntime,
   method: ContractMethod,
   input: MethodInputs[ContractMethod],
+  markInProgress: () => void,
 ): Execution => {
   switch (method) {
     case 'catalog.list': {
       const outcome = runtime.port.listCatalog();
-      return outcome.ok
-        ? { response: contractOk(API_VERSION, outcome.value), executed: true }
-        : executedFailure(outcome);
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const combinations = validatePortValue(runtimeCombinationListSchema, outcome.value, 'catalog.list');
+      // local-api.md / data-model.md: unverified combinations never appear here.
+      const verified = combinations.filter(
+        (combination) => combination.compatibility.status === 'verified',
+      );
+      return { response: contractOk(API_VERSION, verified), executed: true };
     }
     case 'environments.list': {
       const outcome = runtime.port.listEnvironments();
       return outcome.ok
-        ? { response: contractOk(API_VERSION, outcome.value), executed: true }
+        ? {
+            response: contractOk(
+              API_VERSION,
+              validatePortValue(environmentSummaryListSchema, outcome.value, 'environments.list'),
+            ),
+            executed: true,
+          }
         : executedFailure(outcome);
     }
     case 'environments.create': {
@@ -140,6 +234,7 @@ const execute = (
       if (unsupported !== undefined) {
         return { response: failure('UNSUPPORTED_COMBINATION', unsupported), executed: false };
       }
+      markInProgress();
       const created = runtime.port.createEnvironment({
         requestId: typed.requestId,
         name: typed.name,
@@ -148,8 +243,9 @@ const execute = (
       if (!created.ok) {
         return executedFailure(created);
       }
-      publishIfKnown(runtime, created.value.operationId);
-      return { response: contractOk(API_VERSION, created.value), executed: true };
+      const reference = validatePortValue(operationRefSchema, created.value, 'environments.create');
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
     }
     case 'environments.start':
     case 'environments.stop': {
@@ -160,7 +256,7 @@ const execute = (
       }
       if (environment.value.revision !== typed.expectedRevision) {
         return {
-          response: failure('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision'),
+          response: failureForCode('REVISION_CONFLICT'),
           executed: false,
         };
       }
@@ -169,6 +265,7 @@ const execute = (
         environmentId: typed.environmentId,
         expectedRevision: typed.expectedRevision,
       };
+      markInProgress();
       const outcome =
         method === 'environments.start'
           ? runtime.port.startEnvironment(command)
@@ -176,8 +273,9 @@ const execute = (
       if (!outcome.ok) {
         return executedFailure(outcome);
       }
-      publishIfKnown(runtime, outcome.value.operationId);
-      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+      const reference = validatePortValue(operationRefSchema, outcome.value, method);
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
     }
     case 'environments.openWebUI': {
       const typed = input as MethodInputs['environments.openWebUI'];
@@ -185,6 +283,7 @@ const execute = (
       if (!environment.ok) {
         return guardFailure(environment);
       }
+      markInProgress();
       const outcome = runtime.port.openWebUI({
         requestId: typed.requestId,
         environmentId: typed.environmentId,
@@ -192,23 +291,27 @@ const execute = (
       if (!outcome.ok) {
         return executedFailure(outcome);
       }
-      if (!isLoopbackOrigin(outcome.value.loopbackOrigin)) {
-        return {
-          response: failure('WEBUI_UNAVAILABLE', 'managed endpoint is not a verified loopback origin'),
-          executed: true,
-        };
+      const result = validatePortValue(openWebUIResultSchema, outcome.value, 'environments.openWebUI');
+      if (!isLoopbackOrigin(result.loopbackOrigin)) {
+        return { response: failureForCode('WEBUI_UNAVAILABLE'), executed: true };
       }
-      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+      return { response: contractOk(API_VERSION, result), executed: true };
     }
     case 'operations.get': {
       const typed = input as MethodInputs['operations.get'];
       const outcome = runtime.port.findOperation(typed.operationId);
-      return outcome.ok
-        ? { response: contractOk(API_VERSION, outcome.value), executed: true }
-        : guardFailure(outcome);
+      if (!outcome.ok) {
+        return guardFailure(outcome);
+      }
+      const snapshot = validatePortValue(operationSnapshotSchema, outcome.value, 'operations.get');
+      return {
+        response: contractOk(API_VERSION, sanitizeOperationSnapshot(snapshot)),
+        executed: true,
+      };
     }
     case 'operations.cancel': {
       const typed = input as MethodInputs['operations.cancel'];
+      markInProgress();
       const outcome = runtime.port.cancelOperation({
         requestId: typed.requestId,
         operationId: typed.operationId,
@@ -216,8 +319,10 @@ const execute = (
       if (!outcome.ok) {
         return executedFailure(outcome);
       }
-      runtime.subscriptions.publish(outcome.value);
-      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+      const snapshot = validatePortValue(operationSnapshotSchema, outcome.value, 'operations.cancel');
+      const sanitized = sanitizeOperationSnapshot(snapshot);
+      runtime.subscriptions.publish(sanitized);
+      return { response: contractOk(API_VERSION, sanitized), executed: true };
     }
     case 'operations.subscribe': {
       const typed = input as MethodInputs['operations.subscribe'];
@@ -228,14 +333,21 @@ const execute = (
           return guardFailure(outcome);
         }
       }
-      const reference = runtime.subscriptions.subscribe(operationId);
+      markInProgress();
+      const reference = validatePortValue(
+        subscriptionRefSchema,
+        runtime.subscriptions.subscribe(operationId),
+        'operations.subscribe',
+      );
       return { response: contractOk(API_VERSION, reference), executed: true };
     }
     case 'operations.unsubscribe': {
       const typed = input as MethodInputs['operations.unsubscribe'];
-      if (!runtime.subscriptions.unsubscribe(typed.subscriptionId)) {
-        return { response: failure('NOT_FOUND', 'subscription was not found'), executed: false };
+      if (!runtime.subscriptions.has(typed.subscriptionId)) {
+        return { response: failureForCode('NOT_FOUND'), executed: false };
       }
+      markInProgress();
+      runtime.subscriptions.unsubscribe(typed.subscriptionId);
       return { response: contractOk(API_VERSION, null), executed: true };
     }
     case 'diagnostics.export': {
@@ -244,13 +356,21 @@ const execute = (
       if (!environment.ok) {
         return guardFailure(environment);
       }
+      markInProgress();
       const outcome = runtime.port.exportDiagnostics({
         requestId: typed.requestId,
         environmentId: typed.environmentId,
       });
-      return outcome.ok
-        ? { response: contractOk(API_VERSION, outcome.value), executed: true }
-        : executedFailure(outcome);
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      return {
+        response: contractOk(
+          API_VERSION,
+          validatePortValue(exportResultSchema, outcome.value, 'diagnostics.export'),
+        ),
+        executed: true,
+      };
     }
   }
 };
@@ -265,22 +385,27 @@ type ParsedEnvelope =
   | { readonly kind: 'failure'; readonly response: ContractResponse<unknown> };
 
 const parseEnvelope = (raw: unknown): ParsedEnvelope => {
-  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+  if (!isPlainRecord(raw)) {
     return {
       kind: 'failure',
-      response: failure('INVALID_INPUT', 'request must be an object'),
+      response: failure('INVALID_INPUT', 'request must be a plain object with own fields'),
     };
   }
-  const record = raw as Record<string, unknown>;
-  for (const key of Object.keys(record)) {
+  for (const key of Object.keys(raw)) {
     if (!ENVELOPE_KEYS.includes(key)) {
       return {
         kind: 'failure',
-        response: failure('INVALID_INPUT', `request.${key}: unknown field`),
+        response: failure('INVALID_INPUT', `request.${key.slice(0, 64)}: unknown field`),
       };
     }
   }
-  const apiVersion = record['apiVersion'];
+  if (!Object.prototype.hasOwnProperty.call(raw, 'apiVersion')) {
+    return {
+      kind: 'failure',
+      response: failure('INVALID_INPUT', 'request.apiVersion: is required'),
+    };
+  }
+  const apiVersion = raw['apiVersion'];
   if (typeof apiVersion !== 'string' || !isWellFormedApiVersion(apiVersion)) {
     return {
       kind: 'failure',
@@ -293,21 +418,27 @@ const parseEnvelope = (raw: unknown): ParsedEnvelope => {
       response: failure('CONTRACT_VERSION_MISMATCH', `request.apiVersion does not match ${API_VERSION}`),
     };
   }
-  const method = record['method'];
+  if (!Object.prototype.hasOwnProperty.call(raw, 'method')) {
+    return {
+      kind: 'failure',
+      response: failure('INVALID_INPUT', 'request.method: is required'),
+    };
+  }
+  const method = raw['method'];
   if (!isContractMethod(method)) {
     return {
       kind: 'failure',
       response: failure('INVALID_INPUT', 'request.method: must be a known contract method'),
     };
   }
-  if (!Object.prototype.hasOwnProperty.call(record, 'input')) {
+  if (!Object.prototype.hasOwnProperty.call(raw, 'input')) {
     return {
       kind: 'failure',
       response: failure('INVALID_INPUT', 'request.input: is required'),
     };
   }
   const issues: ValidationIssue[] = [];
-  const input = validateMethodInput(method, record['input'], issues);
+  const input = validateMethodInput(method, raw['input'], issues);
   if (input === undefined) {
     return { kind: 'failure', response: contractFail(API_VERSION, invalidInput(issues)) };
   }
@@ -319,40 +450,67 @@ export const createContractRuntime = (options: ContractRuntimeOptions): Contract
     port: options.port,
     subscriptions: options.subscriptions ?? new SubscriptionRegistry(),
     dispatch(rawRequest: unknown): ContractResponse<unknown> {
-      const parsed = parseEnvelope(rawRequest);
+      let parsed: ParsedEnvelope;
+      try {
+        parsed = parseEnvelope(rawRequest);
+      } catch {
+        return failureForCode('INTERNAL_ERROR');
+      }
       if (parsed.kind === 'failure') {
         return parsed.response;
       }
       const { method, input } = parsed.call;
       const definition = METHOD_DEFINITIONS[method];
 
-      let requestId: string | undefined;
-      let fingerprint: string | undefined;
-      if (definition.idempotent) {
-        requestId = (input as { readonly requestId: string }).requestId;
-        fingerprint = canonicalizeJson(input);
-        const existing = runtime.port.readIdempotency(requestId);
-        if (existing !== undefined) {
-          if (existing.method !== method || existing.fingerprint !== fingerprint) {
-            return failure('IDEMPOTENCY_CONFLICT', 'requestId was already used with different parameters');
-          }
-          if (existing.outcome !== undefined) {
+      try {
+        const requestId = definition.idempotent
+          ? (input as { readonly requestId: string }).requestId
+          : undefined;
+        const fingerprint = requestId === undefined ? undefined : canonicalizeJson(input);
+
+        if (requestId !== undefined && fingerprint !== undefined) {
+          const existing = runtime.port.readIdempotency(requestId);
+          if (existing !== undefined) {
+            if (existing.method !== method || existing.fingerprint !== fingerprint) {
+              return failureForCode('IDEMPOTENCY_CONFLICT');
+            }
+            if (existing.state === 'in-progress') {
+              // The previous attempt may have applied the effect; never redo it.
+              return failureForCode('ENVIRONMENT_BUSY');
+            }
+            if (isStaleSubscriptionReplay(method, existing.outcome, runtime)) {
+              const reference = existing.outcome.ok
+                ? (existing.outcome.value as SubscriptionRef | null)
+                : null;
+              if (reference !== null) {
+                const typed = input as MethodInputs['operations.subscribe'];
+                runtime.subscriptions.reinstate(reference.subscriptionId, typed.operationId ?? null);
+              }
+            }
             return materialize(existing.outcome);
           }
-        } else {
-          runtime.port.writeIdempotency(requestId, { method, fingerprint });
         }
-      }
 
-      const result = execute(runtime, method, input);
-      if (requestId !== undefined && fingerprint !== undefined && result.executed) {
-        runtime.port.writeIdempotency(requestId, {
-          method,
-          fingerprint,
-          outcome: toStoredOutcome(result.response),
-        });
+        const markInProgress = (): void => {
+          if (requestId !== undefined && fingerprint !== undefined) {
+            runtime.port.writeIdempotency(requestId, { state: 'in-progress', method, fingerprint });
+          }
+        };
+
+        const result = execute(runtime, method, input, markInProgress);
+        if (requestId !== undefined && fingerprint !== undefined && result.executed) {
+          runtime.port.writeIdempotency(requestId, {
+            state: 'completed',
+            method,
+            fingerprint,
+            outcome: toStoredOutcome(result.response),
+          });
+        }
+        return result.response;
+      } catch {
+        // The effect (if any) stays in-progress so a replay cannot duplicate it.
+        return failureForCode('INTERNAL_ERROR');
       }
-      return result.response;
     },
   };
   return runtime;

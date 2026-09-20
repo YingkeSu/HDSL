@@ -5,12 +5,28 @@
  * `Operation.sequence` and `OperationSnapshot.sequence` — not a per-subscription
  * counter. A multi-operation subscription therefore sees one independent
  * increasing sequence per `operationId`. `SubscriptionRegistry.publish`
- * enforces strict monotonicity so a downstream producer cannot emit a
- * regressing or duplicated sequence.
+ * enforces strict monotonicity, validates the event against the shared schema
+ * and sanitizes the phase text, so a downstream producer cannot emit a
+ * regressing sequence or a credential-bearing event.
+ *
+ * Subscriptions carry an optional opaque `owner` (a trusted call context such as
+ * a window id). T003's dispatcher does not have a sender and passes `null`;
+ * wiring the real per-window sender identity is a T006 responsibility. The
+ * `owner` parameter exists so T006 can isolate callers without a contract
+ * change, and no per-window isolation is claimed here.
  */
 import { operationIdSchema, subscriptionIdSchema } from './ids.js';
 import { operationStatusSchema, type SubscriptionRef } from './dto.js';
-import { sInteger, sNumber, sObject, sOptional, sString, type Infer } from './schema.js';
+import { sanitizeContractMessage } from './redaction.js';
+import {
+  sInteger,
+  sNumber,
+  sObject,
+  sOptional,
+  sString,
+  type Infer,
+  type ValidationIssue,
+} from './schema.js';
 
 export const OPERATION_UPDATED_CHANNEL = 'operation.updated' as const;
 
@@ -26,6 +42,7 @@ export type OperationUpdatedEvent = Infer<typeof operationUpdatedEventSchema>;
 
 interface SubscriptionEntry {
   readonly operationId: string | null;
+  readonly owner: string | null;
 }
 
 /**
@@ -40,11 +57,45 @@ export class SubscriptionRegistry {
   #counter = 0;
 
   /** `null` subscribes to every operation; a concrete id scopes to one. */
-  subscribe(operationId: string | null): SubscriptionRef {
+  subscribe(operationId: string | null, owner: string | null = null): SubscriptionRef {
     this.#counter += 1;
-    const subscriptionId = `sub-${this.#counter}`;
-    this.#entries.set(subscriptionId, { operationId });
+    const subscriptionId = `sub-${String(this.#counter)}`;
+    this.#entries.set(subscriptionId, { operationId, owner });
     return { subscriptionId };
+  }
+
+  /**
+   * Re-establishes a subscription under its original id (used when a replayed
+   * `operations.subscribe` refers to a subscription that was unsubscribed).
+   */
+  reinstate(subscriptionId: string, operationId: string | null, owner: string | null = null): SubscriptionRef {
+    if (!this.#entries.has(subscriptionId)) {
+      this.#entries.set(subscriptionId, { operationId, owner });
+    }
+    return { subscriptionId };
+  }
+
+  /** Returns false for an unknown subscription id or an owner mismatch. */
+  unsubscribe(subscriptionId: string, owner: string | null = null): boolean {
+    const entry = this.#entries.get(subscriptionId);
+    if (entry === undefined) {
+      return false;
+    }
+    if (entry.owner !== null && entry.owner !== owner) {
+      return false;
+    }
+    return this.#entries.delete(subscriptionId);
+  }
+
+  /** True while the subscription can still receive events. */
+  has(subscriptionId: string): boolean {
+    return this.#entries.has(subscriptionId);
+  }
+
+  list(owner?: string | null): readonly SubscriptionRef[] {
+    return [...this.#entries.entries()]
+      .filter(([, entry]) => owner === undefined || entry.owner === owner)
+      .map(([subscriptionId]) => ({ subscriptionId }));
   }
 
   /**
@@ -59,19 +110,10 @@ export class SubscriptionRegistry {
     };
   }
 
-  /** Returns false for an unknown subscription id (dispatcher maps it to NOT_FOUND). */
-  unsubscribe(subscriptionId: string): boolean {
-    return this.#entries.delete(subscriptionId);
-  }
-
-  list(): readonly SubscriptionRef[] {
-    return [...this.#entries.keys()].map((subscriptionId) => ({ subscriptionId }));
-  }
-
   /**
    * Emits one event per matching subscription using the operation's own
    * sequence. Throws when a producer publishes a sequence that does not
-   * strictly increase for that operation.
+   * strictly increase, or when the resulting event fails schema validation.
    */
   publish(operation: {
     readonly id: string;
@@ -87,6 +129,7 @@ export class SubscriptionRegistry {
       );
     }
     this.#lastSequence.set(operation.id, operation.sequence);
+    const phase = sanitizeContractMessage(operation.phase);
     const events: OperationUpdatedEvent[] = [];
     for (const [subscriptionId, entry] of this.#entries) {
       if (entry.operationId !== null && entry.operationId !== operation.id) {
@@ -96,15 +139,23 @@ export class SubscriptionRegistry {
         subscriptionId,
         operationId: operation.id,
         sequence: operation.sequence,
-        phase: operation.phase,
+        phase,
         status: operation.status,
         ...(operation.progress === undefined ? {} : { progress: operation.progress }),
       };
+      const issues: ValidationIssue[] = [];
+      if (operationUpdatedEventSchema(event, 'event', issues) === undefined) {
+        throw new RangeError('operation.updated event failed schema validation');
+      }
       events.push(event);
     }
     for (const event of events) {
       for (const listener of this.#listeners) {
-        listener(event);
+        try {
+          listener(event);
+        } catch {
+          // A faulty listener must not drop events for the other listeners.
+        }
       }
     }
     return events;

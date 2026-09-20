@@ -6,12 +6,8 @@
  * Durable idempotency across restarts stays a T004 operation-journal
  * responsibility and is explicitly not claimed here.
  */
-import {
-  contractRequest,
-  createReferenceRuntime,
-  FIXTURE_IDS,
-  type ContractResponse,
-} from '@hdsl/contracts';
+import { type ContractResponse } from '@hdsl/contracts';
+import { contractRequest, createReferenceRuntime, FIXTURE_IDS } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
 const expectOk = <T>(response: ContractResponse<T>): T => {
@@ -94,7 +90,56 @@ describe('idempotency', () => {
     expect(port.effects.filter((entry) => entry.startsWith('createEnvironment'))).toHaveLength(1);
   });
 
-  it('does not cache a guard rejection, so a corrected retry can succeed', () => {
+  it('lets the same requestId retry with corrected parameters after a guard rejection', () => {
+    const { port, runtime } = createReferenceRuntime();
+
+    const rejected = runtime.dispatch(
+      contractRequest('environments.create', {
+        requestId: 'req-guard-retry',
+        name: 'Env',
+        catalogCombinationId: 'combo-missing',
+      }),
+    );
+    expect(rejected.ok).toBe(false);
+
+    const retried = runtime.dispatch(
+      contractRequest('environments.create', {
+        requestId: 'req-guard-retry',
+        name: 'Env',
+        catalogCombinationId: FIXTURE_IDS.combination.verified,
+      }),
+    );
+    expect(retried.ok).toBe(true);
+    expect(port.effects.filter((entry) => entry.startsWith('createEnvironment'))).toHaveLength(1);
+  });
+
+  it('lets the same requestId retry after REVISION_CONFLICT with the corrected revision', () => {
+    const { runtime } = createReferenceRuntime();
+
+    const rejected = runtime.dispatch(
+      contractRequest('environments.start', {
+        requestId: 'req-revision-retry',
+        environmentId: FIXTURE_IDS.environment.stopped,
+        expectedRevision: 999,
+      }),
+    );
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) {
+      throw new Error('expected REVISION_CONFLICT');
+    }
+    expect(rejected.error.code).toBe('REVISION_CONFLICT');
+
+    const retried = runtime.dispatch(
+      contractRequest('environments.start', {
+        requestId: 'req-revision-retry',
+        environmentId: FIXTURE_IDS.environment.stopped,
+        expectedRevision: 1,
+      }),
+    );
+    expect(retried.ok).toBe(true);
+  });
+
+  it('does not cache a guard rejection that keeps the same parameters', () => {
     const { runtime } = createReferenceRuntime();
     const unsubscribe = contractRequest('operations.unsubscribe', {
       requestId: 'req-unsub-guard',

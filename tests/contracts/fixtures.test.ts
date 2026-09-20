@@ -7,15 +7,13 @@
  * dispatcher against the TEST-ONLY in-memory port and assert the recorded
  * outcome, so the table and the runtime cannot drift.
  */
+import { CONTRACT_METHODS, ERROR_CODES, isErrorCode } from '@hdsl/contracts';
 import {
   ALL_CONTRACT_FIXTURES,
   CONTRACT_FIXTURES,
-  CONTRACT_METHODS,
-  ERROR_CODES,
   evaluateContractFixture,
-  isErrorCode,
   type ContractFixture,
-} from '@hdsl/contracts';
+} from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
 describe('contract fixture table', () => {

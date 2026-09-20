@@ -4,15 +4,17 @@
 import {
   containsSecret,
   contractError,
-  contractRequest,
-  createReferenceRuntime,
-  FIXTURE_IDS,
-  FIXTURE_SEED,
   isLoopbackOrigin,
   openWebUIResultSchema,
   sanitizeContractMessage,
   type ValidationIssue,
 } from '@hdsl/contracts';
+import {
+  contractRequest,
+  createReferenceRuntime,
+  FIXTURE_IDS,
+  FIXTURE_SEED,
+} from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
 const CANARY = 'canary-SECRET-9f3a';
@@ -121,11 +123,17 @@ describe('loopback origin validation', () => {
     ['http://127.0.0.1:53123', true],
     ['https://127.0.0.1:443', true],
     ['http://[::1]:8080', true],
+    ['http://127.0.0.1:1', true],
+    ['http://127.0.0.1:65535', true],
     ['http://localhost:8080', false],
     ['http://0.0.0.0:8080', false],
     ['http://127.0.0.1:53123/?token=abc', false],
     ['http://127.0.0.1:53123#frag', false],
     ['http://127.0.0.1', false],
+    ['http://127.0.0.1:0', false],
+    ['http://127.0.0.1:65536', false],
+    ['http://127.0.0.1:99999', false],
+    ['http://127.0.0.1:00080', false],
   ])('%s → %s', (origin, expected) => {
     expect(isLoopbackOrigin(origin)).toBe(expected);
   });

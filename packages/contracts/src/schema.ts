@@ -42,6 +42,15 @@ export type OptionalSchema<T> = Schema<T | undefined> & { readonly [OPTIONAL]: t
 export const isOptionalSchema = (schema: Schema<unknown>): schema is OptionalSchema<unknown> =>
   (schema as { [OPTIONAL]?: unknown })[OPTIONAL] === true;
 
+/** True for a JSON-like object: plain prototype (`Object.prototype` or `null`). */
+export const isPlainRecord = (value: unknown): value is Record<string, unknown> => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  return prototype === Object.prototype || prototype === null;
+};
+
 const codePointLength = (value: string): number => [...value].length;
 
 export interface StringOptions {
@@ -214,19 +223,30 @@ export type ObjectOutput<Shape extends Record<string, Schema<unknown>>> = {
  * Strict, unknown-field-rejecting object schema. Absent optional keys are
  * omitted from the output, matching `exactOptionalPropertyTypes`.
  */
+const MAX_UNKNOWN_FIELD_REPORTS = 20;
+const MAX_FIELD_NAME_LENGTH = 64;
+
 export const sObject =
   <Shape extends Record<string, Schema<unknown>>>(shape: Shape): Schema<ObjectOutput<Shape>> =>
   (value, path, issues) => {
-    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-      issues.push({ path, message: 'must be an object' });
+    if (!isPlainRecord(value)) {
+      issues.push({ path, message: 'must be a plain object' });
       return undefined;
     }
     const start = issues.length;
-    const record = value as Record<string, unknown>;
+    const record = value;
+    let unknownFields = 0;
     for (const key of Object.keys(record)) {
       if (!Object.prototype.hasOwnProperty.call(shape, key)) {
-        issues.push({ path: `${path}.${key}`, message: 'unknown field' });
+        unknownFields += 1;
+        if (unknownFields <= MAX_UNKNOWN_FIELD_REPORTS) {
+          const name = key.length > MAX_FIELD_NAME_LENGTH ? `${key.slice(0, MAX_FIELD_NAME_LENGTH)}…` : key;
+          issues.push({ path: `${path}.${name}`, message: 'unknown field' });
+        }
       }
+    }
+    if (unknownFields > MAX_UNKNOWN_FIELD_REPORTS) {
+      issues.push({ path, message: `${unknownFields - MAX_UNKNOWN_FIELD_REPORTS} more unknown field(s)` });
     }
     const output: Record<string, unknown> = {};
     for (const key of Object.keys(shape)) {
