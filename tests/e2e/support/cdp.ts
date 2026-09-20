@@ -121,12 +121,27 @@ export const connectCdp = async (
   const send = async <T = unknown>(
     method: string,
     params?: Record<string, unknown>,
+    options: { readonly timeoutMs?: number } = {},
   ): Promise<T> => {
+    const timeoutMs = options.timeoutMs ?? 15_000;
     const id = nextId;
     nextId += 1;
     const payload = params === undefined ? { id, method } : { id, method, params };
     const result = await new Promise<unknown>((resolve, reject) => {
-      pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        pending.delete(id);
+        reject(new CdpError(`CDP ${method} timed out after ${String(timeoutMs)}ms`));
+      }, timeoutMs);
+      pending.set(id, {
+        resolve: (value) => {
+          clearTimeout(timer);
+          resolve(value);
+        },
+        reject: (error) => {
+          clearTimeout(timer);
+          reject(error);
+        },
+      });
       socket.send(JSON.stringify(payload));
     });
     return result as T;

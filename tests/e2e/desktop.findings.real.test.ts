@@ -1,23 +1,20 @@
 /**
- * Reproducible findings on the frozen T006 candidate (`33bfd1e`, PR #68).
+ * Security regression guards for the frozen T006 candidate (`33bfd1e`, PR #68).
  *
- * Independent QA (hdsl-25). This file is **evidence**, and on the frozen head it
- * is expected to be RED:
+ * Independent QA (hdsl-25). Both cases are **green on `33bfd1e`**:
  *
- * - `E2E-AUTH-01` (review P2-1): the sender/navigation authorization predicate
- *   is a `startsWith` prefix check, so a *different* URL that shares the
- *   renderer document's prefix is accepted. The evidence is at the pure-function
- *   authorization boundary; it does **not** claim a browser-level exploit, and
- *   no claim is made that Chromium can be driven to that exact URL.
- * - `E2E-HOOK-01` (review P2-2): the three `HDSL_*` operator hooks are read
- *   unconditionally in production, so a normal boot with the env vars set
- *   silently imports a credential reference file despite the native-menu /
- *   path-authorization design. This is a runtime reproduction; it requires
- *   control of the launcher environment (not a remote/renderer attacker).
+ * - `E2E-AUTH-01` (review P2-1): sender/navigation authorization is exact
+ *   normalized document equality. This was RED on the previous frozen head
+ *   `9b52364` (`index.html.attacker` was accepted by the prefix check). The old
+ *   evidence is a **pure-function authorization** reproduction: no browser-level
+ *   exploit was demonstrated and none is claimed.
+ * - `E2E-HOOK-01` (review P2-2): the production entry ignores the revoked
+ *   `HDSL_*` hooks, so a normal boot with them set does not read a credential
+ *   file, write config or skip the native dialog. On `9b52364` the runtime
+ *   reproduction attempt was inconclusive (the real install step timed out) and
+ *   no successful red reproduction is claimed.
  *
- * After the fix (production stops reading the hooks; authorization is exact) the
- * same assertions are expected to pass unchanged. Opt-in with
- * `HDSL_E2E_DESKTOP=1` so `pnpm run test` stays green while the finding is open.
+ * Opt-in with `HDSL_E2E_DESKTOP=1` so `pnpm run test` stays green.
  */
 import { mkdirSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';

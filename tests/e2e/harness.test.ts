@@ -46,11 +46,11 @@ import {
 } from './support/isolated-data-root.js';
 import {
   assertCleanupSucceeded,
-  assertNoResidue,
+  assertRunCleaned,
   CleanupFailureError,
   DuplicateResourceError,
   QaResourceRegistry,
-  ResourceResidueError,
+  RunResidueError,
 } from './support/resources.js';
 import { diffTrees, snapshotTree } from './support/tree.js';
 import {
@@ -71,21 +71,28 @@ const withRegistry = async (body: (registry: QaResourceRegistry) => Promise<void
 };
 
 describe('desktop E2E harness: registered resources', () => {
-  it('removes exactly the registered temp roots and preserves an unregistered sentinel', async () => {
+  it('removes this run\'s roots and preserves an unregistered sentinel outside them', async () => {
     const sentinel = mkdtempSync(join(tmpdir(), 'hdsl-external-sentinel-'));
+    const registry = new QaResourceRegistry();
+    const base = registry.baseDirectory;
     try {
-      await withRegistry(async (registry) => {
-        const first = registry.registerTempRoot('iso-a');
-        const second = registry.registerTempRoot('iso-b');
-        writeFileSync(join(first, 'canary.txt'), 'temp only\n');
-        expect(existsSync(first)).toBe(true);
-        expect(existsSync(second)).toBe(true);
-        expect(registry.registeredCount).toBe(2);
-      });
-      assertNoResidue(tmpdir());
+      const first = registry.registerTempRoot('iso-a');
+      const second = registry.registerTempRoot('iso-b');
+      writeFileSync(join(first, 'canary.txt'), 'temp only\n');
+      expect(existsSync(first)).toBe(true);
+      expect(existsSync(second)).toBe(true);
+      expect(first.startsWith(base)).toBe(true);
+      expect(sentinel.startsWith(base)).toBe(false);
+
+      const report = await registry.cleanup();
+      assertCleanupSucceeded(report);
+      // Only this run's own base directory is checked and removed.
+      expect(existsSync(base)).toBe(false);
+      assertRunCleaned(base);
       expect(existsSync(sentinel)).toBe(true);
     } finally {
       rmSync(sentinel, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
     }
   });
 
@@ -112,14 +119,16 @@ describe('desktop E2E harness: registered resources', () => {
     expect(() => registry.register('dup', () => undefined)).toThrow(DuplicateResourceError);
   });
 
-  it('detects residue instead of reporting a clean run', () => {
-    const leftover = mkdtempSync(join(tmpdir(), 'hdsl-e2e-residue-'));
+  it('detects this run\'s residue instead of reporting a clean run', () => {
+    const registry = new QaResourceRegistry();
+    const base = registry.baseDirectory;
     try {
-      expect(() => assertNoResidue(tmpdir())).toThrow(ResourceResidueError);
+      writeFileSync(join(base, 'left-behind.txt'), 'residue\n');
+      expect(() => assertRunCleaned(base)).toThrow(RunResidueError);
     } finally {
-      rmSync(leftover, { recursive: true, force: true });
+      rmSync(base, { recursive: true, force: true });
     }
-    assertNoResidue(tmpdir());
+    assertRunCleaned(base);
   });
 });
 

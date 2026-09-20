@@ -74,6 +74,51 @@ export const focusSelector = async (cdp: CdpClient, selector: string): Promise<v
   }
 };
 
+interface ButtonCenter {
+  readonly x: number;
+  readonly y: number;
+  readonly disabled: boolean;
+}
+
+/** Geometry of the button whose trimmed text equals `text`, or null. */
+export const buttonByText = async (cdp: CdpClient, text: string): Promise<ButtonCenter | null> =>
+  await cdp.evaluate<ButtonCenter | null>(
+    `(() => {
+      const button = [...document.querySelectorAll('button')].find((candidate) => (candidate.textContent ?? '').trim() === ${JSON.stringify(text)});
+      if (button === undefined) return null;
+      button.scrollIntoView({ block: 'center' });
+      const rect = button.getBoundingClientRect();
+      return { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2, disabled: button.disabled === true };
+    })()`,
+  );
+
+/** A real mouse click on the button with the given label (no synthetic DOM events). */
+export const clickButtonByText = async (cdp: CdpClient, text: string): Promise<void> => {
+  const center = await buttonByText(cdp, text);
+  if (center === null) {
+    throw new Error(`button not found: ${text}`);
+  }
+  if (center.disabled) {
+    throw new Error(`button is disabled: ${text}`);
+  }
+  const base = { x: center.x, y: center.y, button: 'left', clickCount: 1 };
+  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseMoved' });
+  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mousePressed' });
+  await cdp.send('Input.dispatchMouseEvent', { ...base, type: 'mouseReleased' });
+};
+
+/** The rendered environment state label from the detail panel (e.g. \u8fd0\u884c\u4e2d). */
+export const environmentStateLabel = async (cdp: CdpClient): Promise<string> =>
+  await cdp.evaluate<string>(
+    "(() => { const dt = [...document.querySelectorAll('dt')].find((node) => (node.textContent ?? '').trim() === '状态'); return dt?.nextElementSibling?.textContent?.trim() ?? ''; })()",
+  );
+
+/** Text of the tracked-operation panel, or '' when no operation is shown. */
+export const operationPanelText = async (cdp: CdpClient): Promise<string> =>
+  await cdp.evaluate<string>(
+    "(() => { const section = document.querySelector('section[aria-labelledby=\"operation-heading\"]'); return (section?.textContent ?? '').trim(); })()",
+  );
+
 /** Calls one frozen method through the real preload bridge. */
 export const callContract = async (
   cdp: CdpClient,

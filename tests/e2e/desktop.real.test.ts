@@ -199,7 +199,7 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 33bfd1e)', () => {
     expect(catalog.ok).toBe(true);
   }, 120_000);
 
-  it('E2E-LOCK-02: a second instance on the same dataRoot never opens a window', async () => {
+  it('E2E-LOCK-02: a second instance on the same dataRoot is rejected (positive control included)', async () => {
     const harness = appHarness();
     const first = await bootApp(harness, 'lock02a');
 
@@ -210,33 +210,60 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 33bfd1e)', () => {
     });
     harness.apps.push(second);
 
-    // The core dataRoot lease is exclusive: the second process must not reach a
-    // renderer. (It reports through a native error box, which cannot be
-    // dismissed headlessly, so the assertion is bounded and the child is killed.)
+    // Rejection evidence. NOTE: the candidate currently emits no machine-readable
+    // rejection signal on this path (no stderr line, no exit, blocked on the
+    // native error box), so attribution relies on: (a) this bounded no-page
+    // observation, (b) the on-disk lease still belonging to the first instance,
+    // and (c) a positive control that proves the same launch config does open a
+    // page on an idle root. The missing observable signal is reported as a gap.
     const gotPage = await second.waitForPageTarget(8_000).then(
       () => true,
       () => false,
     );
     expect(gotPage).toBe(false);
 
-    // Strong, non-vacuous exclusivity evidence: the canonical lease on disk is
-    // still owned by the first instance, not the second.
     const leasePath = join(first.app.dataRoot, 'locks', 'data-root.lock', 'lease.json');
-    const lease = readJsonIfPresent(leasePath) as { readonly pid?: number } | null;
+    const lease = readJsonIfPresent(leasePath) as { readonly pid?: number; readonly instanceId?: string } | null;
     expect(lease?.pid, `lease at ${leasePath} must belong to the first instance`).toBe(
       first.app.pid,
     );
     expect(second.pid).not.toBe(first.app.pid);
 
-    // The first instance still owns the root, keeps working and still holds the
-    // lease after the second process is terminated.
+    // Positive control: identical launch configuration on an idle root does open
+    // a window, so the absence above is contention, not a broken launcher.
+    const control = await bootApp(harness, 'lock02-control');
+    expect(control.app.dataRoot).not.toBe(first.app.dataRoot);
+    const controlCatalog = await callContract(control.cdp, 'catalog.list', {});
+    expect(controlCatalog.ok).toBe(true);
+
+    // The first instance still owns the root and still holds the lease after the
+    // second process is terminated.
     expect(first.app.isRunning()).toBe(true);
     const catalog = await callContract(first.cdp, 'catalog.list', {});
     expect(catalog.ok).toBe(true);
     await second.kill();
     const afterKill = readJsonIfPresent(leasePath) as { readonly pid?: number } | null;
     expect(afterKill?.pid).toBe(first.app.pid);
-  }, 120_000);
+  }, 180_000);
+
+  it('E2E-LOCK-03: after the owner exits, a new instance re-acquires the same dataRoot', async () => {
+    const harness = appHarness();
+    const first = await bootApp(harness, 'lock03a');
+    const dataRoot = first.app.dataRoot;
+    const userDataDir = first.app.userDataDir;
+    const leasePath = join(dataRoot, 'locks', 'data-root.lock', 'lease.json');
+    const firstLease = readJsonIfPresent(leasePath) as { readonly pid?: number } | null;
+    expect(firstLease?.pid).toBe(first.app.pid);
+
+    await first.app.kill();
+    // A new instance on the same dataRoot acquires the lease and serves a window.
+    const second = await bootApp(harness, 'lock03b', { dataRoot, userDataDir });
+    const reacquired = readJsonIfPresent(leasePath) as { readonly pid?: number } | null;
+    expect(reacquired?.pid).toBe(second.app.pid);
+    expect(reacquired?.pid).not.toBe(first.app.pid);
+    const catalog = await callContract(second.cdp, 'catalog.list', {});
+    expect(catalog.ok).toBe(true);
+  }, 180_000);
 
   it('E2E-CREATE-01: keyboard-only create performs a real managed install', async () => {
     const harness = appHarness();

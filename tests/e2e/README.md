@@ -11,12 +11,15 @@ QA only — no production changes, no `apps/desktop/**` edits, no root config or
 
 | Item | State |
 | --- | --- |
-| Real Electron window / IPC / guards / locks / keyboard create | **Executed and passing on `33bfd1e`** — 7 scenarios |
+| Real Electron window / IPC / guards / locks / keyboard create | **Executed and passing on `33bfd1e`** |
+| GUI start/stop (production React, injected credential setup) | **Executed and passing on `33bfd1e`** |
 | Authorization exactness + production hook removal | **Verified on `33bfd1e`**; the old prefix-authorization red is recorded for `9b52364` |
 | Test-injection lane (`qa-entry`) diagnostics/credential | **Executed and passing** (injection lane, not the native menu/dialog) |
 | Fixture harness | **17/17 green**, always on |
 | Isolated real-browser authenticated page (injected opener) | **Executed and passing on `33bfd1e`** — real Chrome + temp profile + CDP |
-| Native menu+dialogs / real `shell.openExternal` / GUI start-stop | **Blocked / manual** — see the validation doc |
+| Native menu+dialogs / real `shell.openExternal` / Windows x64 | **Blocked / manual** — see the validation doc |
+
+Machine counts: all opt-ins `6 passed / 33 tests`; default (gated) `2 passed | 4 skipped; 18 passed | 15 skipped`.
 
 `HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a
 real managed install and uses the network, so it is not part of the default `pnpm run test`
@@ -32,6 +35,7 @@ tests/e2e/
   desktop.findings.real.test.ts          # auth exactness + production-hook removal (opt-in)
   desktop.injected.real.test.ts          # qa-entry test-injection lane (opt-in)
   desktop.browser.real.test.ts           # isolated real-browser authenticated page (opt-in)
+  desktop.gui.real.test.ts               # production GUI start/stop (opt-in, injected credential setup)
   scenarios/
     desktop-e2e-scenario-plan.ts         # 24 planned QA cases with lanes and observations
   support/
@@ -41,6 +45,7 @@ tests/e2e/
     desktop-ui.ts                        # real DOM/contract helpers
     desktop-candidate.ts                 # readiness detector
     prepared-environment.ts              # one real install, cloned for injection tests
+    chrome.ts                            # installed-Chrome launcher for the browser lane
     resources.ts / tree.ts / canary.ts / gates.ts / isolated-data-root.ts
 ```
 
@@ -54,6 +59,8 @@ pnpm exec vitest run tests/e2e/harness.test.ts          # always on
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.real.test.ts
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.findings.real.test.ts
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.injected.real.test.ts
+HDSL_E2E_BROWSER=1 pnpm exec vitest run tests/e2e/desktop.browser.real.test.ts
+HDSL_E2E_GUI=1 pnpm exec vitest run tests/e2e/desktop.gui.real.test.ts
 ```
 
 Never substitute a mock port or an SSR render for the real Electron window, never
