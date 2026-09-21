@@ -129,3 +129,8 @@ export const canStart = (environment: EnvironmentSummary): boolean =>
 
 export const canStop = (environment: EnvironmentSummary): boolean =>
   environment.state === 'running' || environment.state === 'starting';
+
+/** Keep mutations from replacing an operation whose initial snapshot is missing. */
+export const isBusy = (state: RendererState): boolean =>
+  state.commandPending || state.pendingOperationId !== null ||
+  (state.trackedOperation !== null && !isOperationTerminal(state.trackedOperation.status));

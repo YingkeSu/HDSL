@@ -7,18 +7,20 @@
  * main and its failure is surfaced like any other contract error.
  */
 import type { ReactElement } from 'react';
-import type { RendererActions, RendererState } from '../view-model.js';
+import { isBusy, type RendererActions, type RendererState } from '../view-model.js';
 
 export interface CreateEnvironmentFormProps {
   readonly state: RendererState;
   readonly actions: RendererActions;
+  readonly onSubmit?: () => void;
 }
 
 export function CreateEnvironmentForm({
   state,
   actions,
+  onSubmit,
 }: CreateEnvironmentFormProps): ReactElement {
-  const disabled = state.phase !== 'ready' || state.catalog.length === 0;
+  const disabled = state.phase !== 'ready' || state.catalog.length === 0 || isBusy(state);
   const canSubmit = !disabled && !state.commandPending && state.createName.trim().length > 0;
   return (
     <section aria-labelledby="create-heading" className="panel">
@@ -26,6 +28,8 @@ export function CreateEnvironmentForm({
       <form
         onSubmit={(event) => {
           event.preventDefault();
+          if (!canSubmit) return;
+          onSubmit?.();
           actions.createEnvironment();
         }}
       >
@@ -38,6 +42,8 @@ export function CreateEnvironmentForm({
             value={state.createName}
             maxLength={80}
             autoComplete="off"
+            required
+            placeholder="例如：研究环境"
             disabled={disabled}
             onChange={(event) => {
               actions.setCreateName(event.currentTarget.value);
@@ -62,8 +68,9 @@ export function CreateEnvironmentForm({
             ))}
           </select>
         </p>
-        <button type="submit" disabled={!canSubmit}>
-          创建
+        <p className="muted">环境名称最多 80 个字符，不包含 / 或反斜杠。</p>
+        <button className="primary" type="submit" disabled={!canSubmit}>
+          创建环境
         </button>
       </form>
       {state.phase === 'ready' && state.catalog.length === 0 && (

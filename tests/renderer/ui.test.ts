@@ -9,7 +9,7 @@
  */
 import type { EnvironmentSummary } from '@hdsl/contracts';
 import { describe, expect, it } from 'vitest';
-import { renderAppView } from '../../apps/desktop/src/renderer/testing/render-markup.js';
+import { renderAppView, renderCreateForm } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import {
   INITIAL_STATE,
   type RendererActions,
@@ -62,7 +62,7 @@ const buttons = (html: string): RenderedButton[] =>
   }));
 
 const buttonNamed = (html: string, text: string): RenderedButton | undefined =>
-  buttons(html).find((button) => button.text === text);
+  buttons(html).find((button) => button.attrs.includes(`aria-label="${text}"`) || button.text === text);
 
 describe('AppView state matrix', () => {
   it('shows the mock-data banner only for an explicit demo client', () => {
@@ -98,26 +98,27 @@ describe('AppView state matrix', () => {
     expect(html).toContain('INTERNAL_ERROR');
   });
 
-  it('disables start and enables stop for a running environment', () => {
+  it('replaces start with open and enables stop for a running environment', () => {
     const html = renderAppView({
       state: state({ environments: [environment({ state: 'running' })], selectedEnvironmentId: 'env-1' }),
       actions: noopActions,
     });
-    expect(buttonNamed(html, '启动')?.attrs).toContain('disabled');
-    expect(buttonNamed(html, '停止')?.attrs ?? '').not.toContain('disabled');
-    expect(buttonNamed(html, '打开 WebUI（主进程原生打开）')?.attrs ?? '').not.toContain(
-      'disabled',
-    );
+    expect(buttonNamed(html, '启动环境')).toBeUndefined();
+    expect(buttonNamed(html, '停止')).toBeDefined();
+    expect(buttonNamed(html, '停止')?.attrs).not.toContain('disabled');
+    expect(buttonNamed(html, '打开工作界面')).toBeDefined();
+    expect(buttonNamed(html, '打开工作界面')?.attrs).not.toContain('disabled');
   });
 
-  it('enables start and disables WebUI for a stopped environment', () => {
+  it('enables start without offering stop or open for a stopped environment', () => {
     const html = renderAppView({
       state: state({ environments: [environment()], selectedEnvironmentId: 'env-1' }),
       actions: noopActions,
     });
-    expect(buttonNamed(html, '启动')?.attrs ?? '').not.toContain('disabled');
-    expect(buttonNamed(html, '停止')?.attrs).toContain('disabled');
-    expect(buttonNamed(html, '打开 WebUI（主进程原生打开）')?.attrs).toContain('disabled');
+    expect(buttonNamed(html, '启动环境')).toBeDefined();
+    expect(buttonNamed(html, '启动环境')?.attrs).not.toContain('disabled');
+    expect(buttonNamed(html, '停止')).toBeUndefined();
+    expect(buttonNamed(html, '打开工作界面')).toBeUndefined();
   });
 
   it('renders progress with a real progressbar value when progress is known', () => {
@@ -273,9 +274,8 @@ describe('AppView state matrix', () => {
       }),
       actions: noopActions,
     });
-    expect(buttonNamed(html, '启动')?.attrs).toContain('disabled');
-    expect(buttonNamed(html, '停止')?.attrs).toContain('disabled');
-    expect(buttonNamed(html, '创建')?.attrs).toContain('disabled');
+    expect(buttonNamed(html, '启动环境')?.attrs).toContain('disabled');
+    expect(buttonNamed(html, '新建环境')?.attrs).toContain('disabled');
   });
 
   it('shows the loopback WebUI origin and the redacted export summary', () => {
@@ -290,17 +290,19 @@ describe('AppView state matrix', () => {
     });
     expect(html).toContain('http://127.0.0.1:53123');
     expect(html).toContain('export-1');
-    expect(html).toContain('redacted=true');
+    expect(html).toContain('已脱敏');
   });
 });
 
 describe('AppView accessibility basics', () => {
   it('associates every form control with a label', () => {
-    const html = renderAppView({ state: state({ catalog: [] }), actions: noopActions });
+    const props = { state: state({ catalog: [] }), actions: noopActions };
+    const html = renderCreateForm(props);
     expect(html).toContain('for="create-name"');
     expect(html).toContain('id="create-name"');
     expect(html).toContain('for="create-combination"');
     expect(html).toContain('id="create-combination"');
+    expect(renderAppView(props)).toContain('for="selected-environment"');
   });
 
   it('marks the selected environment button with aria-pressed', () => {

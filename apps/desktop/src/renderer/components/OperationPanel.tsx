@@ -14,7 +14,12 @@
  * the same operation.
  */
 import type { ReactElement } from 'react';
-import { clampProgress, describeError, OPERATION_KIND_LABELS, OPERATION_STATUS_LABELS } from '../format.js';
+import {
+  clampProgress,
+  describeError,
+  OPERATION_KIND_LABELS,
+  OPERATION_STATUS_LABELS,
+} from '../format.js';
 import { isOperationTerminal, type RendererActions, type RendererState } from '../view-model.js';
 
 export interface OperationPanelProps {
@@ -42,19 +47,31 @@ export function OperationPanel({ state, actions }: OperationPanelProps): ReactEl
   return (
     <section aria-labelledby="operation-heading" className="panel">
       <h2 id="operation-heading">当前操作</h2>
+      {operation?.environmentId != null && (
+        <p className="muted">
+          环境：
+          {state.environments.find((entry) => entry.id === operation.environmentId)?.name ??
+            operation.environmentId}
+        </p>
+      )}
       {operation === null ? (
         <p>
           操作 ID：<code>{operationId}</code>
         </p>
       ) : (
         <>
-          <p>
-            操作 ID：<code>{operation.operationId}</code>；类型：
-            {operation.kind === null ? '未知' : (OPERATION_KIND_LABELS[operation.kind] ?? operation.kind)}
-            ；阶段：{operation.phase}
-          </p>
+          <details className="technical-details">
+            <summary>操作详情</summary>
+            <p>
+              操作 ID：<code>{operation.operationId}</code>；类型：
+              {operation.kind === null
+                ? '未知'
+                : (OPERATION_KIND_LABELS[operation.kind] ?? operation.kind)}
+              ；阶段：{operation.phase}
+            </p>
+          </details>
           <p role="status" aria-live="polite">
-            {`状态：${OPERATION_STATUS_LABELS[operation.status]}（sequence ${operation.sequence}）`}
+            {`状态：${OPERATION_STATUS_LABELS[operation.status]}`}
           </p>
           {progress === null ? (
             <p>进度未知，暂不显示百分比。</p>
@@ -84,9 +101,7 @@ export function OperationPanel({ state, actions }: OperationPanelProps): ReactEl
           获取操作状态失败：{describeError(state.trackingError)}
         </p>
       )}
-      {state.trackingPaused && (
-        <p>连续多次获取操作状态失败，已暂停自动刷新。</p>
-      )}
+      {state.trackingPaused && <p>连续多次获取操作状态失败，已暂停自动刷新。</p>}
       {canRetryTracking && (
         <p>
           <button

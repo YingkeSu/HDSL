@@ -1,14 +1,10 @@
 /**
  * Real React component markup acceptance (independent QA).
  *
- * Target: PR #34 head `44e5b748ebd67e46319580162d3e91563bd22d28` (issue #30).
- *
- * The real React `AppView` has no browser bundle / Electron host in this slice
- * (T006b is not wired), so interactive behavior in a live browser is **not
- * verifiable**. This file exercises the DOM-free real component render path
+ * This file exercises the DOM-free real component render path
  * (`renderAppView` -> `react-dom/server`) for empty / failure / progress /
- * accessibility state. The vanilla `demo/index.html` is a separate
- * implementation and is not evidence here.
+ * accessibility state. Live Electron interaction is covered in tests/e2e;
+ * the vanilla demo is a separate implementation and is not evidence here.
  */
 import { describe, expect, it } from 'vitest';
 import { contractError } from '@hdsl/contracts';
@@ -37,7 +33,7 @@ describe('renderer static markup acceptance (DOM-free real React)', () => {
     const html = renderAppView({ state: state({ phase: 'ready' }), actions });
 
     expect(html).toContain('还没有环境');
-    expect(html).toContain('没有已核验的运行时组合');
+    expect(html).toContain('暂无已核验的运行时组合');
     expect(html).not.toContain('role="alert"');
   });
 

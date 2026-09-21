@@ -20,7 +20,7 @@ export function EnvironmentList({ state, actions }: EnvironmentListProps): React
       <h2 id="environments-heading">环境列表</h2>
       {(state.phase === 'idle' || state.phase === 'loading') && <p>正在加载环境…</p>}
       {state.phase !== 'idle' && state.phase !== 'loading' && state.environments.length === 0 && (
-        <p>还没有环境。使用上方表单创建第一个环境。</p>
+        <p>还没有环境。点击「新建环境」创建第一个环境。</p>
       )}
       {state.environments.length > 0 && (
         <ul className="environment-list">

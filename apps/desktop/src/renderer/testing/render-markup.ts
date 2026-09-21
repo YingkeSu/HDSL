@@ -9,6 +9,10 @@
 import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AppView, type AppViewProps } from '../App.js';
+import { CreateEnvironmentForm } from '../components/CreateEnvironmentForm.js';
 
 export const renderAppView = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(AppView, props));
+
+export const renderCreateForm = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(CreateEnvironmentForm, props));

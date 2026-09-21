@@ -25,6 +25,8 @@ import {
   activeElement,
   callContract,
   domDisabled,
+  domExists,
+  openCreateForm,
   domValue,
   environmentIdsOnDisk,
   focusSelector,
@@ -46,7 +48,8 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
     const { cdp } = await bootApp(harness, 'win01');
 
     const root = await waitForRender(cdp);
-    expect(root).toContain('HDSL 环境管理');
+    expect(root).toContain('HDSL');
+    expect(root).toContain('本地工作环境');
 
     const bridge = JSON.parse(
       await cdp.evaluate<string>(
@@ -67,6 +70,7 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
     const harness = appHarness();
     const { cdp } = await bootApp(harness, 'win02');
 
+    await openCreateForm(cdp);
     // The create form is disabled until the catalog load finishes.
     await waitFor(async () => !(await domDisabled(cdp, '#create-name')), {
       timeoutMs: 15_000,
@@ -90,7 +94,7 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
     await cdp.pressKey('Tab');
     const button = await activeElement(cdp);
     expect(button.tag).toBe('BUTTON');
-    expect(button.text).toBe('创建');
+    expect(button.text).toBe('创建环境');
     expect(await domDisabled(cdp, 'button[type="submit"]')).toBe(false);
 
     // Shift+Tab returns to the select: focus traversal works in both directions.
@@ -276,6 +280,7 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
   it('E2E-CREATE-01: keyboard-only create performs a real managed install', async () => {
     const harness = appHarness();
     const { app, cdp } = await bootApp(harness, 'create01');
+    await openCreateForm(cdp);
 
     await waitFor(async () => !(await domDisabled(cdp, '#create-name')), {
       timeoutMs: 15_000,
@@ -295,12 +300,12 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
     expect((await activeElement(cdp)).tag).toBe('BUTTON');
     await cdp.pressKey('Enter');
 
-    // Fast gate: a dispatched create clears the typed name. Without this the
+    // Fast gate: an accepted create closes the dialog. Without this the
     // test would silently wait out the whole install timeout if the keyboard
     // activation were a no-op.
-    await waitFor(async () => (await domValue(cdp, '#create-name')) === '', {
+    await waitFor(async () => !(await domExists(cdp, 'dialog[open]')),  {
       timeoutMs: 30_000,
-      label: 'create dispatched (name cleared)',
+      label: 'create accepted (dialog closed)',
     });
 
     const listBefore = await callContract(cdp, 'environments.list', {});

@@ -128,12 +128,12 @@ describe.skipIf(!ENABLED)('desktop GUI start/stop (production UI, injected crede
         // Real click: start.
         await waitFor(
           async () => {
-            const button = await buttonByText(cdp, '启动');
+            const button = await buttonByText(cdp, '启动环境');
             return button !== null && !button.disabled;
           },
           { timeoutMs: 20_000, intervalMs: 250, label: 'start button enabled' },
         );
-        await clickButtonByText(cdp, '启动');
+        await clickButtonByText(cdp, '启动环境');
 
         // Observe real progress text while starting, then the running terminal state.
         await waitFor(async () => (await operationPanelText(cdp)).includes('启动'), {

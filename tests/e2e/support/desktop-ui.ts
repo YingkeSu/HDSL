@@ -10,7 +10,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import type { CdpClient } from './cdp.js';
-import { sleep } from './gates.js';
+import { sleep, waitFor } from './gates.js';
 
 export interface ContractEnvelope {
   readonly ok: boolean;
@@ -84,7 +84,7 @@ interface ButtonCenter {
 export const buttonByText = async (cdp: CdpClient, text: string): Promise<ButtonCenter | null> =>
   await cdp.evaluate<ButtonCenter | null>(
     `(() => {
-      const button = [...document.querySelectorAll('button')].find((candidate) => (candidate.textContent ?? '').trim() === ${JSON.stringify(text)});
+      const button = [...document.querySelectorAll('button')].find((candidate) => (candidate.getAttribute('aria-label') ?? candidate.textContent ?? '').trim() === ${JSON.stringify(text)});
       if (button === undefined) return null;
       button.scrollIntoView({ block: 'center' });
       const rect = button.getBoundingClientRect();
@@ -110,7 +110,7 @@ export const clickButtonByText = async (cdp: CdpClient, text: string): Promise<v
 /** The rendered environment state label from the detail panel (e.g. \u8fd0\u884c\u4e2d). */
 export const environmentStateLabel = async (cdp: CdpClient): Promise<string> =>
   await cdp.evaluate<string>(
-    "(() => { const dt = [...document.querySelectorAll('dt')].find((node) => (node.textContent ?? '').trim() === '状态'); return dt?.nextElementSibling?.textContent?.trim() ?? ''; })()",
+    "(() => { return document.querySelector('.environment-overview .state-badge')?.textContent?.trim() ?? ''; })()",
   );
 
 /** Text of the tracked-operation panel, or '' when no operation is shown. */
@@ -187,4 +187,12 @@ export const waitForFile = async (
     await sleep(100);
   }
   throw new Error(`${options.label}: file never appeared at ${path}`);
+};
+
+/** Opens the approved create dialog using the keyboard, after catalog load. */
+export const openCreateForm = async (cdp: CdpClient): Promise<void> => {
+  await waitFor(async () => await domExists(cdp, '#new-environment') && !(await domDisabled(cdp, '#new-environment')), { timeoutMs: 15_000, label: 'new environment enabled' });
+  await focusSelector(cdp, '#new-environment');
+  await cdp.pressKey('Enter');
+  await waitFor(async () => await domExists(cdp, 'dialog[open] #create-name') && !(await domDisabled(cdp, '#create-name')), { timeoutMs: 5_000, label: 'create dialog open' });
 };
