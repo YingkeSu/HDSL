@@ -9,7 +9,13 @@ coverage/
 *.log
 .scratch/
 .codex/
-.agents/*
-!.agents/skills/
+.agents/
 __pycache__/
 *.pyc
+
+# Local development tools, coordination notes and design explorations
+.specify/
+docs/agents/
+docs/research/provenance.md
+design-demos/
+direction-approved.md

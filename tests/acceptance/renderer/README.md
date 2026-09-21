@@ -7,7 +7,7 @@ does not modify `apps/desktop/src/renderer/**`, `tests/renderer/**` or root
 config.
 
 ```bash
-PATH=/Users/suyingke/tools/node-24.21.0/bin:$PATH
+# 使用 .nvmrc 指定的 Node.js 和 packageManager 指定的 pnpm。
 pnpm install --frozen-lockfile
 pnpm exec vitest run tests/acceptance/renderer
 ```

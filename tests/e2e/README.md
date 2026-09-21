@@ -82,7 +82,7 @@ tests/e2e/
 ## Run
 
 ```sh
-export PATH=/Users/suyingke/tools/node-24.21.0/bin:$PATH
+# Use Node.js from .nvmrc and pnpm from packageManager.
 pnpm install --frozen-lockfile
 pnpm run build:desktop
 pnpm exec vitest run tests/e2e/harness.test.ts          # always on

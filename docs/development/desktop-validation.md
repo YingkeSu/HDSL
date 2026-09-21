@@ -36,7 +36,7 @@
 命令（真实矩阵，opt-in）：
 
 ```sh
-export PATH=/Users/suyingke/tools/node-24.21.0/bin:$PATH
+# Use Node.js from .nvmrc and pnpm from packageManager.
 pnpm install --frozen-lockfile
 pnpm run build:desktop
 HDSL_E2E_DESKTOP=1 pnpm exec vitest run tests/e2e/desktop.real.test.ts

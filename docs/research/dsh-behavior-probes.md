@@ -1,13 +1,13 @@
 # DSH 行为探针证据（真实官方 DSH）
 
-状态：已执行。范围仅限真实官方 DeepSeek Harness（DSH）上游运行时行为；HDSL 应用尚未实现，本文不构成 001 的 macOS/Windows 实机验收，也不代替 T007/T008。
+状态：已执行。范围仅限真实官方 DeepSeek Harness（DSH）上游运行时行为；记录时 HDSL 应用尚未实现，本文不构成 001 的 macOS/Windows 实机验收，也不代替 T007/T008。
 
 **本文按精确版本分节，禁止跨版本混用结论。** 两台可复现脚本：
 
 - [tests/probes/dsh_behavior_probes.sh](../../tests/probes/dsh_behavior_probes.sh)：单安装/单版本的行为探针（S0–S6）。
 - [tests/probes/dsh_install_anchor_probes.sh](../../tests/probes/dsh_install_anchor_probes.sh)：两个安装之间的模块回退锚点与隔离对比。
 
-相关文档：[上游验证计划](../../specs/001-environment-lifecycle/research.md)（R001–R006）、[001 规格](../../specs/001-environment-lifecycle/spec.md)、[来源与缺口](provenance.md)、[环境生命周期契约](../../specs/001-environment-lifecycle/contracts/local-api.md)。
+相关文档：[上游验证计划](../../specs/001-environment-lifecycle/research.md)（R001–R006）、[001 规格](../../specs/001-environment-lifecycle/spec.md)、[环境生命周期契约](../../specs/001-environment-lifecycle/contracts/local-api.md)。
 
 ## 1. 目的与边界
 
@@ -48,7 +48,7 @@
 | 平台 | `Darwin 25.3.0 arm64`（macOS，Apple Silicon） |
 | Node | `v25.6.1` |
 | 版本实例 1 | `0.1.5-rc.2`，npm 安装于 `/tmp/dsh-015`（同版本副本人 `/tmp/dsh-015b`） |
-| 版本实例 2 | `0.1.6-alpha.2`，npm 安装于 `/tmp/dsh-016`；另有本机 checkout 构建 `/Users/suyingke/labs/ds/deepseek-harness/apps/cli/lib/bin.js` |
+| 版本实例 2 | `0.1.6-alpha.2`，npm 安装于 `/tmp/dsh-016`；另有本机 checkout 构建 `<dsh-checkout>/apps/cli/lib/bin.js` |
 
 ## 5. 分版本结果摘要
 

@@ -2,6 +2,7 @@
 """Check authored docs and baseline structure without third-party dependencies."""
 import json
 import re
+import subprocess
 from pathlib import Path
 from urllib.parse import unquote
 
@@ -10,11 +11,9 @@ REQUIRED = [
     'README.md', 'AGENTS.md', 'CONTEXT.md', 'CONTRIBUTING.md',
     'docs/product/mvp.md', 'docs/product/prd.md', 'docs/product/overview.md',
     'docs/architecture/tdd.md', 'docs/architecture/diagrams.md',
-    'docs/research/provenance.md', 'docs/development/roadmap.md',
-    'docs/development/testing.md', 'docs/agents/issue-tracker.md',
-    'docs/agents/triage-labels.md', 'docs/agents/domain.md',
-    '.specify/memory/constitution.md', '.specify/LICENSE',
-    '.specify/integration.json', '.agents/skills/speckit-specify/SKILL.md',
+    'docs/README.md', 'docs/development/roadmap.md',
+    'docs/development/testing.md', 'docs/development/tooling.md',
+    'docs/architecture/principles.md', 'docs/research/dsh-compatibility.md',
     'specs/001-environment-lifecycle/spec.md',
     'specs/001-environment-lifecycle/plan.md',
     'specs/001-environment-lifecycle/tasks.md',
@@ -29,9 +28,19 @@ for name in REQUIRED:
     if not (ROOT / name).is_file() or not (ROOT / name).read_text().strip():
         errors.append(f'Missing or empty: {name}')
 
-# Generated upstream templates intentionally contain example links/placeholders.
-# Check authored documentation, not those template examples.
-authored = list(ROOT.glob('*.md')) + list((ROOT / 'docs').rglob('*.md')) + list((ROOT / 'specs').rglob('*.md'))
+# Local tools and notes may remain on disk after being removed from Git.
+# Check only publishable files, including new files before they are staged.
+repository_files = {
+    (ROOT / name).resolve()
+    for name in subprocess.check_output(
+        ['git', 'ls-files', '--cached', '--others', '--exclude-standard', '-z'],
+        cwd=ROOT,
+    ).decode().split('\0') if name
+}
+authored = sorted(path for path in repository_files
+                  if path.suffix == '.md' and path.is_file()
+                  and (path.parent == ROOT or path.relative_to(ROOT).parts[0]
+                       in {'docs', 'specs', 'tests', 'apps'}))
 links = 0
 for path in authored:
     content = re.sub(r'```.*?```', '', path.read_text(), flags=re.S)
@@ -44,11 +53,14 @@ for path in authored:
             continue
         links += 1
         resolved = (path.parent / target).resolve()
-        if not resolved.is_relative_to(ROOT) or not resolved.exists():
+        if (not resolved.is_relative_to(ROOT) or not resolved.exists()
+                or (resolved.is_file() and resolved not in repository_files)
+                or (resolved.is_dir() and not any(
+                    file.is_relative_to(resolved) for file in repository_files))):
             errors.append(f'{path.relative_to(ROOT)}: invalid local link {target}')
 
 json_count = 0
-for base in (ROOT / '.specify', ROOT / 'specs'):
+for base in (ROOT / 'specs', ROOT / 'packages/runtime/catalog'):
     for path in base.rglob('*.json'):
         try:
             json.loads(path.read_text())

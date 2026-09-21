@@ -24,8 +24,30 @@
 
 ## 工具与边界
 
-应用实现后建议 Vitest 测核心与契约，Playwright 测关键桌面交互；工具版本在选型任务中锁定。不要为每个 DSH 版本乘上所有插件组合：支持矩阵选受支持边界版本与代表性组合，未知组合明确标识。
+当前使用 Vitest 测试核心与契约，真实桌面测试通过 Electron 与 CDP 驱动；工具版本由 workspace 依赖锁定。不要为每个 DSH 版本乘上所有插件组合：支持矩阵选受支持边界版本与代表性组合，未知组合明确标识。
 
-CI 目前仅检查仓库必需文件、Markdown 本地链接、JSON 与需求 ID。它没有证明真实安装、恢复、打包或安全测试通过。T002 增加的类型/构建/单元 CI 仍只覆盖 ubuntu/lint/type/unit；路径、权限、锁、rename 与进程树等平台敏感项由 T008 实机验收，不得用 ubuntu 结果代替 macOS/Windows 结论。macOS ARM64 可在本机执行；Windows x64 无实机前标记未测，不声称支持。
+CI 包含仓库文档检查，以及 Ubuntu 上的类型检查、构建和默认 Vitest 测试。真实 DSH、凭据和 GUI 场景通过环境变量单独启用，不属于默认 CI；路径、权限、锁、rename 与进程树等平台敏感项由 T008 实机验收，不得用 ubuntu 结果代替 macOS/Windows 结论。macOS ARM64 可在本机执行；Windows x64 无实机前标记未测，不声称支持。
 
 故障修复增加能复现旧故障的测试；检查通过后没有新变化不反复跑全套。测试替身必须在结果中显式标注，不得把 mock 记作实机证据。
+
+## 运行测试
+
+```bash
+pnpm run typecheck
+pnpm run build:desktop
+pnpm test
+python3 scripts/check_repository.py
+
+# 按修改范围运行
+pnpm exec vitest run tests/contracts tests/core
+pnpm exec vitest run tests/renderer tests/desktop
+pnpm exec vitest run tests/integration/install tests/integration/process
+```
+
+默认测试也会创建临时文件和测试子进程；真实安装、钥匙串及桌面测试另有启用条件。执行前阅读对应说明：
+
+- [安装集成测试](../../tests/integration/install/README.md)。
+- [进程集成测试](../../tests/integration/process/README.md)与[运行时进程测试](../../tests/process/README.md)。
+- [桌面 E2E](../../tests/e2e/README.md)：需要可运行 Electron 的桌面环境；真实 DSH 下载需要网络。
+
+跳过的测试不计为通过。历史结果保留在各验证记录中，新提交应记录本次实际执行的结果。

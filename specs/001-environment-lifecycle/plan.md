@@ -1,6 +1,8 @@
 # Implementation Plan: 受管环境创建与启动
 
-**Branch**: `001-environment-lifecycle`（待创建） | **Date**: 2026-09-20 | **Spec**: [spec.md](spec.md)
+**初始设计日期**：2026-09-20 | **Spec**：[spec.md](spec.md)
+
+本文件保留初始设计与实施顺序，历史修订段按当时的证据状态阅读。T001–T005 和桌面实现现已合入；当前任务状态见 [tasks.md](tasks.md)，工具版本见[工具链](../../docs/development/tooling.md)。
 
 ## Summary
 
@@ -8,22 +10,22 @@
 
 ## Technical Context
 
-- 语言：TypeScript；候选 Electron + React，实际版本在 T002 锁定。
-- 工程：拟采用 pnpm workspace，core/runtime/contracts 独立边界。
+- 语言：TypeScript；Electron + React，实际版本由 workspace manifest 和锁文件固定。
+- 工程：pnpm workspace，core/runtime/contracts 独立边界。
 - 存储：应用数据目录中的 JSON 锁定记录、操作状态与代际目录；凭据在 OS store。
-- 测试：领域单元、文件/进程集成、有限 UI E2E；候选 Vitest/Playwright。
+- 测试：领域单元、文件/进程集成、有限 UI E2E；Vitest 与 Electron/CDP。
 - 平台：macOS ARM64、Windows x64 目标；最低版本待上游验证。Windows 目前无实机证据，只称目标平台。
 - 约束：启动就绪默认上限拟定 60 秒，可配置；下载有取消与有限重试，实际阈值验证后锁定。无远程管理、无后台遥测。
 - 契约：`API_VERSION = "1.0"`（major.minor，**完全匹配**），包络携带 apiVersion；DTO 见 [data-model.md](data-model.md)，方法见 [contracts/local-api.md](contracts/local-api.md)。
 - 凭据边界：见 [ADR 0002](../../docs/adr/0002-credential-boundary.md)；受管用户凭据按 OS store 引用，上游本地凭据产物按含密数据处理。
 
-## Constitution Check
+## 工程原则检查
 
-设计覆盖用户闭环、精确组成、窄 IPC、显式安全边界与风险测试。上游参数、真实平台验证尚未通过，因此本 plan 不代表已就绪的实施证明。T001 的 M1 范围（R001–R004）是 T002–T008 的硬前置。
+设计覆盖用户闭环、精确组成、窄 IPC、显式安全边界与风险测试。依据[工程原则](../../docs/architecture/principles.md)，实施前要求 T001 核验 R001–R004；现有证据见[上游研究](../../docs/research/dsh-compatibility.md)。本计划不替代当前提交的测试或平台验收记录。
 
 ## Project Structure
 
-当前 spec/plan/tasks/data-model/contracts/research 已存在。代码在对应任务中创建：
+当前代码按以下模块组织：
 
 ```text
 apps/desktop/src/main/           应用用例、WebUI 原生打开与 Electron 生命周期

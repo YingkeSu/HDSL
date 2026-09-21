@@ -1,6 +1,6 @@
 # HDSL 领域上下文
 
-正式名称：HDSL — Hello DSH Launcher。原讨论的“栈舱 / Harness Dock”仅为历史工作名。
+正式名称：HDSL — Hello DSH Launcher。
 
 ## 术语
 

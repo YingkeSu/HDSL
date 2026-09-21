@@ -29,6 +29,8 @@ EnvironmentService(dataRoot, catalog, runtime, exportDiagnostics)
 `openWebUI` 的成功绑定见下节：契约方法仍同步返回 token-free `{ loopbackOrigin }`，
 真正打开由 main 在 IPC 前置钩子中 `await` 认证 opener 后再 dispatch。
 
+本文中的执行计数与基线描述属于 T006 实现时的记录。后续桌面与原生操作结果见[桌面验证](desktop-validation.md)。
+
 ## 构建与启动
 
 ```bash
@@ -42,9 +44,8 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 - `build:desktop` = `pnpm run build`（tsc） + `pnpm run build:renderer`
   （`apps/desktop/scripts/build-renderer.mjs`，esbuild 0.28.2 打包 `browser-entry.ts` →
   `dist/renderer/app.js`，并复制 `index.html`/`styles.css`）。
-- 手工启动：`<electron> apps/desktop --hdsl-data-root <dir> --remote-debugging-port=9333`。
+- 手工启动：`pnpm --filter @hdsl/desktop exec electron . --hdsl-data-root <dir>`。
   `package.json main = dist/main/index.js`（ESM，Electron 44.4.3）。
-- AO 预览不适用（Electron 原生窗口，不是静态页）。
 
 ## dataRoot 与单实例/独占
 
