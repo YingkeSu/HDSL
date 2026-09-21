@@ -103,6 +103,46 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 
 已记录的能力限制：`osascript` 发送按键 `error 1002`（Input Monitoring 未授权）、AX `windows 0`，故上述原生面板无法在无权限会话中自动完成；不自行改系统授权。
 
+
+## 真实模型 E2E（用户授权临时凭据；一次性，不重复）
+
+- 链路：production core loader → strict credential port（keychain 引用）→ manager → 真实受管 DSH 0.1.5-rc.2 → 真实模型回复。
+- 驱动：临时 Chrome profile + 注入 opener 认证 WebUI；提示经**真实 DSH UI 提交**，非直连 provider API。
+- 结果：两轮（短 marker 提示 + 多轮第二个 marker）均取得 **assistant 角色回复**；提交后 composer 清空；marker 在 user 回显链（`Sixlwa_userStack`）与 assistant markdown 链（`hWmORq_body`/`_markdown`）可区分，非用户回显冒充。
+- 模型：DSH UI 显示 `DeepSeek-V41-Flash`。**端点未观测**（无网络抓包）；UI 模型名不等于端点证明。用户触发任务 **2 次**（上限 3）；provider usage 未观测——不把预算额度或 DOM 请求数当作 usage。
+- 泄漏：诊断导出、launch record 与 DSH home 日志按精确凭据值程序比较，均无命中（只记录布尔，不打印命中内容）。
+- 凭据处理：临时凭据经 stdin 写入自建随机 keychain 项，`finally` 删除（delete exit 0 / find-after exit 44）；未进入 Git、日志或报告。临时凭据此后不可用，本切片不重复请求。
+- 证据为**一次性**：不可在不重新取得凭据的情况下复跑；仓库不保存该凭据或任何派生值。
+
+## workspace 前置与 QA setup（源码确定 schema）
+
+- 首启必须先有 workspace：否则 composer 为 `contenteditable=false`、发送按钮禁用、会话入口显示「选择一个工作区开始」。
+- macOS + loopback（未 SSH）下，目录选择器后端由 `dsh-host-directory-picker-auto` 解析为 `native`；`browse`（页内、CDP 可驱动）仅在非 loopback 绑定或 SSH 启动时挂载。本切片保持 loopback，不扩大监听面，因此 UI 内选择器为原生面板。
+- QA setup（非产品功能）：按已安装 `dsh-workspace` 源码确定 schema，在**自有受管 home** 预置 workspace 记录：`unit{name:"workspace",version:2}`、`global{initialized,workspaceIds[],archivedSessionIds[]}`、`tables.workspaces[id] = {path(fs.realpath canon),title,sessionIds[],createdAt(ISO),updatedAt(ISO)}`，id 为 `randomUUID()`。写入前备份原文件。
+- **分栏**：这是 **setup**（QA 预置），不是真实 UI 选择、也不是 remote mux 协议调用；协议路径本轮未走通（见下）。
+- 验证：两个独立临时 profile 均达到 overlay 不存在、composer `contenteditable=true` 且可聚焦、可输入且发送条件有效（仅填入无害提示，**未提交**）。
+
+## 原生导入/导出：用户实际面板操作 + QA 落盘核验
+
+- **原生引用导入**：用户经真实菜单「环境 → 导入环境凭据引用…」→ 真实 NSOpenPanel 完成选择（AX 可按下菜单，面板窗口按名可见）。QA 独立落盘核验：`credentials.json` 权限 `0600`、仅含引用、与自有引用文件逐字一致、无 `value`/`secret`/`token` 字段、无 `sk-` 形状。
+- **诊断导出**：用户经真实产品按钮 → 真实 NSSavePanel 保存（使用默认文件名）。QA 核验：合法 JSON、`0600`、top-level keys 恰为生产白名单（`app`/`compositionLock`/`environment`/`generatedAt`/`launch`/`manifest`/`operations`/`schemaVersion`）；无 `credentials.json`、`.credentials.yaml`、受管绝对路径、canary 或凭据形状、`token=`、`Authorization`。
+- **证据归属**：面板操作由**用户**完成，QA 只做独立落盘核验；不冒称全自动。
+
+## 自动化能力限制（当前宿主，已证事实）
+
+- AX/辅助功能 `enabled=true`：菜单项可 `AXPress`，原生面板窗口可通过窗口名观测。
+- Input Monitoring 未授权：`osascript` 发送按键 `error 1002` → 无法在原生面板输入路径或确认。
+- 原生面板的 AX 元素树无可驱动控件（buttons/textFields/groups/tables/outlines 均为 0）。
+- Electron `dialog` API 无 automation hook（本地 `electron.d.ts`：`showOpenDialogSync`/`showSaveDialogSync` 无测试钩子）；`shell.openExternal` 无 profile 隔离参数（`OpenExternalOptions` 仅 `activate`/`workingDirectory`/`logUsage`）。
+- 本机无 Xcode/VM/容器工具，仅一个本机用户账户；默认 `https` handler 为系统默认浏览器。
+- **待验证建议（非结论）**：`XCUITest`（需 Xcode）或预授权 TCC 的隔离 macOS VM/测试账户，可作为后续有界验证方向；本轮未执行，也未改 TCC、系统权限或默认浏览器。不能由「Electron 无 dialog hook」推断所有自动化方案都不可能。
+
+## 仍未验（不冒充完成）
+
+- 真实 `shell.openExternal` 系统浏览器路径：会经过个人默认浏览器 profile/历史，需隔离宿主才能验证；本切片未执行。
+- 原生面板的**全自动完成**（见上，受当前宿主权限/控件可见性限制）。
+- Windows x64：无项目配置宿主，需 Windows 主机，不用 Linux CI 冒充。
+
 ## 复核旧审核 F1–F5（PR #65）与 PR #69 review F1–F6
 
 - PR #65 F1–F5：`lstatSync` 识别 symlink（含正向自检）、去恒真断言改为真实 descriptor 断言、版本精确锚定结尾、计数/PATH 措辞——已落地。

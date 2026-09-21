@@ -28,6 +28,29 @@ plus the always-on Electron-binary probe, the iframe layer-classifier negative c
 the sender-frame fixture check (20 passed total); the 17 opt-in cases are skipped there. The fixture harness is always on. Full results, lanes and blockers:
 [`docs/development/desktop-validation.md`](../../docs/development/desktop-validation.md).
 
+
+## Real-model and native acceptance (one-off, user-assisted)
+
+- **Real model E2E** (user-authorized temporary credential, now revoked): production core
+  loader -> strict credential port -> real managed DSH -> real model answer, driven through
+  the real DSH UI; two turns, assistant role bound and distinguished from the user echo;
+  diagnostics/launch records/home logs contained no exact credential value. The endpoint was
+  **not observed** (no capture) and the UI model label is not endpoint proof. This is a
+  one-off evidence run; its scripts are intentionally not committed because they depend on a
+  machine-local keychain reference and a one-time credential.
+- **Workspace precondition**: DSH needs an existing workspace before the composer becomes
+  editable. On macOS+loopback the picker backend resolves to `native`; a QA **setup** (not a
+  product feature) can pre-register a workspace in an own managed home using the
+  source-derived `dsh-workspace` schema. Two independent profiles then reached an editable,
+  submittable composer (typed, not sent).
+- **Native import/export**: the real menu/NSSave/NSOpenPanel steps were performed **by the
+  user**; QA only verified the on-disk results (reference-only `credentials.json` 0600; export
+  is the allowlisted bundle with no excluded files, managed paths, canary or credential shapes).
+- **Still untested**: real `shell.openExternal` (personal default browser/profile), fully
+  automated native panels (current-host permission/control limits), Windows x64. `XCUITest`
+  (needs Xcode) and a pre-TCC-granted isolated macOS VM/account are *suggestions to verify*,
+  not conclusions.
+
 ## Layout
 
 ```text
