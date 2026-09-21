@@ -47,9 +47,10 @@ the sender-frame fixture check (20 passed total); the 17 opt-in cases are skippe
   user**; QA only verified the on-disk results (reference-only `credentials.json` 0600; export
   is the allowlisted bundle with no excluded files, managed paths, canary or credential shapes).
 - **Still untested**: real `shell.openExternal` (personal default browser/profile), fully
-  automated native panels (current-host permission/control limits), Windows x64. `XCUITest`
-  (needs Xcode) and a pre-TCC-granted isolated macOS VM/account are *suggestions to verify*,
-  not conclusions.
+  automated native panels (current-host permission/control limits; the `osascript` keystroke
+  refusal is `error 1002` and its specific TCC category was **not independently confirmed**),
+  Windows x64. `XCUITest` (needs Xcode) and an isolated macOS VM/account with pre-granted
+  permission are *suggestions to verify*, not conclusions.
 
 ## Layout
 

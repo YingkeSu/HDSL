@@ -83,7 +83,7 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 
 ## 未验证 / blocked（保留，不重试）
 
-- **原生应用菜单与原生 NSOpenPanel/NSSavePanel**：CDP 到不了渲染树。hdsl-24 的有界核查（AXPress 可按下菜单、真实 `openAndSavePanelService` 出现；`osascript` 发送按键 `error 1002`（Input Monitoring 未授权）、AX `windows 0`）已记录，属能力/权限边界 → **blocked/manual**，本切片不再试权限，也不自行改系统授权。
+- **原生应用菜单与原生 NSOpenPanel/NSSavePanel**：CDP 到不了渲染树。hdsl-24 的有界核查（AXPress 可按下菜单、真实 `openAndSavePanelService` 出现；`osascript` 发送按键被拒 `error 1002`（**具体 TCC 类别未经独立证实**，不据此断定是 Input Monitoring 或任何单一类别）、AX `windows 0`）已记录，属能力/权限边界 → **blocked/manual**，本切片不再试权限，也不自行改系统授权。
 - **隔离真实浏览器 + opener 注入**（✅ 已执行，`E2E-BROWSER-01`）：真实 Chrome（`/Applications/Google Chrome.app`，注册的临时 profile + CDP）作为注入 opener。真实受管 DSH 经 `createDesktopComposition({ openWebUi: createVerifiedWebUiOpener(async url => browser.send('Page.navigate',{url})) })` 启动；bootstrap URL **只**进入 `Page.navigate`，不打印/不落盘/不开 Network 域/不 dump cookie。**认证断言不是页面长度**：必须出现 rc2 应用身份（`title=DeepSeek Harness`、`#root [data-slot="root"]`、`新会话`），并有**无 cookie 的第二 profile 负向对照**（不出现该 shell）。keychain 用自建随机 `hdsl-qa-24-browser-*`（secret 经 stdin），删除后复检 `find-generic-password` 不存在。**分栏**：这是**注入 opener** 证据，不等于真实 `shell.openExternal` 原生打开；后者未在本切片执行。
 - **GUI 认证后可用页**：composition 级 303→200（hdsl-24）与本切片的**注入 opener 真实浏览器**已分别记录；真实 `shell.openExternal` 系统浏览器打开仍未验证，保留未验证。
 - **真实 DSH 经 UI 启停**（✅ 已执行，`E2E-GUI-STARTSTOP-01`）：凭据用 **setup 注入**（已受审 core 接口 + 自建 keychain canary）准备好后，production 真实 React UI 上 CDP 真实鼠标点击启停，观察到操作面板与 `运行中`/`已停止` 终态；**不代表**原生菜单导入路径已测。
@@ -101,7 +101,7 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 2. **诊断保存对话框（NSSavePanel）**：在选中环境上触发「导出诊断」（或不设注入路径调用 `diagnostics.export`）→ 在原生保存框选路径 → 预期文件存在且不含 canary/`.credentials.yaml`/`credentials.json`/dataRoot 原文。自动列以 `--hdsl-qa-export-path` 注入替代。
 3. **真实系统浏览器打开**（`shell.openExternal` 路径，与 `E2E-BROWSER-01` 的临时 profile 注入 opener **不同、不可互代**）：running 环境点「打开 WebUI（主进程原生打开）」→ 由 `shell.openExternal` 交给**宿主机默认浏览器/用户 profile** → 人工确认落点与页面可用。**未执行**：本切片未在真实默认浏览器上运行该路径；bootstrap URL 可能进入该浏览器历史/会话。若要在可复核条件下执行，请在专用测试账户或已选定的测试浏览器中操作，并按需在事后自行清理该浏览器历史（本切片不代做、不改用户配置）。
 
-已记录的能力限制：`osascript` 发送按键 `error 1002`（Input Monitoring 未授权）、AX `windows 0`，故上述原生面板无法在无权限会话中自动完成；不自行改系统授权。
+已记录的能力限制：`osascript` 发送按键被拒 `error 1002`（**具体 TCC 类别未经独立证实**）、AX `windows 0`，故上述原生面板无法在当前会话中自动完成；不自行改系统授权，也不承诺授予某一类别后必然可用。
 
 
 ## 真实模型 E2E（用户授权临时凭据；一次性，不重复）
@@ -131,11 +131,11 @@ pnpm exec vitest run tests/e2e/harness.test.ts   # 常驻，不需 opt-in
 ## 自动化能力限制（当前宿主，已证事实）
 
 - AX/辅助功能 `enabled=true`：菜单项可 `AXPress`，原生面板窗口可通过窗口名观测。
-- Input Monitoring 未授权：`osascript` 发送按键 `error 1002` → 无法在原生面板输入路径或确认。
+- `osascript` 发送按键被拒 `error 1002`：无法在原生面板输入路径或确认。**具体 TCC 类别未经独立证实**（本地 SDK 头文件仅把 `-1743` 记为 `errAEEventNotPermitted` 的既有值，`-1002` 的 TCC 归属未由本地权威文档证实）；不替换为另一未经证实的类别，也不承诺授予 Input Monitoring 必然解决。
 - 原生面板的 AX 元素树无可驱动控件（buttons/textFields/groups/tables/outlines 均为 0）。
 - Electron `dialog` API 无 automation hook（本地 `electron.d.ts`：`showOpenDialogSync`/`showSaveDialogSync` 无测试钩子）；`shell.openExternal` 无 profile 隔离参数（`OpenExternalOptions` 仅 `activate`/`workingDirectory`/`logUsage`）。
 - 本机无 Xcode/VM/容器工具，仅一个本机用户账户；默认 `https` handler 为系统默认浏览器。
-- **待验证建议（非结论）**：`XCUITest`（需 Xcode）或预授权 TCC 的隔离 macOS VM/测试账户，可作为后续有界验证方向；本轮未执行，也未改 TCC、系统权限或默认浏览器。不能由「Electron 无 dialog hook」推断所有自动化方案都不可能。
+- **待验证建议（非结论）**：`XCUITest`（需 Xcode）或带预授权的隔离 macOS VM/测试账户，可作为后续有界验证方向；本轮未执行，也未改 TCC、系统权限或默认浏览器。不能由「Electron 无 dialog hook」推断所有自动化方案都不可能；也不能由 `error 1002` 直接断定某一授权类别。
 
 ## 仍未验（不冒充完成）
 
