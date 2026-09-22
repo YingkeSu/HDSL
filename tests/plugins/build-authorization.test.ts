@@ -185,9 +185,15 @@ describe('composeAuthorizedWorkspace', () => {
 
 const GITHUB_DEP_PATH =
   'hdsl-s4-gh-fixture-root@https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80';
-// Authentic `github:`-form lock captured from the real production transport
-// (probe cb265920): the packages entry carries the codeload tarball key AND the
-// package version; the snapshot repeats the key without a version.
+// Source of truth / provenance (persistent, not /tmp): this is the verbatim
+// `pnpm-lock.yaml` produced by a REAL frozen managed pnpm 11.7.0 install of the
+// published fixture through the production `github:` transport:
+//   package.json: { dependencies: { "hdsl-s4-gh-fixture-root":
+//     "github:YingkeSu/hdsl-s4-gh-fixture#cb265920d7b0d0d5f3616417cd4053176b998f80" } }
+//   command: <managed node>/bin/node <pnpm 11.7.0>/bin/pnpm.mjs install --ignore-scripts
+// The same bytes are also captured by the opt-in probe
+// `scripts/research/a4-github-key-probe.mjs` (HDSL_S4_GITHUB_KEY=1). Keeping the
+// full text IN the test is the persistent evidence (not a hand-written shape).
 const GITHUB_LOCK = [
   "lockfileVersion: '9.0'",
   '',
