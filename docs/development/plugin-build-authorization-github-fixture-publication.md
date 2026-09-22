@@ -71,10 +71,12 @@ hdsl-s4-gh-fixture-root@https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/
 
 - 方法：自有 dataRoot；marker **仅观测** `<env home>/.tmp/hdsl-s4-fixture-markers/`，**未注入** `S4_MARKER_DIR`，未改生产 env/IPC；无 start/keychain；网络未 403。
 - 预览（UI）：精确 commit `71f9a972…`；包 `hdsl-s4-gh-fixture-root@0.0.1`；manifest 摘要 `82a93265…`；脚本评估 `detected`，已枚举 4 个 root hook；执行器 `pnpm@11.7.0`；无沙箱警示包含“且不受 DSH 或 HDSL 沙箱保护”与“未授权时默认拒绝执行”；授权 checkbox 未勾选时“确认并授权安装”**disabled**。
-- 拒绝（未授权）：UI 按钮 disabled；API `changes.apply` 无 `buildAuthorization` ⇒ `BUILD_NOT_AUTHORIZED`；markers=0；组成/修订不变。
+- 拒绝（未授权）：UI 按钮 disabled；API `changes.apply` 无 `buildAuthorization` ⇒ `BUILD_NOT_AUTHORIZED`；组成/修订不变。marker 采样：授权 apply 之前清空后，经 preview 与未授权 apply，采样到 0 marker（`markersAfterRefusal=[]`）。
 - 显式授权：勾选后点击安装 ⇒“安装已提交：新代际 …”；markers **恰好 4 个**（`gh-root-preinstall/install/postinstall/prepare`）；`composition.lock` 含该插件；profile `pnpm-workspace.yaml`/`package.json` **无 `allowBuilds`/`onlyBuiltDependencies`**（授权配置不持久化）。
 - 精确范围（30 复核）：上一条指 **workspace 配置**；已发布代际的 `profile/node_modules/.modules.yaml` 保留 pnpm 自身 install-state 的 `allowBuilds`（一个精确键），属安装态而非 HDSL 授权载体，新代际不继承；其是否构成后续放行门未独立 probe，按记录不按“磁盘无任何 allowBuilds 字节”表述。
-- 漂移 + 旧授权（**API 级，如实分栏**：UI 不保留旧 plan）：以旧 base-v3 授权对 drift-v3 计划调 `changes.apply` ⇒ `AUTHORIZATION_MISMATCH`（执行前拒绝）；markers 仍为 4、**无 drift marker**。
+- 漂移 + 旧授权（**API 级，如实分栏**：UI 不保留旧 plan）：以旧 base-v3 授权（`{commitSha:71f9a972…, scripts: base4}`）对 drift-v3 计划（`commit a5d3e7e2…`）调 `changes.apply` ⇒ `AUTHORIZATION_MISMATCH`（**执行前拒绝**，未创建操作）。
+  - marker 采样边界：**未在漂移前后做受控清空/对照**，因此只能证明“**未出现新的 `gh-root-postinstall-drift.marker`**且原 4 文件仍在”，**不得**据此声称“原 4 hook 在 drift 上零执行”；“执行前拒绝”由上述 API 守卫证据支持。
+  - 旁证（非受控对照）：4 个 marker 的 mtime 与授权 apply 操作 `updatedAt` 一致，早于 drift preview，与“未被重写”一致。
 
 未覆盖：drift 旧授权的 **UI 跨 preview** 覆盖不可行，故该条为 API 级证据（不伪称界面覆盖）；未执行 start。
 
