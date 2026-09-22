@@ -1,0 +1,31 @@
+{
+  "schemaVersion": "1",
+  "pluginId": "hdsl-plugin-e2e-fixture",
+  "repository": "https://github.com/YingkeSu/hdsl-plugin-e2e-fixture",
+  "commitSha": "e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838",
+  "manifestSha256": "ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c",
+  "files": [
+    { "path": "README.md", "sha256": "9c59037693e2e7de28a102c5b32b073cf5a6b3f8635895f992df5bec3689c0c7" },
+    { "path": "cordis.patch.yml", "sha256": "6bb83e39e6fe843fc61dda6520d52262c453393856585e461b06eb7ada918211" },
+    { "path": "lib/index.mjs", "sha256": "a8cf6175a2ebcf9fc6538704c3b68de697012476c4b8f9446b49a902d8579263" },
+    { "path": "package.json", "sha256": "ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c" },
+    { "path": "pnpm-lock.yaml", "sha256": "17c814b167307942d3609c7b9d916ceddb85839573ab39baa114e30edb132a1a" }
+  ],
+  "manifestSha256Coverage": "package.json only (the plugin manifest at this exact commit)",
+  "observedContentSummary": "dsh.bundle.patch = ./cordis.patch.yml; the patch inserts one row (id hdsl-e2e-marker, name hdsl-plugin-e2e-fixture) with no inject; lib/index.mjs exports name/apply and writes one marker file under $DSH_HOME; no provide/inject/service registration and no third-party imports were observed by static reading",
+  "provenance": {
+    "method": "read-only git fetch of the exact public commit into a temporary directory; no install, no execution, no network beyond the fetch",
+    "obtainedAt": "2026-09-22",
+    "fetchedBy": "hdsl-32 (implementation worker)"
+  },
+  "review": {
+    "status": "pending",
+    "verifier": "hdsl-33 (independent QA service-behavior verification)",
+    "scope": [
+      "confirm at exactly this commit that the plugin registers/provides no Cordis service",
+      "confirm the dynamic-load boundary (default export/name/apply shape cannot register services at load time)",
+      "confirm the listed per-file and manifest digests match the reviewed source"
+    ],
+    "evidence": "awaiting hdsl-33 verdict; the catalog entry stays UNKNOWN until then (ADR 0005 D21)"
+  }
+}

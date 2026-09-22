@@ -50,19 +50,24 @@ export type ServiceVerificationLookup =
  * Frozen records. `pending` entries are intentionally NOT trusted yet: they only
  * document the exact source that an independent review must confirm (and the
  * manifest digest that must be recorded with it).
+ *
+ * The matching evidence files live in `catalog/service-verifications/<plugin>.json`
+ * (per-file and manifest SHA-256 of the reviewed exact commit, plus provenance).
  */
 export const SERVICE_VERIFICATION_RECORDS: readonly ServiceVerificationRecord[] = [
   {
     pluginId: 'hdsl-plugin-e2e-fixture',
     repository: 'https://github.com/YingkeSu/hdsl-plugin-e2e-fixture',
     commitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838',
-    // Filled only together with the confirmed review of that exact commit.
-    manifestSha256: '',
+    // Exact package.json digest of that commit, read-only fetched; the record
+    // stays `pending` until hdsl-33 confirms the reviewed source provides no
+    // services. Evidence: catalog/service-verifications/hdsl-plugin-e2e-fixture.json
+    manifestSha256: 'ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c',
     provides: [],
     review: {
       status: 'pending',
       evidence:
-        'independent review must confirm, at exactly this commit, that the reviewed source provides no Cordis services, then record its manifest digest',
+        'exact public commit fetched read-only; per-file + manifest SHA-256 recorded in catalog/service-verifications/hdsl-plugin-e2e-fixture.json; hdsl-33 must confirm the reviewed source registers/provides no Cordis service (incl. dynamic-load boundary) before status becomes confirmed',
     },
   },
 ];
