@@ -110,10 +110,10 @@ interface ChangeFaults {
 > **实现前必须闭合**（review `5774788522`）：E10b-1～4 + 全相位抛错/`SIGKILL` 原型 + M1–M3。未闭合不得开生产实现。
 
 **实现前（机制证据；仓库外废弃原型 / 入库 research 脚本）**
-- [x] E10b-1（部分）真实 boot：选定 `--profile <gen>` 后运行期加载集绑定于声明集（web-app 就绪行 marker；负控为**存活 no-ready** + loader 已运行，非崩溃）。**待收尾**：在 profile 内实际安装一个已审 bundle，并断言完整加载集合与摘要绑定。
+- [x] E10b-1（部分）真实 boot：选定 `--profile <gen>` 后 marker 是否出现绑定于声明集（web-app 就绪行）；负控 = **整窗存活 + 无 marker**（不排除存活但已加载）。**待收尾**：在 profile 内实际安装一个已审 bundle，并断言完整加载集合与摘要绑定。
 - [x] E10b-2 双代切换：A→B→A 各自加载自身集，互不污染。
-- [x] E10b-3 发布/切换崩溃窗口 W1–W5 + 真实子进程 `SIGKILL`/抛错（`staged`/`published`/`pointed`）：旧代 lock 字节不变；**指针引用者永不删**；W5 roll-forward。
-- [x] E10b-4 `profiles/node_modules` 回退 symlink：跨安装 per-boot heal，依赖单一活动代不变。
+- [x] E10b-3 发布/切换崩溃窗口 W1–W5 + 真子进程 `SIGKILL`/抛错（相位模型化；`staged`/`published`/`pointed`）：旧代 lock 字节不变；**指针引用者永不删**；W5 roll-forward。
+- [x] E10b-4 `profiles/node_modules` 回退 symlink：**同版本**不同安装路径 per-boot heal（profile 级回退 `none` 或当前安装已断言）；依赖单一活动代（须覆盖 start/restore/recover/迁移，按环境 home）；**跨版本未证**。
 - [x] 迁移四类崩溃分支 + 空环境/新环境分支（设计 + 部分原型）。
 - [x] M2 身份边界：身份取自 staged 声明源；live 派生状态排除；摘要不得从 live 重建；`restore` 重发布/复用规则。
 - [ ] E9：`--dump-config` 静态性（受控 bundle 代码执行 marker）——**未闭合**。

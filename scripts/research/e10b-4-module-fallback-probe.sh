@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 # E10b-4: `$DSH_HOME/profiles/node_modules` fallback behaviour when two
-# generations use DIFFERENT DSH installs but share one DSH_HOME (ADR 0006, #76).
+# generations use DIFFERENT INSTALL PATHS of the SAME DSH version (rc.2) but
+# share one DSH_HOME (ADR 0006, #76).
+#
+# SCOPE: this proves SAME-VERSION install-path switching (A -> B -> A). It does
+# NOT prove cross-version behaviour (two different DSH versions sharing a home);
+# version change is out of scope for this phase and must not be claimed.
 #
 # The home-level fallback `$DSH_HOME/profiles/node_modules` is a set of symlinks
 # into the running DSH install. This probe boots generation A with install copy
@@ -79,18 +84,27 @@ echo "                            genB profile fallback -> ${PB1/#$WORK/<work>}"
 
 boot installA genA
 TARGET_A2="$(fallback_target)"
+PA2="$(profile_fallback_target genA)"
 echo "after re-boot genA (installA): home fallback -> ${TARGET_A2/#$WORK/<work>}"
+echo "                            genA profile fallback -> ${PA2/#$WORK/<work>}"
 
 fail=0
 case "$TARGET_A1" in *"/installA/"*) ;; *) echo "FAIL: after boot genA the shared fallback does not resolve into installA ($TARGET_A1)"; fail=1;; esac
 case "$TARGET_B" in *"/installB/"*) ;; *) echo "FAIL: after boot genB the shared fallback does not resolve into installB ($TARGET_B)"; fail=1;; esac
 case "$TARGET_A2" in *"/installA/"*) ;; *) echo "FAIL: shared fallback not healed back to installA on re-boot ($TARGET_A2)"; fail=1;; esac
+# A profile-level fallback may legitimately be absent; if present it must point
+# into the install that last booted that profile.
+case "$PA1" in none|"") ;; *"/installA/"*) ;; *) echo "FAIL: genA profile fallback is neither none nor installA ($PA1)"; fail=1;; esac
+case "$PB1" in none|"") ;; *"/installB/"*) ;; *) echo "FAIL: genB profile fallback is neither none nor installB ($PB1)"; fail=1;; esac
+case "$PA2" in none|"") ;; *"/installA/"*) ;; *) echo "FAIL: genA profile fallback after re-boot is neither none nor installA ($PA2)"; fail=1;; esac
 [ "$fail" -eq 0 ] || { echo "RESULT: FAIL"; exit 1; }
 
-echo "RESULT: PASS — the shared \$DSH_HOME/profiles/node_modules fallback is healed per boot"
-echo "        to the currently booting generation's DSH install."
-echo "NOTE: the fallback FLAPS between installs across boots; correctness depends on the"
-echo "      single-active-generation invariant (HDSL already forbids concurrent start/change)."
+echo "RESULT: PASS — SAME-VERSION install-path switching (A->B->A): the shared"
+echo "        \$DSH_HOME/profiles/node_modules fallback is healed per boot to the booting"
+echo "        generation's DSH install. Cross-version behaviour is NOT proven."
+echo "NOTE: the fallback FLAPS between install paths across boots; correctness depends on the"
+echo "      single-active-generation invariant, which must cover start/restore/recover/migration"
+echo "      and is enforced per environment home (each environment has its own home/profile root)."
 echo "      Concurrent boots of two generations would race this shared path and are out of scope."
 echo "NOTE: identity boundary (M2): the fallback symlinks are derived runtime state, not composition"
 echo "      identity; composition digests must never be rebuilt from the live home."

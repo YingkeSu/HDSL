@@ -1,23 +1,24 @@
 #!/usr/bin/env bash
-# E10b runtime marker probe: does the SELECTED --profile actually determine the
-# runtime-loaded bundle set, across two generations sharing one DSH_HOME?
+# E10b runtime marker probe: does the SELECTED --profile determine whether the
+# web-app runtime marker appears, across two generations sharing one DSH_HOME?
 #
 # For ADR 0006 §2.3 / E10b (#76). Uses a fixed-integrity DSH 0.1.5-rc.2 managed
 # install (own copy), one shared DSH_HOME, two profiles with different in-box
 # bundle sets, and the web-app runtime readiness line as the marker:
 #
 #   "dsh web: http://127.0.0.1:<port>/?token=…"  (printed only after the Loader
-#   tree settled, i.e. only when @deepseek-ai/dsh-web-app is actually loaded)
+#   tree settled with the web app mounted)
 #
 # It runs no third-party plugin code, no model and uses no personal credentials.
 # Tokens are masked in captured output. The supplied generation directory is
 # never modified (only copied with clonefile when available).
 #
-# What it proves: runtime binding of the selected profile's declared bundle set,
-# profile independence under one home, and switch-back. What it does NOT prove:
-# `--dump-config` equivalence (E9) is irrelevant here (this is real boot), but
-# publish/switch atomicity + crash recovery are covered separately by
-# `e10b-publish-crash-prototype.mjs`, and HDSL production wiring is still open.
+# What it proves: the selected profile controls whether the web-app marker
+# appears, profiles are independent, and switch-back works. What it does NOT
+# prove: the full runtime-loaded set (the marker is one bundle's readiness line);
+# an empty negative-control log is NOT boot evidence; "alive with no marker" does
+# not exclude "alive but loaded". Publish/switch atomicity + crash recovery are
+# covered separately by the sibling prototypes, and HDSL production wiring is open.
 #
 # Usage:
 #   scripts/research/dsh-profile-runtime-marker-probe.sh <generation-directory>
@@ -131,35 +132,38 @@ A_AFTER="$(read_bundles genA)"
 B_AFTER="$(read_bundles genB)"
 PROFILE_FILES="$(ls "$WORK/home/profiles/genA" | tr '\n' ' ')"
 
-# Evidence: masked log tails + loader side effect for the negative control.
+# Evidence: masked log tails. NOTE: an empty genB log is NOT boot evidence;
+# the negative control only establishes "the marker never appeared while the process
+# stayed alive". It does NOT exclude "alive but actually loaded"; this probe does not
+# measure the full runtime-loaded set.
 echo "--- masked log tails ---"
 for p in genA genB; do
   printf '  %s: %s\n' "$p" "$(tail -c 300 "$WORK/$p.log" 2>/dev/null | mask | tr '\n' ' ')"
 done
-LOADER_RAN_B="$([ -f "$WORK/home/profiles/genB/cordis.yml" ] && echo yes || echo no)"
 
 fail=0
 [ "$(field "$A1" 1)" = "ready" ] || { echo "FAIL: genA did not reach runtime readiness ($A1)"; fail=1; }
-# Negative control: must be live-but-no-marker, never a crash/exit.
+# Negative control: exactly no-ready, and the process must stay alive for the whole
+# window (an exit/crash is a distinct failing outcome, never "not loaded").
 [ "$(field "$B1" 1)" = "no-ready" ] || { echo "FAIL: genB must be a live no-ready negative control, got $B1"; fail=1; }
-[ "$(field "$B1" 2)" = "yes" ] || { echo "FAIL: genB exited (exit $(exitcode "$B1")) instead of staying live; cannot claim 'not loaded'"; fail=1; }
-[ "$LOADER_RAN_B" = "yes" ] || { echo "FAIL: genB loader did not run (no cordis.yml), negative control is vacuous"; fail=1; }
+[ "$(field "$B1" 2)" = "yes" ] || { echo "FAIL: genB exited (exit $(exitcode "$B1")) instead of staying live"; fail=1; }
 [ "$(field "$A2" 1)" = "ready" ] || { echo "FAIL: switch-back to genA did not reach readiness ($A2)"; fail=1; }
 [ "$A_AFTER" = "$BUNDLES_A" ] || { echo "FAIL: genA bundles changed after genB boot"; fail=1; }
 [ "$B_AFTER" = "$BUNDLES_B" ] || { echo "FAIL: genB bundles changed after genA boot"; fail=1; }
 
 if [ "$fail" -ne 0 ]; then
-  echo "genA1=$A1 genB=$B1 genA2=$A2 loaderRanGenB=$LOADER_RAN_B"
+  echo "genA1=$A1 genB=$B1 genA2=$A2"
   echo "RESULT: FAIL"
   exit 1
 fi
 
 MARGIN_A=$((READY_TIMEOUT - $(field "$A1" 4 | tr -d 's')))
-echo "genA1=$A1 genB=$B1 genA2=$A2 loaderRanGenB=$LOADER_RAN_B"
-echo "RESULT: PASS — the selected --profile determines the runtime-loaded bundle set;"
+echo "genA1=$A1 genB=$B1 genA2=$A2"
+echo "RESULT: PASS — the selected --profile determines whether the web-app marker appears;"
 echo "        two profiles in one DSH_HOME are independent and switchable."
-echo "negative control: genB live no-ready for the full ${READY_TIMEOUT}s window (exit code $(exitcode "$B1")), loader ran, so 'not loaded' is not a crash;"
-echo "margin: web-app marker appeared in $(field "$A1" 4) vs ${READY_TIMEOUT}s window (${MARGIN_A}s spare)."
+echo "negative control: genB stayed alive with no marker for the full ${READY_TIMEOUT}s window (exit code $(exitcode "$B1"));"
+echo "  this does NOT exclude 'alive but loaded' and an empty genB log is not boot evidence."
+echo "margin: marker appeared in $(field "$A1" 4) vs ${READY_TIMEOUT}s window (${MARGIN_A}s spare)."
 echo "profile files after boot: $PROFILE_FILES"
 echo "NOTE: DSH rewrites <profile>/cordis.yml on boot; a profile dir is mutable runtime state,"
 echo "      so it belongs in the shared home, not inside an immutable committed generation dir."

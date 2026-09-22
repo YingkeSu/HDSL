@@ -12,6 +12,9 @@
  * pointer is authoritative, the journal only identifies a pending transaction,
  * GC is confined to the `hdsl-` namespace.
  *
+ * The phases are MODELLED (a tiny worker performs the filesystem steps); only
+ * the signal is real. This does not stand in for a real HDSL transaction.
+ *
  * Usage: node scripts/research/e10b-phase-kill-prototype.mjs
  */
 import { spawn } from 'node:child_process';

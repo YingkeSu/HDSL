@@ -83,7 +83,7 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 - **原子 rename → 部分发布不可达**：W2（部分写入的已发布 profile）仅为防御性（若将来改用非原子 copy 发布）；发布必须是单次 `rename`。
 - 上述仅为排序语义，不含 fsync/持久性保证。
 
-**跨代 DSH 安装的回退 symlink（E10b-4）**：`scripts/research/e10b-4-module-fallback-probe.sh` 用两个自有 rc.2 安装副本 + 共享 home，真 boot 验证：`$DSH_HOME/profiles/node_modules` 的 symlink 会**每次 boot 被重新治愈（heal）**到**当前 boot 的代际安装**（A→A、B→B、再 A→A）。结论：共享回退路径会随 boot **摆动**，正确性依赖**单一活动代**不变（HDSL 已禁止并发 start/change）；并发 boot 会竞态该路径，不在范围内。
+**同版本不同安装路径的回退 symlink（E10b-4）**：`scripts/research/e10b-4-module-fallback-probe.sh` 用**同一 rc.2 版本**的两个自有安装副本（不同路径）+ 共享 home，真 boot 验证：`$DSH_HOME/profiles/node_modules` 的 symlink 会**每次 boot 被重新治愈（heal）**到**当前 boot 的代际安装路径**（A→A、B→B、再 A→A）。**仅证明同版本范围**；**跨版本未证**（本期版本更换已排除，不得声称支持）。结论：共享回退路径会随 boot **摆动**，正确性依赖**单一活动代**不变；该不变式必须覆盖 `start`/`restore`/`recover`/迁移，且按**环境各自 home** 强制执行；并发 boot 会竞态该路径，不在范围内。
 
 **身份边界（组成身份取自不可变声明源）**：
 
@@ -92,7 +92,7 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 - **组成锁/摘要绝不得从 live profile 重建**（否则每次 boot 摘要漂移，D13 的来源锁与旧代绑定失效）；复核只读 staged/不可变源。
 - `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile（覆盖 live 派生状态）；仅当 live 声明源与身份逐字节一致时才可复用现有 profile。
 
-证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture，负控为**存活且 no-ready** + loader 已运行，非崩溃）；崩溃/杀进程与 E10b-4 为**原型/`raw`**（自有副本，非生产）。
+证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture；负控仅“整窗存活 + 无 marker”，**不排除存活但已加载**，空日志不是 boot 证据）；崩溃/杀进程与 E10b-4 为**原型/`raw`**（自有副本；相位为模型化、仅信号真实；E10b-4 仅限同版本不同安装路径），均非生产。
 
 **候选机制（仍不预选；P-A 为当前证据支持方向）**：
 
@@ -217,7 +217,7 @@ interface ChangeFaults {
 
 ## 7. 未决与后续闸门（不得当作已实现）
 
-- **E10b 未关（阻塞 D18-2/D15 的插件集部分）**：§2.3 已在固定 rc.2 上（真实 boot）证明 `--profile` 选择 profile 且 web-app marker 绑定于所选 profile 的 bundle 集；废弃原型验证 P-A 的发布/切换崩溃窗口、真 `SIGKILL`/抛错各相位、E10b-4 回退 symlink heal，并定下对账规则（指针权威、journal 仅识别待处理事务、GC 限 `hdsl-` 命名空间）。但**HDSL 生产启动 argv/提交顺序未接线**，双代端到端（真实 HDSL 事务 + 真实 boot）未证。候选机制 P-A 为当前证据支持方向，P-B **不预判 symlink 安全**。实现前 checklist（S2 §6.1）除 E9 外已闭合；E10b 未关前不得宣称旧代加载其自身组成。
+- **E10b 未关（阻塞 D18-2/D15 的插件集部分）**：§2.3 已在固定 rc.2 上（真实 boot）证明 `--profile` 选择 profile 且 web-app marker 绑定于所选 profile 的 bundle 集；废弃原型验证 P-A 的发布/切换崩溃窗口、真 `SIGKILL`/抛错各相位（相位模型化），**同版本**不同安装路径的 E10b-4 回退 symlink heal，并定下对账规则（指针权威、journal 仅识别待处理事务、GC 限 `hdsl-` 命名空间）。但**HDSL 生产启动 argv/提交顺序未接线**，双代端到端（真实 HDSL 事务 + 真实 boot）未证；**跨版本未证**且在本期之外。候选机制 P-A 为当前证据支持方向，P-B **不预判 symlink 安全**。实现前 checklist（S2 §6.1）除 E9 外已闭合；E10b 未关前不得宣称旧代加载其自身组成。
 - **E9 未证**：`--dump-config` 的静态性（不 require/执行 bundle 模块）以及"离线解析组合树 == 运行期实际加载集合"的等价性仍未验证。本片的 E10b 运行时 marker（§2.3）证明的是"真实 boot 加载 web-app bundle"，**不能**替代 E9（它没有证明 dump-config 与运行时加载集合逐项等价，也未做 bundle 代码执行 marker）。在 E9 前，生效判据仍只写"活动代际记录 + 离线解析组合树"。
 - **受管 pnpm 身份（E1）**：候选 `11.7.0` 仍未以受管方式冻结。本片只做了一次有界只读**网络**官方来源核对：`npm view pnpm@11.7.0`（`https://registry.npmjs.org/pnpm`）返回 `11.7.0`、`dist.integrity = sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、`engines.node >= 22.13`。这是官方来源/版本约束核对，**不是**受管执行器冻结证据：仍需 S2 决定 HDSL 如何随包固定该 tarball 并在 apply 时校验摘要；宿主 pnpm `11.7.0` 不作为证据。
 - **上游 home 数据版本兼容（§4.2 条件 4）**：需真实 session 迁移实验；当前只到格式版本/home 形态证据。
@@ -238,10 +238,10 @@ interface ChangeFaults {
 - 实证：
   - `scripts/research/home-derivation-probe.mjs`（合成运行时 + 真实 `@hdsl/core` dist，零网络）在 macOS ARM64、Node `24.21.0` 上 **11/11 通过**：只证明事务删除作用域与指针提交点。
   - `scripts/research/dsh-profile-mechanism-probe.sh`（自有副本 + 已核身份的真实 rc.2 安装）实测 P1–P3：`--profile <name>` 选 `$DSH_HOME/profiles/<name>`，bundle 集来自 profile `package.json`，两个 profile 并存被各自选中。
-  - `scripts/research/dsh-profile-runtime-marker-probe.sh`（真实 boot、自有 fixture、零模型/凭据）：web-app 就绪行作运行时 marker，证明选定 `--profile` 决定运行期加载集，A→B(base-only，**存活 no-ready 负控**)→A 可切换且互不影响。
+  - `scripts/research/dsh-profile-runtime-marker-probe.sh`（真实 boot、自有 fixture、零模型/凭据）：web-app 就绪行作运行时 marker，证明选定 `--profile` 决定 marker 是否出现（**非完整加载集合**）；负控 = 整窗存活 + 无 marker（**不排除**存活但已加载）；A→B→A 可切换且互不影响。
   - `scripts/research/e10b-publish-crash-prototype.mjs`（**废弃原型**）7/7：W1–W5（含指针已切/journal 未 committed）+ `hdsl-` 命名空间 GC + `web` 负控。
-  - `scripts/research/e10b-phase-kill-prototype.mjs`（**废弃原型**，真子进程 `SIGKILL`/抛错）6/6。
-  - `scripts/research/e10b-4-module-fallback-probe.sh`（两个自有 rc.2 副本 + 共享 home）PASS：`profiles/node_modules` 每次 boot heal 到当前代际安装。
+  - `scripts/research/e10b-phase-kill-prototype.mjs`（**废弃原型**；相位模型化，仅信号真实）6/6。
+  - `scripts/research/e10b-4-module-fallback-probe.sh`（**同一 rc.2 版本**的两个自有安装副本 + 共享 home）PASS：`profiles/node_modules` 每次 boot heal 到当前代际安装**路径**；**跨版本未证**。
 - 记录见 [plugin-home-derivation-validation.md](../development/plugin-home-derivation-validation.md)。
 - 未验证：**E10b 生产接线与双代端到端未证**；E1、E9、E2/E4/E5/E6/E7 与真实安装/桌面路径未证。本片运行了固定完整性 rc.2 自身的真实 boot（自有副本、无第三方插件代码），未调用模型、未读个人凭据。
 - 本 ADR 不关闭 #76，也不宣称 #76 门禁已满足（E10b 与 S2 实现仍需后续；见 §7）。

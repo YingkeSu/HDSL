@@ -110,7 +110,7 @@ negative control: genB live no-ready for the full 25s window (exit code -), load
 margin: web-app marker appeared in 4s vs 25s window (21s spare).
 ```
 
-**能证明**：真实 boot（非 `--dump-config`）下运行期加载集绑定于所选 `--profile` 的声明 bundle 集；两代 profile 在同一 home 下独立且可切换。**负控强度**（review M1）：`genB` 必须显式 `no-ready` 且**窗口内进程存活**（`exited`/非零退出判 FAIL）、loader 确实运行（`<profile>/cordis.yml` 存在）；输出保留脱敏日志尾部与退出码。“未加载”不是“崩溃”。**不能证明**：完整加载集合与组成摘要的逐项绑定（web-app 就绪 line 是单一 marker）；HDSL 生产启动 argv/提交顺序已接线；也**不**替代 E9。
+**能证明**：真实 boot（非 `--dump-config`）下运行期加载集绑定于所选 `--profile` 的声明 bundle 集；两代 profile 在同一 home 下独立且可切换。**负控强度**（review M1，路线 b）：`genB` 必须显式 `no-ready` 且**整窗进程存活**（`exited`/非零退出判 FAIL）；**不再**用 `cordis.yml` 存在推断 loader 运行。负控只建立“**进程整窗存活但 marker 未出现**”；**不排除“存活但实际已加载”**，且 `genB` 日志为空**不构成 boot 证据**。输出保留脱敏日志尾部与退出码。**不能证明**：完整加载集合与组成摘要的逐项绑定（web-app 就绪 line 是单一 marker）；HDSL 生产启动 argv/提交顺序已接线；也**不**替代 E9。
 
 **附带发现**：DSH 每次 boot **重写** `<profile>/cordis.yml` → profile 目录是可变运行状态，不应放进"不可变已提交代"目录（支持 P-A）。
 
@@ -135,7 +135,7 @@ PASS N2 GC confined to hdsl- namespace (non-managed name refused)
 
 ## 证据 5：真实子进程 `SIGKILL`/抛错各相位（废弃原型）
 
-`scripts/research/e10b-phase-kill-prototype.mjs` 真实 spawn `e10b-phase-worker.mjs`，在各可达相位发真 `SIGKILL`（观察 `signal==='SIGKILL'`）或让其抛错：
+`scripts/research/e10b-phase-kill-prototype.mjs` **真实 spawn** `e10b-phase-worker.mjs`，在各可达相位发真 `SIGKILL`（观察 `signal==='SIGKILL'`）或让其抛错。**相位为模型化**（worker 执行文件系统步骤），**仅信号真实**；非生产，不代表真实 HDSL 事务。
 
 ```text
 PASS KILL@staged: signal=SIGKILL active=gen1 oldGenKept=true actions=[removed stage gen2]
@@ -149,19 +149,20 @@ PASS THROW@pointed: exit=1 active=gen2 newProfileKept=true actions=[roll-forward
 
 **能证明（原型级）**：真 `SIGKILL` 与抛错在各相位后，旧代 lock 字节不变、旧代保留；提交点后的失败（`pointed`）roll-forward 而非谎报回滚。**不能证明**：真实 HDSL 事务/journal 接线的 `recover()`。
 
-## 证据 6（E10b-4）：跨代 DSH 安装的回退 symlink
+## 证据 6（E10b-4）：同版本不同安装路径的回退 symlink（A→B→A）
 
-`scripts/research/e10b-4-module-fallback-probe.sh`：两个自有 rc.2 安装副本 + 共享 home，真 boot：
+`scripts/research/e10b-4-module-fallback-probe.sh`：**同一 rc.2 版本**的两个自有安装副本（不同路径）+ 共享 home，真 boot：
 
 ```text
-after boot genA (installA): home fallback -> <work>/installA/node_modules/@deepseek-ai/dsh
-after boot genB (installB): home fallback -> <work>/installB/node_modules/@deepseek-ai/dsh
-after re-boot genA (installA): home fallback -> <work>/installA/node_modules/@deepseek-ai/dsh
-RESULT: PASS — the shared $DSH_HOME/profiles/node_modules fallback is healed per boot
-        to the currently booting generation's DSH install.
+after boot genA (installA): home fallback -> <work>/installA/node_modules/@deepseek-ai/dsh; profile fallback -> none
+after boot genB (installB): home fallback -> <work>/installB/node_modules/@deepseek-ai/dsh; profile fallback -> none
+after re-boot genA (installA): home fallback -> <work>/installA/node_modules/@deepseek-ai/dsh; profile fallback -> none
+RESULT: PASS — SAME-VERSION install-path switching (A->B->A): the shared
+        $DSH_HOME/profiles/node_modules fallback is healed per boot to the booting
+        generation's DSH install. Cross-version behaviour is NOT proven.
 ```
 
-**能证明**：共享回退路径每次 boot 被治愈到当前代际安装（A→A、B→B、再 A→A）。**设计含义**：该路径会随 boot 摆动，正确性依赖**单一活动代**不变（HDSL 已禁止并发 start/change）；并发 boot 竞态不在范围。**身份边界**：回退 symlink 是 live 派生状态，不参与组成身份。
+**能证明（同版本范围）**：共享回退路径每次 boot 被治愈到当前代际安装路径（A→A、B→B、再 A→A）；profile 级回退允许 `none`，若有则必须指向当前安装（已断言）。**不能证明**：**跨版本**行为（两个不同 DSH 版本共享同一 home）——本期版本更换已排除，不得声称支持。**设计含义**：该路径会随 boot 摆动，正确性依赖**单一活动代**不变；该不变式必须覆盖 **`start`/`restore`/`recover`/迁移**，且按**环境各自 home** 强制执行（每环境自有 home/profile 根）；并发 boot 竞态不在范围。**身份边界**：回退 symlink 是 live 派生状态，不参与组成身份。
 
 
 - 探针 1/2：**零网络**（合成 fixture / 自有副本上的本地 dump）。
