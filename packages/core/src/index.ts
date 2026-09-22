@@ -33,3 +33,4 @@ export * from './creation-service.js';
 export * from './contract-port.js';
 export * from './managed-install.js';
 export * from './plugin-removal.js';
+export * from './installed-plugins.js';

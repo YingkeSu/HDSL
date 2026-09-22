@@ -7,6 +7,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   API_VERSION,
+  changePlanActionSchema,
   createContractRuntime,
   type ContractPort,
   type InstalledPluginsView,
@@ -55,6 +56,39 @@ describe('plugins.installed', () => {
     const response = dispatch(port, 'env-does-not-exist');
     expect(response.ok).toBe(false);
     if (!response.ok) expect(response.error.code).toBe('NOT_FOUND');
+  });
+
+  it('accepts SCOPED npm package names (real in-box bundles) for installed plugins and remove targets', () => {
+    // The current managed DSH install ships `@deepseek-ai/*` bundles; the removal
+    // negative control must be able to name them exactly.
+    const base = new ReferenceContractPort(FIXTURE_SEED);
+    const port = {
+      ...base,
+      host: base.host,
+      listInstalledPlugins: (environmentId: string) => ({
+        ok: true as const,
+        value: {
+          environmentId,
+          revision: 3,
+          generationId: 'gen-x',
+          plugins: [
+            { id: '@deepseek-ai/dsh-base', version: '0.1.5-rc.2', sha256: 'a'.repeat(64), isBuiltin: true, enabledBundle: true, source: null },
+          ],
+        },
+      }),
+    } as unknown as ContractPort;
+    const response = dispatch(port, FIXTURE_IDS.environment.running);
+    expect(response.ok).toBe(true);
+    if (response.ok) {
+      expect((response.value as InstalledPluginsView).plugins[0]?.id).toBe('@deepseek-ai/dsh-base');
+    }
+
+    const issues: { path: string; message: string }[] = [];
+    expect(changePlanActionSchema({ kind: 'remove', pluginId: '@deepseek-ai/dsh-base' }, 'action', issues)).toEqual({
+      kind: 'remove',
+      pluginId: '@deepseek-ai/dsh-base',
+    });
+    expect(issues).toEqual([]);
   });
 
   it('never silently truncates: a port value above the bound is a controlled failure', () => {

@@ -226,9 +226,17 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
       version: resolution.sourceLock.packageVersion,
       sha256: pluginDigest,
     };
+    // Record the non-digest SOURCE provenance so a later removal can re-verify the
+    // exact repository/commit/manifest identity instead of inventing trust from
+    // live files (ADR 0005 D13/D21). It never changes the composition digest.
+    const pluginSources = {
+      ...(command.currentLock.pluginSources ?? {}),
+      [resolution.sourceLock.packageName]: resolution.sourceLock,
+    };
     const compositionLock: CompositionLock = {
       ...command.currentLock,
       plugins: [...command.currentLock.plugins, plugin],
+      pluginSources,
     };
     return portOk({
       compositionLock,

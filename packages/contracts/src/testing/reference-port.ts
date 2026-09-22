@@ -25,6 +25,7 @@ import type {
 } from '../context.js';
 import { portFail, portOk } from '../context.js';
 import type {
+  ChangePlan,
   EnvironmentSummary,
   ExportResult,
   GenerationSummary,
@@ -62,6 +63,13 @@ export interface ReferenceSeed {
     readonly result?: PluginInspection;
     readonly failure?: ErrorCode;
   };
+  /** Seeded `plugins.installed` view per environment id (else an empty list). */
+  readonly installedPlugins?: Readonly<Record<string, InstalledPluginsView>>;
+  /** Terminal payload (or controlled failure) for a remove `changes.preview`. */
+  readonly removal?: {
+    readonly plan?: ChangePlan;
+    readonly failure?: ErrorCode;
+  };
 }
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:53123';
@@ -84,6 +92,8 @@ export class ReferenceContractPort implements ContractPort {
   readonly #webUIOriginOverride: string | undefined;
   readonly #pluginSearch: ReferenceSeed['pluginSearch'];
   readonly #pluginInspection: ReferenceSeed['pluginInspection'];
+  readonly #installedPlugins: ReferenceSeed['installedPlugins'];
+  readonly #removal: ReferenceSeed['removal'];
   #environmentCounter = 0;
   #operationCounter = 0;
   #exportCounter = 0;
@@ -106,6 +116,8 @@ export class ReferenceContractPort implements ContractPort {
     this.#webUIOriginOverride = seed.webUIOriginOverride;
     this.#pluginSearch = seed.pluginSearch;
     this.#pluginInspection = seed.pluginInspection;
+    this.#installedPlugins = seed.installedPlugins;
+    this.#removal = seed.removal;
   }
 
   listCatalog(): PortOutcome<readonly RuntimeCombination[]> {
@@ -124,6 +136,10 @@ export class ReferenceContractPort implements ContractPort {
     const environment = this.#environments.get(environmentId);
     if (environment === undefined) {
       return portFail('NOT_FOUND', 'environment was not found');
+    }
+    const seeded = this.#installedPlugins?.[environmentId];
+    if (seeded !== undefined) {
+      return portOk(seeded);
     }
     // The reference double records no plugin composition; the empty list is the
     // explicit controlled value (never a fabrication of installed plugins).
@@ -312,7 +328,42 @@ export class ReferenceContractPort implements ContractPort {
       return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
     }
     if (command.action.kind !== 'install') {
-      return portFail('UNSUPPORTED_COMBINATION', 'remove preview is not supported in this slice (S3)');
+      // S3 remove preview: a deterministic, fully-shaped remove plan so consumers
+      // (renderer, e2e) can exercise the removal branches against the double. A
+      // seed may supply its own plan (e.g. blocked) or force a controlled failure
+      // (e.g. BUILTIN_BUNDLE_PROTECTED).
+      if (this.#removal?.failure !== undefined) {
+        const failed = this.#recordPluginOperation('preview', { status: 'failed', error: this.#removal.failure });
+        this.effects.push(`previewChange:${failed.id}`);
+        return portOk({ operationId: failed.id });
+      }
+      const removePlan = this.#removal?.plan ?? {
+        planId: 'plan-0000000000000002',
+        environmentId: command.environmentId,
+        baseRevision: command.expectedRevision,
+        action: command.action,
+        createdAt: '2026-09-20T00:00:00.000Z',
+        expiresAt: '2026-09-20T00:15:00.000Z',
+        sourceLock: null,
+        scriptAssessment: 'none-detected' as const,
+        scripts: [],
+        requiresBuildAuthorization: false,
+        riskItems: [
+          'no static reference does not prove the removal is free of impact (service-level coupling is not decidable from patch files)',
+        ],
+        removals: [`dependency entry ${command.action.pluginId}@1.0.0`, `enabled bundle reference ${command.action.pluginId}`],
+        retention: [
+          'user patch layer (home cordis.patch.yml)',
+          'environment data (home/ and data/)',
+          'shared/transitive dependencies remain in the profile lock',
+        ],
+        blockingReferences: [],
+        executor: null,
+        planInputsDigest: 'd'.repeat(64),
+      };
+      const removeOperation = this.#recordPluginOperation('preview', { status: 'succeeded', output: removePlan });
+      this.effects.push(`previewChange:${removeOperation.id}`);
+      return portOk({ operationId: removeOperation.id });
     }
     const plan = {
       planId: 'plan-0000000000000001',

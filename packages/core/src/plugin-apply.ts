@@ -44,7 +44,8 @@ import { OperationStore, isTerminalStatus, toOperationSnapshot } from './operati
 import { managedProfileName, publishGenerationProfile } from './generation-profile.js';
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
 import { reuseGenerationRuntime } from './generation-runtime-reuse.js';
-import { readTargetProfileCache } from './target-profile-cache.js';
+import { readTargetProfileCache, readTargetProfileCacheForRemoval } from './target-profile-cache.js';
+import { buildRemovalResolveInput, type PluginRemovalPort } from './plugin-removal.js';
 import { ensureDirectory, readDirectoryNames, removePath, tryReadJsonFile, writeJsonAtomic } from './fsx.js';
 import { newGenerationId, newOperationId, newTransactionId } from './ids.js';
 
@@ -115,6 +116,12 @@ export interface ChangeApplyServiceOptions {
   readonly operations: OperationStore;
   readonly compositionDigest: (lock: CompositionLock) => string;
   readonly port?: PluginApplyPort;
+  /**
+   * Removal adapter (S3). When `plan.action.kind === 'remove'` the transaction
+   * re-resolves + installs the pruned target profile through this port; when
+   * absent, a remove plan fails controllably before any write.
+   */
+  readonly removalPort?: PluginRemovalPort;
   /** Reuses the existing managed-install identity verification for the copied runtime. */
   readonly verifyGenerationRuntime?: (input: {
     readonly manifestPath: string;
@@ -165,6 +172,7 @@ export class ChangeApplyService {
   readonly #operations: OperationStore;
   readonly #compositionDigest: (lock: CompositionLock) => string;
   readonly #port: PluginApplyPort | undefined;
+  readonly #removalPort: PluginRemovalPort | undefined;
   readonly #now: () => Date;
   readonly #faults: ChangeFaults;
   readonly #verifyGenerationRuntime:
@@ -181,6 +189,7 @@ export class ChangeApplyService {
     this.#operations = options.operations;
     this.#compositionDigest = options.compositionDigest;
     this.#port = options.port;
+    this.#removalPort = options.removalPort;
     this.#now = options.now ?? (() => new Date());
     this.#faults = options.faults ?? {};
     this.#verifyGenerationRuntime = options.verifyGenerationRuntime;
@@ -242,8 +251,11 @@ export class ChangeApplyService {
     if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId)) {
       return portFail('ENVIRONMENT_BUSY', 'another change transaction is in progress for this environment');
     }
-    if (this.#port === undefined) {
-      return portFail('INTERNAL_ERROR', 'the change apply transaction is not wired');
+    if (guarded.value.action.kind === 'install' && this.#port === undefined) {
+      return portFail('INTERNAL_ERROR', 'the install apply transaction is not wired');
+    }
+    if (guarded.value.action.kind === 'remove' && this.#removalPort === undefined) {
+      return portFail('INTERNAL_ERROR', 'the removal apply transaction is not wired');
     }
     const operationId = newOperationId();
     const generationId = newGenerationId();
@@ -559,6 +571,13 @@ export class ChangeApplyService {
         this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the active generation has no composition lock');
         return;
       }
+      if (plan.action.kind === 'remove') {
+        // The removal transaction shares the runtime copy, journal, revision
+        // re-validation, publish and commit path with install; only the lock
+        // composition and the profile materialisation differ.
+        await this.#runRemovalCommit(command, plan, ids, paths, currentLock, activeGenerationId, writeJournal, signal);
+        return;
+      }
       // A plan that binds a target profile must have a verified cache entry; a
       // missing/tampered/mismatched cache fails closed before any execution.
       let targetProfile: { lockText: string; declarationText: string; workspaceText: string | null } | undefined;
@@ -667,6 +686,141 @@ export class ChangeApplyService {
       this.#controllers.delete(ids.operationId);
       this.#inFlight.delete(command.environmentId);
     }
+  }
+
+  async #runRemovalCommit(
+    command: ApplyChangeCommand,
+    plan: ChangePlan,
+    ids: { readonly operationId: string; readonly generationId: string; readonly transactionId: string },
+    paths: ReturnType<typeof generationPaths>,
+    currentLock: CompositionLock,
+    activeGenerationId: string,
+    writeJournal: (phase: ChangePhase, sourceLock: PluginSourceLock | null) => void,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (plan.action.kind !== 'remove') {
+      return;
+    }
+    const pluginId = plan.action.pluginId;
+    const removalPort = this.#removalPort;
+    if (removalPort === undefined) {
+      this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the removal apply transaction is not wired');
+      return;
+    }
+    // Bind the plan to the pruned declaration the preview cached. A missing or
+    // tampered cache never triggers execution.
+    const cached = readTargetProfileCacheForRemoval(this.#layout, plan.planId, {
+      declarationSha256: plan.planInputsDigest,
+    });
+    if (!cached.ok) {
+      this.#rollbackJournal(ids, cached.code, cached.message);
+      return;
+    }
+    const built = buildRemovalResolveInput({
+      layout: this.#layout,
+      environment: { id: command.environmentId, activeGenerationId },
+      pluginId,
+      stagingKey: ids.transactionId,
+      readJson: (path) => tryReadJsonFile<unknown>(path),
+    });
+    if (!built.ok) {
+      this.#rollbackJournal(ids, built.code, built.message);
+      return;
+    }
+    // applyRemoval re-resolves with the SAME derivation (re-reading the user
+    // patch and every reference source) and refuses a plan whose pruned
+    // declaration/lock drifted. All comparisons happen before any commit.
+    const applied = await removalPort.applyRemoval(
+      {
+        pluginId,
+        resolve: built.value.resolve,
+        planDeclarationText: cached.value.declarationText,
+        planLockText: cached.value.lockText,
+        generationDirectory: paths.generationDirectory,
+        homeDirectory: built.value.context.homeDirectory,
+        nodeExecutable: built.value.context.nodeExecutable,
+      },
+      signal,
+    );
+    if (!applied.ok) {
+      this.#rollbackJournal(ids, applied.code, applied.message);
+      return;
+    }
+    writeJournal('staged', null);
+    if (this.#fault(ids.operationId, 'staged')) {
+      return;
+    }
+
+    // Only the removed plugin's own entries are dropped: every other composition
+    // identity (runtime, sources, retained plugins) is reused verbatim, and any
+    // shared/transitive dependency legitimately stays in the pruned lock.
+    const pluginSources = currentLock.pluginSources;
+    const compositionLock: CompositionLock = {
+      ...currentLock,
+      plugins: currentLock.plugins.filter((plugin) => plugin.id !== pluginId),
+      ...(pluginSources === undefined
+        ? {}
+        : {
+            pluginSources: Object.fromEntries(
+              Object.entries(pluginSources).filter(([id]) => id !== pluginId),
+            ),
+          }),
+    };
+    const digest = this.#compositionDigest(compositionLock);
+    writeJournal('verified', null);
+    if (this.#fault(ids.operationId, 'verified')) {
+      return;
+    }
+
+    if (signal.aborted) {
+      this.#cancelJournal(ids);
+      return;
+    }
+    const published = publishGenerationProfile({
+      layout: this.#layout,
+      environmentId: command.environmentId,
+      generationId: ids.generationId,
+      transactionId: ids.transactionId,
+      stagedDirectory: join(paths.generationDirectory, 'profile'),
+    });
+    writeJsonAtomic(paths.lockPath, compositionLock);
+    writeJsonAtomic(paths.generationRecordPath, {
+      id: ids.generationId,
+      environmentId: command.environmentId,
+      compositionDigest: digest,
+      createdAt: this.#now().toISOString(),
+      profileName: managedProfileName(ids.generationId),
+      profileDigest: published.fingerprint,
+    });
+
+    // COMMIT POINT re-validation (same guard as install): the staging was
+    // asynchronous, so a revision change must refuse before the pointer switch.
+    const current = this.#environments.read(command.environmentId);
+    if (current === undefined) {
+      this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the environment disappeared while the removal was being staged');
+      return;
+    }
+    if (current.revision !== command.expectedRevision) {
+      this.#rollbackJournal(ids, 'REVISION_CONFLICT', 'the environment revision changed while the removal was being staged');
+      return;
+    }
+    this.#environments.write({
+      ...current,
+      state: 'stopped',
+      stateVersion: current.stateVersion + 1,
+      revision: current.revision + 1,
+      activeGenerationId: ids.generationId,
+      compositionDigest: digest,
+      updatedAt: this.#now().toISOString(),
+    });
+    writeJournal('committed', null);
+    if (this.#fault(ids.operationId, 'committed')) {
+      return;
+    }
+    this.#plans.consume(plan.planId, command.requestId);
+    this.#markOperationSucceeded(ids.operationId, ids.generationId, plan.planId, null, command.requestId, digest);
+    writeJournal('finalized', null);
+    this.#removeJournal(ids.transactionId);
   }
 
   owns(operationId: string): boolean {

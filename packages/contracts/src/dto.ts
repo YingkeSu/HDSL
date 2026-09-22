@@ -19,7 +19,7 @@ import {
   opaqueIdSchema,
   operationIdSchema,
   planIdSchema,
-  pluginIdSchema,
+  pluginPackageNameSchema,
   revisionSchema,
   sha256Schema,
   subscriptionIdSchema,
@@ -82,11 +82,34 @@ export const runtimeArtifactSchema = sObject({
 export type RuntimeArtifact = Infer<typeof runtimeArtifactSchema>;
 
 export const pluginLockSchema = sObject({
-  id: pluginIdSchema,
+  id: pluginPackageNameSchema,
   version: artifactVersionSchema,
   sha256: sha256Schema,
 });
 export type PluginLock = Infer<typeof pluginLockSchema>;
+
+/**
+ * `pluginSources` map schema (ADR 0005 D13). Declared before
+ * `compositionLockSchema` so the `sOptional(...)` argument is initialised; it
+ * resolves `pluginSourceLockSchema` lazily at validation time, so the DTO keeps
+ * its `PluginSourceLock` definition (and its executor/authorization
+ * dependencies) later in the file.
+ */
+const pluginSourcesSchema: Schema<Readonly<Record<string, PluginSourceLock>>> = (value, path, issues) => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    issues.push({ path, message: 'must be a plain object' });
+    return undefined;
+  }
+  const output: Record<string, PluginSourceLock> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const parsed = pluginSourceLockSchema(entry, `${path}.${key}`, issues);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    output[key] = parsed;
+  }
+  return output;
+};
 
 /**
  * CompositionLock: the immutable composition recorded for a generation.
@@ -105,6 +128,12 @@ export const compositionLockSchema = sObject({
     node: artifactSourceSchema,
     dsh: artifactSourceSchema,
   }),
+  /**
+   * Non-digest plugin SOURCE provenance (ADR 0005 D13), keyed by plugin id
+   * (= package name). Missing = no recorded plugin source; it never enters the
+   * composition digest.
+   */
+  pluginSources: sOptional(pluginSourcesSchema),
 });
 export type CompositionLock = Infer<typeof compositionLockSchema>;
 
@@ -461,7 +490,7 @@ export const changePlanActionSchema: Schema<ChangePlanAction> = (value, path, is
     return source === undefined ? undefined : { kind: 'install', source };
   }
   if (record['kind'] === 'remove') {
-    const pluginId = pluginIdSchema(record['pluginId'], `${path}.pluginId`, issues);
+    const pluginId = pluginPackageNameSchema(record['pluginId'], `${path}.pluginId`, issues);
     return pluginId === undefined ? undefined : { kind: 'remove', pluginId };
   }
   issues.push({ path: `${path}.kind`, message: 'must be "install" or "remove"' });
@@ -524,7 +553,7 @@ export const INSTALLED_PLUGINS_MAX = 128;
  * dependency.
  */
 export const installedPluginSchema = sObject({
-  id: pluginIdSchema,
+  id: pluginPackageNameSchema,
   version: artifactVersionSchema,
   sha256: sha256Schema,
   isBuiltin: sBoolean,

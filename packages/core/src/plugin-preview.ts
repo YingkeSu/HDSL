@@ -35,10 +35,8 @@ import { generationPaths } from './layout.js';
 import { writeTargetProfileCache } from './target-profile-cache.js';
 import { ChangePlanStore } from './change-plan-store.js';
 import {
-  deriveRemovalContext,
-  readRemovalRuntimeIdentity,
+  buildRemovalResolveInput,
   type PluginRemovalPort,
-  type RemovalInstalledLock,
 } from './plugin-removal.js';
 import { isTerminalStatus, OperationStore, toOperationSnapshot } from './operation-store.js';
 import { tryReadJsonFile } from './fsx.js';
@@ -99,7 +97,12 @@ export interface PreviewChangeCommand {
 
 export interface ChangePreviewServiceOptions {
   readonly layout: AppDataLayout;
-  readonly port: PluginPreviewPort;
+  /**
+   * Install/source preview adapter. Optional so a removal-only wiring (S3) can
+   * still construct the service; an install preview without it is a controlled
+   * `INTERNAL_ERROR`, never a fake plan.
+   */
+  readonly port?: PluginPreviewPort;
   /** Removal adapter (S3): required for `action.kind === 'remove'` previews. */
   readonly removalPort?: PluginRemovalPort;
   readonly findEnvironment: (environmentId: string) => EnvironmentSummary | undefined;
@@ -114,7 +117,7 @@ export class ChangePreviewService {
   readonly #layout: AppDataLayout;
   readonly #plans: ChangePlanStore;
   readonly #operations: OperationStore;
-  readonly #port: PluginPreviewPort;
+  readonly #port: PluginPreviewPort | undefined;
   readonly #removalPort: PluginRemovalPort | undefined;
   readonly #findEnvironment: (environmentId: string) => EnvironmentSummary | undefined;
   readonly #now: () => Date;
@@ -190,13 +193,11 @@ export class ChangePreviewService {
     if (environment.revision !== command.expectedRevision) {
       return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
     }
-    if (command.action.kind !== 'install') {
-      // Remove preview belongs to S3. This is an explicit, controlled rejection
-      // of a valid-but-unsupported action, not an internal-error fake.
-      return portFail(
-        'UNSUPPORTED_COMBINATION',
-        'remove preview is not supported in this slice (S3)',
-      );
+    if (command.action.kind !== 'install' && this.#removalPort === undefined) {
+      // Removal has its own preview branch (S3). A valid remove request with no
+      // wired removal adapter is a controlled internal failure, never a fake plan
+      // and never a silent install-path fallback.
+      return portFail('INTERNAL_ERROR', 'the removal preview adapter is not wired');
     }
     const operationId = newOperationId();
     const controller = new AbortController();
@@ -262,10 +263,14 @@ export class ChangePreviewService {
             ),
           };
     let outcome: PortOutcome<PluginPreviewResolution>;
-    try {
-      outcome = await this.#port.previewSource(command.action.source, signal, context);
-    } catch {
-      outcome = portFail('INTERNAL_ERROR', 'the plugin preview source threw');
+    if (this.#port === undefined) {
+      outcome = portFail('INTERNAL_ERROR', 'the change preview adapter is not wired');
+    } else {
+      try {
+        outcome = await this.#port.previewSource(command.action.source, signal, context);
+      } catch {
+        outcome = portFail('INTERNAL_ERROR', 'the plugin preview source threw');
+      }
     }
     this.#controllers.delete(operationId);
     const record = this.#operations.read(operationId);
@@ -350,81 +355,24 @@ export class ChangePreviewService {
       return;
     }
     const environment = this.#findEnvironment(command.environmentId);
-    const context = deriveRemovalContext({
+    const built = buildRemovalResolveInput({
       layout: this.#layout,
-      environment: environment === undefined ? undefined : { id: environment.id, activeGenerationId: environment.activeGenerationId },
+      environment:
+        environment === undefined
+          ? undefined
+          : { id: environment.id, activeGenerationId: environment.activeGenerationId },
+      pluginId: command.action.pluginId,
       stagingKey: operationId,
+      readJson: (path) => tryReadJsonFile<unknown>(path),
     });
-    if (!context.ok) {
-      fail(context.code);
+    if (!built.ok) {
+      fail(built.code);
       return;
     }
-    const paths = generationPaths(this.#layout, command.environmentId, context.value.generationId);
-    const readJson = (path: string): unknown => tryReadJsonFile<unknown>(path);
-    const lock = readJson(paths.lockPath);
-    const lockRecord = typeof lock === 'object' && lock !== null ? (lock as Record<string, unknown>) : undefined;
-    const rawPlugins = lockRecord?.['plugins'];
-    const installed: RemovalInstalledLock[] = Array.isArray(rawPlugins)
-      ? rawPlugins.flatMap((entry) => {
-          const record = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>) : undefined;
-          const id = record?.['id'];
-          const version = record?.['version'];
-          const sha256 = record?.['sha256'];
-          return typeof id === 'string' && typeof version === 'string' && typeof sha256 === 'string'
-            ? [{ id, version, sha256 }]
-            : [];
-        })
-      : [];
-    if (installed.length === 0) {
-      fail('NOT_FOUND');
-      return;
-    }
-    const declaration = readJson(join(context.value.declarationDirectory, 'package.json'));
-    const declarationRecord = typeof declaration === 'object' && declaration !== null ? (declaration as Record<string, unknown>) : undefined;
-    const dsh = declarationRecord !== undefined && typeof declarationRecord['dsh'] === 'object' && declarationRecord['dsh'] !== null
-      ? (declarationRecord['dsh'] as Record<string, unknown>)
-      : undefined;
-    const profile = dsh !== undefined && typeof dsh['profile'] === 'object' && dsh['profile'] !== null
-      ? (dsh['profile'] as Record<string, unknown>)
-      : undefined;
-    const enabledBundles = profile !== undefined && Array.isArray(profile['bundles'])
-      ? profile['bundles'].filter((entry): entry is string => typeof entry === 'string')
-      : [];
-    const identity = readRemovalRuntimeIdentity({
-      installManifestPath: paths.manifestPath,
-      dshDirectory: context.value.dshDirectory,
-      readJson,
-    });
-    if (!identity.ok) {
-      fail(identity.code);
-      return;
-    }
-    const sources = lockRecord !== undefined && typeof lockRecord['pluginSources'] === 'object' && lockRecord['pluginSources'] !== null
-      ? (lockRecord['pluginSources'] as Record<string, unknown>)
-      : undefined;
-    const sourceEntry = sources === undefined ? undefined : sources[command.action.pluginId];
-    const sourceRecord = typeof sourceEntry === 'object' && sourceEntry !== null ? (sourceEntry as Record<string, unknown>) : undefined;
-    const commitSha = sourceRecord !== undefined && typeof sourceRecord['commitSha'] === 'string' ? sourceRecord['commitSha'] : null;
 
     let outcome;
     try {
-      outcome = await this.#removalPort.resolveRemoval(
-        {
-          pluginId: command.action.pluginId,
-          expectedCommitSha: commitSha,
-          expectedManifestSha256: null,
-          declarationDirectory: context.value.declarationDirectory,
-          publishedProfileDirectory: context.value.publishedProfileDirectory,
-          homeDirectory: context.value.homeDirectory,
-          dshDirectory: context.value.dshDirectory,
-          nodeExecutable: context.value.nodeExecutable,
-          stagingDirectory: context.value.stagingDirectory,
-          installed,
-          enabledBundles,
-          runtime: identity.value,
-        },
-        signal,
-      );
+      outcome = await this.#removalPort.resolveRemoval(built.value.resolve, signal);
     } catch {
       outcome = portFail('INTERNAL_ERROR', 'the removal resolution threw');
     }
@@ -439,7 +387,9 @@ export class ChangePreviewService {
       return;
     }
     const resolution = outcome.value;
-    if (resolution.blockingReferences.some((reference) => reference.detail.includes('in-box bundle'))) {
+    // In-box bundle protection is a FAIL (no side effect, no plan), decided from
+    // the resolved in-box identity rather than from the reference text.
+    if (resolution.isBuiltin) {
       this.#operations.update(
         record,
         { status: 'failed', phase: 'failed', error: contractErrorForCode('BUILTIN_BUNDLE_PROTECTED', {}) },
@@ -465,6 +415,9 @@ export class ChangePreviewService {
       executor: null,
       planInputsDigest: resolution.targetDeclarationSha256,
     };
+    // A blocked removal still produces a plan so the UI can explain it, but it is
+    // NOT cached and therefore NOT applyable. Only a clean resolution caches the
+    // pruned target profile the plan binds.
     if (resolution.blockingReferences.length === 0) {
       const cached = writeTargetProfileCache(this.#layout, plan.planId, {
         lockText: resolution.targetLockText,

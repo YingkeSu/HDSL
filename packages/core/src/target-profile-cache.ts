@@ -86,3 +86,31 @@ export const readTargetProfileCache = (
   }
   return portOk(record);
 };
+
+/**
+ * Removal binding: the remove plan carries no source lock, so its
+ * `planInputsDigest` is the pruned declaration binding. The cached lock is
+ * checked for internal consistency here; the AUTHORITATIVE lock check is the
+ * apply-time re-resolution, which requires the recomputed pruned lock to be byte
+ * identical to the cached one (a tampered cache can never be installed from).
+ */
+export const readTargetProfileCacheForRemoval = (
+  layout: AppDataLayout,
+  planId: string,
+  expected: { readonly declarationSha256: string },
+): PortOutcome<TargetProfileCache> => {
+  const record = tryReadJsonFile<TargetProfileCache>(targetProfileCachePath(layout, planId));
+  if (record === undefined || record.planId !== planId) {
+    return portFail('PLAN_STALE', 'the plan target profile cache is missing');
+  }
+  if (sha256(record.lockText) !== record.lockSha256) {
+    return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the cached target lock does not match its recorded digest');
+  }
+  if (
+    declarationBinding(record.declarationText, record.workspaceText) !== record.declarationSha256 ||
+    record.declarationSha256 !== expected.declarationSha256
+  ) {
+    return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the cached target declaration does not match the plan');
+  }
+  return portOk(record);
+};

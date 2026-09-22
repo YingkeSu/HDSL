@@ -33,6 +33,7 @@ import {
   ChangeApplyService,
   ChangePlanStore,
   EnvironmentStore,
+  InstalledPluginsService,
   type PluginPreviewPort,
   type CloseReport,
   type DataRootLockSnapshot,
@@ -47,6 +48,8 @@ import {
   createPluginApplyPort,
   createManagedPnpmExecutor,
   createGenerationRuntimeVerifier,
+  createPluginRemovalPort,
+  resolveInBoxBundles,
   createResolvingPreviewPort,
   computeCompositionDigest,
   PNPM_EXECUTOR_SPEC,
@@ -367,17 +370,19 @@ export const createDesktopComposition = async (
           executorIdentity,
         })
       : undefined);
-  const changePreview =
-    previewPort === undefined
-      ? undefined
-      : new ChangePreviewService({
-          layout: service.layout,
-          port: previewPort,
-          findEnvironment: (environmentId) => {
-            const outcome = service.findEnvironment(environmentId);
-            return outcome.ok ? outcome.value : undefined;
-          },
-        });
+  // S3 removal adapter: in-box identity from the CURRENT managed install, the
+  // read-only user-patch scan and the isolated pruned-lock recompute under the
+  // managed Node + frozen pnpm executor.
+  const removalPort = createPluginRemovalPort({ executor: managedPnpmExecutor });
+  const changePreview = new ChangePreviewService({
+    layout: service.layout,
+    ...(previewPort === undefined ? {} : { port: previewPort }),
+    removalPort,
+    findEnvironment: (environmentId) => {
+      const outcome = service.findEnvironment(environmentId);
+      return outcome.ok ? outcome.value : undefined;
+    },
+  });
 
   // Environment-scoped apply transaction: the GitHub source is the production
   // GitProvider and the frozen managed pnpm artifact is the executor. The reused
@@ -393,7 +398,16 @@ export const createDesktopComposition = async (
     operations: new OperationStore(service.layout),
     compositionDigest: computeCompositionDigest,
     port: applyPort,
+    removalPort,
     verifyGenerationRuntime: createGenerationRuntimeVerifier(),
+  });
+
+  // Read-only installed-plugin view of the ACTIVE generation. `isBuiltin` comes
+  // from the current managed install's own tree, never from the client.
+  const installedPlugins = new InstalledPluginsService({
+    layout: service.layout,
+    environments: new EnvironmentStore(service.layout),
+    inBox: { resolveInBoxBundles },
   });
 
   const port = createEnvironmentContractPort({
@@ -402,8 +416,9 @@ export const createDesktopComposition = async (
     ...(options.host === undefined ? {} : { host: options.host }),
     exportDiagnostics: exporter,
     pluginDiscovery,
-    ...(changePreview === undefined ? {} : { changePreview }),
+    changePreview,
     changeApply,
+    installedPlugins,
   });
 
   // Recovery ORDER + ownership (P1 fix): each service reconciles the operation
@@ -413,7 +428,7 @@ export const createDesktopComposition = async (
   // longer sees (or clears the pointer for) kinds it does not own, so a crashed
   // preview can never invalidate a committed generation.
   const applyRecovery = changeApply.recover();
-  const previewRecovery = changePreview?.recover() ?? { terminated: 0 };
+  const previewRecovery = changePreview.recover();
   const recovery = await service.recover();
   const recoveryReasons = (recovery.process ?? [])
     .filter((entry) => entry.resolution === 'unverifiable')

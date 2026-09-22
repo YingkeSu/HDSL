@@ -156,6 +156,12 @@ export interface PluginRemovalResolution {
   readonly retention: readonly string[];
   readonly blockingReferences: readonly ChangeBlockingReference[];
   /**
+   * True when the target is an in-box bundle of the CURRENT managed DSH install
+   * (F12a). Core maps this to `BUILTIN_BUNDLE_PROTECTED` (a fail, not a plan)
+   * without string-matching the reference detail.
+   */
+  readonly isBuiltin: boolean;
+  /**
    * Honest risk statements. Always includes the service-coupling limitation: the
    * absence of a static reference never proves the removal is safe.
    */
@@ -338,6 +344,7 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
       retention,
       riskItems,
       blockingReferences,
+      isBuiltin: inBox !== undefined,
       prunedDeclarationText,
       prunedWorkspaceText: input.workspaceText,
     },

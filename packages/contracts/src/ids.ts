@@ -39,6 +39,25 @@ export const exportIdSchema = opaqueIdSchema('exportId');
 export const pluginIdSchema = opaqueIdSchema('pluginId');
 export const planIdSchema = opaqueIdSchema('planId');
 
+/**
+ * npm package name (optionally scoped): `name` or `@scope/name`.
+ *
+ * Plugin composition identities, removal targets and in-box bundle names ARE npm
+ * package names, and the current managed DSH install ships scoped in-box bundles
+ * (`@deepseek-ai/dsh-base`, `@deepseek-ai/dsh-web-app`). The opaque-id rule would
+ * reject them, so this is deliberately a DIFFERENT, wider schema (ADR 0005
+ * D15/D21). It is bounded like a package name (214 characters).
+ */
+export const PLUGIN_PACKAGE_NAME_PATTERN =
+  /^(?:@[a-zA-Z0-9][a-zA-Z0-9._-]*\/)?[a-zA-Z0-9][a-zA-Z0-9._-]*$/;
+
+export const pluginPackageNameSchema = sString({
+  minLength: 1,
+  maxLength: 214,
+  pattern: PLUGIN_PACKAGE_NAME_PATTERN,
+  patternHint: 'must be an npm package name (optionally scoped, e.g. @scope/name)',
+});
+
 export const requestIdSchema = sString({
   minLength: 1,
   maxLength: REQUEST_ID_MAX_LENGTH,
