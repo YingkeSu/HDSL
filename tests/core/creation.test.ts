@@ -8,7 +8,7 @@
  * official network sources.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -22,7 +22,9 @@ import {
 import {
   EnvironmentStore,
   createManagedInstall,
+  environmentPaths,
   generationPaths,
+  managedProfileName,
   resolveLayout,
   type ManagedInstall,
 } from '@hdsl/core';
@@ -106,15 +108,22 @@ const freshRoot = (prefix: string): string => {
 interface HarnessOptions {
   readonly catalog?: readonly RuntimeCombination[];
   readonly fixtures?: boolean;
-  readonly faults?: { readonly failBeforeCommit?: boolean; readonly pauseBeforeCommit?: boolean };
+  readonly faults?: {
+    readonly failBeforeCommit?: boolean;
+    readonly pauseBeforeCommit?: boolean;
+    readonly pauseAfterPointerSwitch?: boolean;
+  };
   readonly faultsRuntime?: {
     readonly failDownloadAfterBytes?: number;
     readonly corruptDownload?: boolean;
     readonly forceDiskFull?: boolean;
     readonly failExtraction?: boolean;
+    readonly mismatchProfileName?: boolean;
+    readonly mismatchProfileDigest?: boolean;
   };
   readonly dataRoot?: string;
   readonly profileInit?: boolean;
+  readonly executeCommand?: unknown;
   readonly extraLocalArtifacts?: readonly { readonly sha256: string; readonly tarball: Buffer }[];
 }
 
@@ -131,6 +140,7 @@ const buildHarness = async (options: HarnessOptions = {}): Promise<Harness> => {
     closureInstall: false,
     precheck: 'none',
     ...(options.profileInit === true ? { profileInit: true } : {}),
+    ...(options.executeCommand === undefined ? {} : { executeCommand: options.executeCommand as never }),
     localArtifactDirectory: localArtifacts,
     ...(options.faultsRuntime === undefined ? {} : { faults: options.faultsRuntime }),
   });
@@ -600,3 +610,204 @@ describe('journal recovery', () => {
   });
 });
 
+
+describe('production pointer/journal recovery window (A2)', () => {
+  it('rolls forward when the pointer switched but the journal was not committed', async () => {
+    const dataRoot = freshRoot('hdsl-pointer-window-');
+    const paused = await buildHarness({ dataRoot, faults: { pauseAfterPointerSwitch: true } });
+    const operationId = await createEnvironment(paused, combinationA.id, 'req-pointer-window');
+
+    // Wait until the pointer is authoritative (the crashed state).
+    const deadline = Date.now() + 10_000;
+    let environment: { id: string; activeGenerationId: string | null } | undefined;
+    for (;;) {
+      const listed = paused.managed.service.listEnvironments();
+      environment = listed.ok ? listed.value[0] : undefined;
+      if (environment !== undefined && environment.activeGenerationId !== null) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error('the active generation pointer was never switched');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const generationId = environment.activeGenerationId;
+    await paused.managed.close();
+
+    // A fresh instance must roll forward (finalize), never roll back/delete.
+    const restarted = await buildHarness({ dataRoot });
+    const report = await restarted.managed.recover();
+    expect(report.finalized).toBeGreaterThanOrEqual(1);
+    const after = restarted.managed.service.listEnvironments();
+    expect(after.ok).toBe(true);
+    if (after.ok) {
+      expect(after.value[0]?.activeGenerationId).toBe(generationId);
+    }
+    const operation = restarted.managed.service.findOperation(operationId);
+    expect(operation.ok).toBe(true);
+    if (operation.ok) {
+      expect(operation.value.status).toBe('succeeded');
+    }
+    expect(existsSync(generationPaths(resolveLayout(dataRoot), environment.id, generationId ?? '').generationDirectory)).toBe(true);
+    await restarted.managed.close();
+  });
+});
+
+describe('generation profile init adapter seam (A2)', () => {
+  interface ExecCall {
+    readonly executable: string;
+    readonly args: readonly string[];
+    readonly cwd: string;
+    readonly env: Record<string, string>;
+  }
+
+  const makeExecutor = (options: { create?: boolean; symlinkDeclaration?: boolean; internalLink?: boolean } = {}) => {
+    const calls: ExecCall[] = [];
+    const execute = async (
+      executable: string,
+      args: readonly string[],
+      runOptions: { cwd: string; env: Record<string, string> },
+    ) => {
+      calls.push({ executable, args, cwd: runOptions.cwd, env: runOptions.env });
+      if (options.create !== false) {
+        const name = args[args.indexOf('--profile') + 1] as string;
+        const home = runOptions.env['DSH_HOME'] as string;
+        const directory = join(home, 'profiles', name);
+        mkdirSync(directory, { recursive: true });
+        if (options.symlinkDeclaration === true) {
+          const real = join(home, 'real-package.json');
+          writeFileSync(real, '{"name":"elsewhere"}');
+          symlinkSync(real, join(directory, 'package.json'));
+        } else {
+          writeFileSync(
+            join(directory, 'package.json'),
+            JSON.stringify({ name: 'dsh-profile-fixture', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }),
+          );
+        }
+        writeFileSync(join(directory, 'cordis.patch.yml'), '# patch\n');
+        if (options.internalLink === true) {
+          const real = join(home, 'staging-owned.txt');
+          writeFileSync(real, 'x');
+          symlinkSync(real, join(directory, 'internal-link'));
+        }
+      }
+      return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+    };
+    return { execute, calls };
+  };
+
+  const settle = async (harness: Harness, requestId: string): Promise<string> => {
+    const operationId = await createEnvironment(harness, combinationA.id, requestId);
+    await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    return operationId;
+  };
+
+  it('runs the exact argv/cwd/isolated env and closes install->publish->record->argv', async () => {
+    const { execute, calls } = makeExecutor();
+    const harness = await buildHarness({ profileInit: true, executeCommand: execute });
+    await settle(harness, 'req-seam-loop');
+
+    expect(calls).toHaveLength(1);
+    const call = calls[0];
+    expect(call).toBeDefined();
+    if (call === undefined) {
+      return;
+    }
+    const listed = harness.managed.service.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined || environment.activeGenerationId === null) {
+      return;
+    }
+    const layout = resolveLayout(harness.dataRoot);
+    const paths = generationPaths(layout, environment.id, environment.activeGenerationId);
+    const profileName = managedProfileName(environment.activeGenerationId);
+
+    // Exact argv (argv[0] is the DSH entrypoint), cwd, and isolated env.
+    expect(call.args.slice(1)).toEqual([
+      '--profile',
+      profileName,
+      '--from-default-profile',
+      'web',
+      '--dump-config',
+    ]);
+    expect(call.args[0]).toBe(paths.dshDirectory + '/node_modules/@deepseek-ai/dsh/lib/bin.js');
+    expect(call.cwd).toBe(paths.generationDirectory);
+    expect(call.env['DSH_HOME']).toBe(join(paths.generationDirectory, '.profile-stage-home'));
+    expect(call.env['HOME']).toBe(call.env['DSH_HOME']);
+    expect(call.env['TMPDIR']).toBe(join(paths.generationDirectory, '.profile-stage-home', '.tmp'));
+    expect(call.env['PATH']).toContain(join(paths.generationDirectory, 'node', 'bin'));
+    expect(call.env['OPENAI_API_KEY']).toBeUndefined();
+
+    // Staged immutable source retained; published profile + record name/digest.
+    expect(existsSync(join(paths.generationDirectory, 'profile', 'package.json'))).toBe(true);
+    expect(existsSync(join(environmentPaths(layout, environment.id).profilesDirectory, profileName))).toBe(true);
+    const record = JSON.parse(readFileSync(paths.generationRecordPath, 'utf8')) as {
+      profileName?: string;
+      profileDigest?: string;
+    };
+    expect(record.profileName).toBe(profileName);
+    expect((record.profileDigest ?? '').length).toBe(64);
+
+    await harness.managed.close();
+  });
+
+  it('fails closed when the managed DSH does not produce the declaration source', async () => {
+    const { execute } = makeExecutor({ create: false });
+    const harness = await buildHarness({ profileInit: true, executeCommand: execute });
+    const operationId = await createEnvironment(harness, combinationA.id, 'req-seam-missing');
+    const snapshot = await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    expect(snapshot.status).toBe('failed');
+    const listed = harness.managed.service.listEnvironments();
+    expect(listed.ok && listed.value[0]?.activeGenerationId).toBeNull();
+    await harness.managed.close();
+  });
+
+  it('fails closed on a non-regular declaration file', async () => {
+    const { execute } = makeExecutor({ symlinkDeclaration: true });
+    const harness = await buildHarness({ profileInit: true, executeCommand: execute });
+    const operationId = await createEnvironment(harness, combinationA.id, 'req-seam-symlink');
+    const snapshot = await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    expect(snapshot.status).toBe('failed');
+    await harness.managed.close();
+  });
+
+  it('fails closed when the staged profile links back into the staging home', async () => {
+    const { execute } = makeExecutor({ internalLink: true });
+    const harness = await buildHarness({ profileInit: true, executeCommand: execute });
+    const operationId = await createEnvironment(harness, combinationA.id, 'req-seam-internal-link');
+    const snapshot = await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    expect(snapshot.status).toBe('failed');
+    await harness.managed.close();
+  });
+
+  it('fails closed when the manifest profile name mismatches the staged source', async () => {
+    const { execute } = makeExecutor();
+    const harness = await buildHarness({
+      profileInit: true,
+      executeCommand: execute,
+      faultsRuntime: { mismatchProfileName: true },
+    });
+    const operationId = await createEnvironment(harness, combinationA.id, 'req-seam-name');
+    const snapshot = await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    expect(snapshot.status).toBe('failed');
+    await harness.managed.close();
+  });
+
+  it('fails closed when the manifest profile digest mismatches the staged source', async () => {
+    const { execute } = makeExecutor();
+    const harness = await buildHarness({
+      profileInit: true,
+      executeCommand: execute,
+      faultsRuntime: { mismatchProfileDigest: true },
+    });
+    const operationId = await createEnvironment(harness, combinationA.id, 'req-seam-digest');
+    const snapshot = await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    expect(snapshot.status).toBe('failed');
+    await harness.managed.close();
+  });
+});

@@ -100,6 +100,12 @@ export interface CreationFaults {
   readonly failBeforeCommit?: boolean;
   /** Leaves the journal `artifacts-installed` and the operation running. */
   readonly pauseBeforeCommit?: boolean;
+  /**
+   * Simulates a crash AFTER the active-generation pointer switch but BEFORE the
+   * journal is marked committed. Leaves the pointer authoritative and the
+   * journal uncommitted, so restart reconciliation must roll forward.
+   */
+  readonly pauseAfterPointerSwitch?: boolean;
 }
 
 export interface EnvironmentServiceOptions {
@@ -1485,6 +1491,11 @@ tryReadInstallManifest(
         compositionDigest: job.digest,
         updatedAt: this.#now(),
       });
+    }
+
+    if (this.#faults.pauseAfterPointerSwitch === true) {
+      // Pointer switched, journal still uncommitted: a restart must roll forward.
+      return;
     }
 
     const operation = this.#operations.read(job.operationId);

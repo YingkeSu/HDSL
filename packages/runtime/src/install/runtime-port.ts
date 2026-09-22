@@ -20,6 +20,7 @@ import {
   mkdirSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   renameSync,
   rmSync,
   statSync,
@@ -27,7 +28,7 @@ import {
 } from 'node:fs';
 import { open } from 'node:fs/promises';
 import { createHash, randomUUID } from 'node:crypto';
-import { basename, dirname, join } from 'node:path';
+import { basename, dirname, isAbsolute, join } from 'node:path';
 import {
   type CompositionLock,
   type HostPlatform,
@@ -54,6 +55,10 @@ export interface InstallFaults {
   readonly forceDiskFull?: boolean;
   /** Fail the extraction step → `INTERNAL_ERROR`. */
   readonly failExtraction?: boolean;
+  /** Declare a profile name that does not match the staged source → fail-closed. */
+  readonly mismatchProfileName?: boolean;
+  /** Declare a profile digest that does not match the staged source → fail-closed. */
+  readonly mismatchProfileDigest?: boolean;
 }
 
 export interface RuntimeLimits {
@@ -93,6 +98,13 @@ export interface RuntimePortOptions {
   readonly npmRegistry?: string;
   readonly clock?: () => Date;
   readonly commandTimeoutMs?: number;
+  /**
+   * Test/adapter seam for the command executor. Defaults to the real
+   * `runCommand`. Used to verify the exact argv/cwd/env of profile
+   * initialization with a controlled executor (adapter/fixture evidence, never
+   * real DSH evidence).
+   */
+  readonly executeCommand?: typeof runCommand;
 }
 
 export interface InstallProgress {
@@ -150,7 +162,7 @@ const baseEnvironment = (home: string, nodeBin: string, npmCache: string, extra:
   ...extra,
 });
 
-/** Files that constitute a profile's immutable declaration source. */
+/** Files that constitute a profile's immutable declaration source, in order. */
 const PROFILE_DECLARATION_FILES = [
   'package.json',
   'cordis.patch.yml',
@@ -190,6 +202,33 @@ const profileDeclarationDigest = (directory: string): string | undefined => {
     );
   }
   return createHash('sha256').update(entries.join('\n')).digest('hex');
+};
+
+/**
+ * Fail closed if the staged profile contains a symlink that resolves inside the
+ * staging home. Such a link would survive the move but dangle once the staging
+ * home is deleted, so a correct declaration digest alone is not sufficient.
+ */
+const assertNoStagingInternalLinks = (profileDirectory: string, stagingHome: string): void => {
+  const walk = (current: string): void => {
+    for (const name of readdirSync(current)) {
+      const full = join(current, name);
+      const stats = lstatSync(full);
+      if (stats.isSymbolicLink()) {
+        const target = readlinkSync(full);
+        const resolved = isAbsolute(target) ? target : join(dirname(full), target);
+        if (resolved === stagingHome || resolved.startsWith(`${stagingHome}/`)) {
+          throw new InstallFailure(
+            'INTERNAL_ERROR',
+            'the staged profile contains a link into the staging home',
+          );
+        }
+      } else if (stats.isDirectory()) {
+        walk(full);
+      }
+    }
+  };
+  walk(profileDirectory);
 };
 
 const findLocalArtifact = (directory: string, sha256: string): string | undefined => {
@@ -246,6 +285,7 @@ export class RuntimePort implements ManagedRuntimePort {
   readonly #npmRegistry: string | undefined;
   readonly #clock: () => Date;
   readonly #commandTimeoutMs: number;
+  readonly #executeCommand: typeof runCommand;
 
   constructor(options: RuntimePortOptions = {}) {
     this.#host = options.host ?? { platform: 'darwin', arch: 'arm64' };
@@ -265,6 +305,7 @@ export class RuntimePort implements ManagedRuntimePort {
     this.#npmRegistry = options.npmRegistry;
     this.#clock = options.clock ?? (() => new Date());
     this.#commandTimeoutMs = options.commandTimeoutMs ?? 30_000;
+    this.#executeCommand = options.executeCommand ?? runCommand;
   }
 
   get host(): HostPlatform {
@@ -393,7 +434,7 @@ export class RuntimePort implements ManagedRuntimePort {
       // Isolated env: HOME/DSH_HOME/TMPDIR/caches are inside the generation; the
       // host environment and any credential variables are never inherited.
       const environment = baseEnvironment(stagedHome, nodeBin, context.npmCacheDirectory);
-      const init = await runCommand(
+      const init = await this.#executeCommand(
         nodeExecutable,
         [
           dshEntrypoint,
@@ -420,10 +461,17 @@ export class RuntimePort implements ManagedRuntimePort {
         );
       }
       const stagedTarget = join(destination, 'profile');
+      assertNoStagingInternalLinks(source, stagedHome);
       rmSync(stagedTarget, { recursive: true, force: true });
       renameSync(source, stagedTarget);
       rmSync(stagedHome, { recursive: true, force: true });
       stagedProfile = { name: context.profileName, digest };
+      if (this.#faults.mismatchProfileName === true) {
+        stagedProfile = { name: 'hdsl-mismatched-name', digest };
+      }
+      if (this.#faults.mismatchProfileDigest === true) {
+        stagedProfile = { name: stagedProfile.name, digest: 'f'.repeat(64) };
+      }
     }
 
     context.onProgress?.({ phase: 'preflight', progress: 92 });
