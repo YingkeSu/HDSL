@@ -16,6 +16,12 @@ import { resolveTargetProfileLock } from './target-profile.js';
 export interface PreviewSourceContext {
   readonly declarationDirectory: string;
   readonly stagingDirectory: string;
+  /**
+   * Managed Node executable of the current generation (never `process.execPath`:
+   * in the Electron main process that is the Electron binary, which does not exit
+   * after running a script).
+   */
+  readonly nodeExecutable: string;
 }
 
 export interface ResolvingPreviewOptions {
@@ -56,6 +62,7 @@ export const createResolvingPreviewPort = (options: ResolvingPreviewOptions): Re
         commitSha: resolved.value.commitSha,
         declarationDirectory: context.declarationDirectory,
         stagingDirectory: context.stagingDirectory,
+        nodeExecutable: context.nodeExecutable,
       },
       signal,
     );

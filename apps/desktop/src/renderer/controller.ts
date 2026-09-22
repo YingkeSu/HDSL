@@ -859,7 +859,19 @@ export class RendererController implements RendererActions {
     if (tracked.status === 'succeeded') {
       this.#applyPluginOutput(tracked);
       await this.#refreshEnvironments(epoch);
+      return;
     }
+    // A terminal non-success MUST surface here. Previously only `succeeded` was
+    // handled, so a failed (or cancelled) preview/apply left the S2 panel showing
+    // "解析来源并生成计划…" with no error (QA33 real desktop chain).
+    if (tracked.status === 'cancelled') {
+      this.#update({ notice: '操作已取消，环境组成未改变。', actionError: null });
+      return;
+    }
+    this.#update({
+      actionError: tracked.error ?? contractErrorForCode('INTERNAL_ERROR'),
+      notice: null,
+    });
   }
 
   /**

@@ -207,6 +207,14 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
       {state.actionError !== null && (
         <p role="alert">{errorHint(state.actionError)}（{state.actionError.code}）</p>
       )}
+
+      {tracked?.kind === 'preview' && tracked.status === 'failed' && (
+        <p role="status">
+          <button type="button" onClick={() => { actions.previewPluginChange(); }} disabled={environment === null || state.commandPending}>
+            重试预览
+          </button>
+        </p>
+      )}
     </section>
   );
 }

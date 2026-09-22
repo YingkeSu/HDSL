@@ -27,6 +27,14 @@ export interface TargetProfileInput {
   readonly declarationDirectory: string;
   /** Isolated staging directory (must not be the environment home). */
   readonly stagingDirectory: string;
+  /**
+   * Managed Node executable of the CURRENT generation. It must be the managed
+   * runtime, never `process.execPath`: inside the Electron main process
+   * `process.execPath` is the Electron binary, which does not exit after running
+   * a script (observed hang in the real desktop chain, QA33), so the resolution
+   * child would never terminate.
+   */
+  readonly nodeExecutable: string;
 }
 
 export interface TargetProfileResolution {
@@ -40,6 +48,12 @@ export interface TargetProfileResolution {
 }
 
 const sha256 = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
+
+/**
+ * Bounded timeout for the isolated lock-only resolution. A stuck child must fail
+ * the preview with a controlled error instead of leaving the operation running.
+ */
+const TARGET_PROFILE_RESOLUTION_TIMEOUT_MS = 180_000;
 
 const readOptional = (path: string): string | null =>
   existsSync(path) ? readFileSync(path, 'utf8') : null;
@@ -116,6 +130,20 @@ export const resolveTargetProfileLock = async (
   );
 
   const staging = input.stagingDirectory;
+  // Fail closed before spawning anything. The managed Node must be an explicit,
+  // existing executable and must NOT be the host process binary: inside Electron
+  // `process.execPath` is the Electron binary, which does not exit after running
+  // a script (real desktop hang, QA33), and `dirname(execPath)` would also break
+  // the isolated PATH. There is deliberately no `process.execPath` fallback.
+  if (typeof input.nodeExecutable !== 'string' || input.nodeExecutable === '') {
+    return portFail('INTERNAL_ERROR', 'the current generation has no managed Node executable for target-profile resolution');
+  }
+  if (input.nodeExecutable === process.execPath) {
+    return portFail('INTERNAL_ERROR', 'target-profile resolution must not run under the host process binary');
+  }
+  if (!existsSync(input.nodeExecutable)) {
+    return portFail('INTERNAL_ERROR', 'the managed Node executable for target-profile resolution does not exist');
+  }
   try {
     rmSync(staging, { recursive: true, force: true });
     mkdirSync(staging, { recursive: true });
@@ -132,8 +160,9 @@ export const resolveTargetProfileLock = async (
       {
         cwd: staging,
         homeDirectory: staging,
-        nodeExecutable: process.execPath,
+        nodeExecutable: input.nodeExecutable,
         args: ['install', '--lockfile-only', '--ignore-scripts'],
+        timeoutMs: TARGET_PROFILE_RESOLUTION_TIMEOUT_MS,
       },
       signal,
     );

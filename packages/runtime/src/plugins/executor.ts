@@ -83,6 +83,12 @@ export interface PluginExecutorRunRequest {
   readonly args: readonly string[];
   /** Pinned registry; defaults to the official registry. */
   readonly registry?: string;
+  /**
+   * Bounded command timeout. Defaults to the executor's own bound. A caller that
+   * must fail fast (for example the target-profile lock resolution) passes a
+   * tighter value; the child process tree is always killed on timeout/cancel.
+   */
+  readonly timeoutMs?: number;
 }
 
 export interface ExecutorRunResult {
@@ -231,7 +237,7 @@ export const createManagedPnpmExecutor = (
         const result = await execute(request.nodeExecutable, [ready.value.entry, ...request.args], {
           cwd: request.cwd,
           env: environment,
-          timeoutMs: commandTimeoutMs,
+          timeoutMs: request.timeoutMs ?? commandTimeoutMs,
           signal,
         });
         return portOk({

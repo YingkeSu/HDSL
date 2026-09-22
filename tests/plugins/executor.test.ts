@@ -96,6 +96,39 @@ describe('managed pnpm executor', () => {
     expect(calls[0]?.env['npm_config_registry']).toBe('https://registry.npmjs.org');
   });
 
+  it('runs the caller-provided managed Node with a bounded timeout (never process.execPath)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'hdsl-executor-timeout-'));
+    roots.push(cwd);
+    const tarball = pnpmTarball();
+    const calls: { executable: string; timeoutMs: number }[] = [];
+    const executor = createManagedPnpmExecutor({
+      spec: specFor(tarball),
+      cacheDirectory: join(cwd, 'cache'),
+      fetch: fakeFetch(tarball),
+      execute: async (executable, _args, options) => {
+        calls.push({ executable, timeoutMs: options.timeoutMs });
+        return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+      },
+    });
+
+    // Regression (QA33 real desktop hang): the child must run under the managed
+    // Node from the request, never the host process binary. Inside Electron
+    // `process.execPath` is Electron and never exits.
+    const managedNode = join(cwd, 'generation', 'node', 'bin', 'node');
+    const bounded = await executor.run(
+      { ...request(cwd), nodeExecutable: managedNode, timeoutMs: 1_234 },
+      new AbortController().signal,
+    );
+    expect(bounded.ok).toBe(true);
+    expect(calls[0]?.executable).toBe(managedNode);
+    expect(calls[0]?.executable).not.toBe(process.execPath);
+    expect(calls[0]?.timeoutMs).toBe(1_234);
+
+    // A caller that does not pass one still gets the executor's own bound.
+    await executor.run({ ...request(cwd), nodeExecutable: managedNode }, new AbortController().signal);
+    expect(calls[1]?.timeoutMs).toBeGreaterThan(0);
+  });
+
   it('fails closed on an artifact integrity mismatch without executing', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'hdsl-executor-'));
     roots.push(cwd);

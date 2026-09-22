@@ -11,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import {
   ChangePlanStore,
   ChangePreviewService,
+  generationPaths,
   resolveLayout,
   type PluginPreviewPort,
   type PluginPreviewResolution,
@@ -217,5 +218,52 @@ describe('changes.preview (core)', () => {
     expect(store.consume(plan.planId, 'req-apply-1')?.consumedBy).toBe('req-apply-1');
     expect(store.consume(plan.planId, 'req-apply-2')?.consumedBy).toBe('req-apply-2');
     expect(store.read('plan-unknown')?.plan).toBeUndefined();
+  });
+});
+
+describe('target-profile preview context (QA33 real desktop hang regression)', () => {
+  it('passes the current generation managed Node to the port, never process.execPath', async () => {
+    const contexts: Array<{ declarationDirectory: string; stagingDirectory: string; nodeExecutable: string } | undefined> = [];
+    const capturing: PluginPreviewPort = {
+      previewSource: async (_source, _signal, context) => {
+        contexts.push(context);
+        return { ok: true, value: resolution() };
+      },
+    };
+    const { layout, service } = build(capturing);
+    const started = service.previewChange({
+      requestId: 'req-preview-context',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: 3,
+      action: { kind: 'install', source: { owner: 'octo', name: 'dsh-plugin-demo' } },
+    });
+    if (!started.ok) throw new Error('preview was not started');
+    await waitTerminal(service, started.value.operationId);
+    expect(contexts).toHaveLength(1);
+    const context = contexts[0];
+    expect(context).toBeDefined();
+    if (context === undefined) return;
+    const generationDirectory = generationPaths(layout, ENVIRONMENT_ID, 'gen-0000000000000001').generationDirectory;
+    expect(context.nodeExecutable).toBe(join(generationDirectory, 'node', 'bin', 'node'));
+    expect(context.declarationDirectory).toBe(join(generationDirectory, 'profile'));
+    // The host process binary is never the preview resolution runtime.
+    expect(context.nodeExecutable).not.toBe(process.execPath);
+  });
+
+  it('terminates as a controlled failed operation when the resolution runtime is unavailable (no permanent running)', async () => {
+    const failing: PluginPreviewPort = {
+      previewSource: async () => ({ ok: false, code: 'INTERNAL_ERROR', message: 'the managed Node executable for target-profile resolution does not exist' }),
+    };
+    const { service } = build(failing);
+    const started = service.previewChange({
+      requestId: 'req-preview-fail',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: 3,
+      action: { kind: 'install', source: { owner: 'octo', name: 'dsh-plugin-demo' } },
+    });
+    if (!started.ok) throw new Error('preview was not started');
+    const snapshot = await waitTerminal(service, started.value.operationId);
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error?.code).toBe('INTERNAL_ERROR');
   });
 });

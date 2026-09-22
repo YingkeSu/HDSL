@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  createResolvingPreviewPort,
   resolveTargetProfileLock,
   stagingIsClean,
   type GitProvider,
@@ -28,10 +29,10 @@ const gitProvider = (): GitProvider => ({
   resolveManifest: async () => ({ ok: true, value: { commitSha: COMMIT, manifestText: PLUGIN_MANIFEST, lockText: null } }),
 });
 
-const executor = (calls: { args: readonly string[]; cwd: string }[], markerDir: string): PluginExecutorPort => ({
+const executor = (calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[], markerDir: string): PluginExecutorPort => ({
   identity: async () => ({ ok: true, value: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) } }),
   run: async (request) => {
-    calls.push({ args: request.args, cwd: request.cwd });
+    calls.push({ args: request.args, cwd: request.cwd, nodeExecutable: request.nodeExecutable });
     // Simulate resolution writing a target lock; never a lifecycle marker.
     writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), `lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      hdsl-plugin-e2e-fixture:\n        specifier: github:octo/dsh-plugin-demo#${COMMIT}\n        version: github.com/octo/dsh-plugin-demo/${COMMIT}\n`);
     void markerDir;
@@ -50,17 +51,22 @@ const build = () => {
   );
   writeFileSync(join(declaration, 'pnpm-workspace.yaml'), 'onlyBuiltDependencies: []\n');
   const staging = join(root, 'staging');
-  return { root, declaration, staging };
+  // Stand-in for the managed Node of the current generation; the resolution child
+  // must receive THIS path, never `process.execPath`.
+  const nodeExecutable = join(root, 'generation', 'node', 'bin', 'node');
+  mkdirSync(join(root, 'generation', 'node', 'bin'), { recursive: true });
+  writeFileSync(nodeExecutable, '#!/bin/sh\n');
+  return { root, declaration, staging, nodeExecutable };
 };
 
 describe('resolveTargetProfileLock', () => {
   it('resolves the target lock in isolation, preserving declarations and adding only the exact SHA', async () => {
-    const { declaration, staging } = build();
-    const calls: { args: readonly string[]; cwd: string }[] = [];
+    const { declaration, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
     const outcome = await resolveTargetProfileLock(
       gitProvider(),
       executor(calls, join(declaration, 'hdsl-e2e-marker')),
-      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging },
+      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable },
       new AbortController().signal,
     );
     expect(outcome.ok).toBe(true);
@@ -70,6 +76,10 @@ describe('resolveTargetProfileLock', () => {
     // Default deny and resolution-only; no allowBuilds and no host config.
     expect(calls).toHaveLength(1);
     expect(calls[0]?.args).toEqual(['install', '--lockfile-only', '--ignore-scripts']);
+    // Regression (QA33 real desktop hang): the resolution child runs under the
+    // managed Node, never `process.execPath` (Electron-as-node never exits).
+    expect(calls[0]?.nodeExecutable).toBe(nodeExecutable);
+    expect(calls[0]?.nodeExecutable).not.toBe(process.execPath);
     // The target declaration preserves bundles and adds the exact git SHA.
     const target = JSON.parse(outcome.value.targetDeclarationText) as {
       dependencies: Record<string, string>;
@@ -87,12 +97,12 @@ describe('resolveTargetProfileLock', () => {
   });
 
   it('fails closed when the source commit changed during resolution', async () => {
-    const { declaration, staging } = build();
-    const calls: { args: readonly string[]; cwd: string }[] = [];
+    const { declaration, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
     const outcome = await resolveTargetProfileLock(
       { resolveManifest: async () => ({ ok: true, value: { commitSha: 'b'.repeat(40), manifestText: PLUGIN_MANIFEST, lockText: null } }) },
       executor(calls, join(declaration, 'hdsl-e2e-marker')),
-      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging },
+      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable },
       new AbortController().signal,
     );
     expect(outcome.ok).toBe(false);
@@ -102,13 +112,66 @@ describe('resolveTargetProfileLock', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('fails closed without spawning when the managed Node executable is missing', async () => {
+    const { declaration, staging } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
+    const outcome = await resolveTargetProfileLock(
+      gitProvider(),
+      executor(calls, join(declaration, 'hdsl-e2e-marker')),
+      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable: join(staging, 'absent', 'node') },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('INTERNAL_ERROR');
+    }
+    // Fail closed BEFORE any child process is spawned (no hang, no Electron-as-node).
+    expect(calls).toHaveLength(0);
+  });
+
+  it('refuses the host process binary as the resolution runtime (Electron-as-node never exits)', async () => {
+    const { declaration, staging } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
+    const outcome = await resolveTargetProfileLock(
+      gitProvider(),
+      executor(calls, join(declaration, 'hdsl-e2e-marker')),
+      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable: process.execPath },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('INTERNAL_ERROR');
+    }
+    // Refused BEFORE spawning: no host-binary child, no hang.
+    expect(calls).toHaveLength(0);
+  });
+
+  it('threads the context managed Node through the resolving preview port (Electron-safe)', async () => {
+    const { declaration, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
+    const port = createResolvingPreviewPort({
+      gitProvider: gitProvider(),
+      executor: executor(calls, join(declaration, 'hdsl-e2e-marker')),
+      executorIdentity: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) },
+    });
+    const outcome = await port.previewSource(
+      { owner: 'octo', name: 'dsh-plugin-demo' },
+      new AbortController().signal,
+      { declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable },
+    );
+    expect(outcome.ok).toBe(true);
+    // The production preview wiring must hand the managed Node to the executor.
+    expect(calls[0]?.nodeExecutable).toBe(nodeExecutable);
+    expect(calls[0]?.nodeExecutable).not.toBe(process.execPath);
+  });
+
   it('fails closed when the current declaration source is missing', async () => {
-    const { root, staging } = build();
-    const calls: { args: readonly string[]; cwd: string }[] = [];
+    const { root, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
     const outcome = await resolveTargetProfileLock(
       gitProvider(),
       executor(calls, join(root, 'hdsl-e2e-marker')),
-      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: join(root, 'missing'), stagingDirectory: staging },
+      { source: { owner: 'octo', name: 'dsh-plugin-demo' }, commitSha: COMMIT, declarationDirectory: join(root, 'missing'), stagingDirectory: staging, nodeExecutable },
       new AbortController().signal,
     );
     expect(outcome.ok).toBe(false);

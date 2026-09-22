@@ -9,7 +9,7 @@
  */
 import type { EnvironmentSummary } from '@hdsl/contracts';
 import { describe, expect, it } from 'vitest';
-import { renderAppView, renderCreateForm } from '../../apps/desktop/src/renderer/testing/render-markup.js';
+import { renderAppView, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import {
   INITIAL_STATE,
   type RendererActions,
@@ -341,5 +341,32 @@ describe('AppView accessibility basics', () => {
     });
     expect(html).not.toContain('tabindex="-1"');
     expect(html).not.toContain('tabIndex="-1"');
+  });
+});
+
+describe('S2 panel terminal operation status (QA33 regression)', () => {
+  it('shows the controlled error and a retry affordance, and never a stuck "正在解析" banner', () => {
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        trackedOperation: {
+          operationId: 'op-preview-1',
+          kind: 'preview',
+          phase: 'failed',
+          status: 'failed',
+          sequence: 2,
+          progress: null,
+          environmentId: 'env-1',
+          error: { code: 'EXECUTOR_UNAVAILABLE', message: 'controlled failure', retryable: false },
+          output: null,
+        },
+        actionError: { code: 'EXECUTOR_UNAVAILABLE', message: 'controlled failure', retryable: false },
+      }),
+      actions: noopActions,
+    });
+    expect(html).not.toContain('正在解析来源并生成计划…');
+    expect(html).toContain('EXECUTOR_UNAVAILABLE');
+    expect(buttonNamed(html, '重试预览')).toBeDefined();
   });
 });

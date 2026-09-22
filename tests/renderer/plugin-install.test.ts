@@ -5,7 +5,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { RendererController } from '../../apps/desktop/src/renderer/controller.js';
-import { createTestRendererClient } from './support/contract-client.js';
+import { createStubRendererClient, createTestRendererClient, stubFail, stubOk } from './support/contract-client.js';
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) {
@@ -78,6 +78,90 @@ describe('RendererController generation restore', () => {
       environmentId: stopped.id,
       targetGenerationId: 'gen-0000000000000002',
     });
+    await controller.dispose();
+  });
+});
+
+/**
+ * QA33 real desktop chain: a terminal `failed`/`cancelled` preview must be
+ * surfaced. Previously `#completeTracking` only handled `succeeded`, so the S2
+ * panel kept showing "正在解析来源并生成计划…" with no error.
+ */
+const PREVIEW_ENVIRONMENT = {
+  id: 'env-1',
+  name: 'S2 环境',
+  revision: 3,
+  stateVersion: 1,
+  state: 'stopped',
+  activeGenerationId: 'gen-1',
+  compositionDigest: 'a'.repeat(64),
+};
+
+const previewClient = (snapshot: unknown) =>
+  createStubRendererClient((method) => {
+    switch (method) {
+      case 'catalog.list':
+        return stubOk([]);
+      case 'environments.list':
+        return stubOk([PREVIEW_ENVIRONMENT]);
+      case 'changes.preview':
+        return stubOk({ operationId: 'op-preview-1' });
+      case 'operations.get':
+        return stubOk(snapshot);
+      case 'operations.subscribe':
+        return stubOk({ subscriptionId: 'sub-1' });
+      case 'operations.unsubscribe':
+        return stubOk(null);
+      default:
+        return stubFail('INTERNAL_ERROR');
+    }
+  });
+
+describe('RendererController plugin operation terminal status (QA33 regression)', () => {
+  it('surfaces a failed preview as a controlled error instead of staying in progress', async () => {
+    const { client } = previewClient({
+      id: 'op-preview-1',
+      environmentId: 'env-1',
+      kind: 'preview',
+      phase: 'failed',
+      status: 'failed',
+      sequence: 2,
+      error: { code: 'EXECUTOR_UNAVAILABLE', message: 'the managed executor is unavailable', retryable: false },
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+    controller.setInstallSource('owner', 'octo');
+    controller.setInstallSource('name', 'dsh-plugin-demo');
+    await controller.previewPluginChange();
+    await flush();
+    const state = controller.getState();
+    expect(state.trackedOperation?.status).toBe('failed');
+    expect(state.actionError?.code).toBe('EXECUTOR_UNAVAILABLE');
+    expect(state.changePlan).toBeNull();
+    await controller.dispose();
+  });
+
+  it('records a cancelled preview as a notice, not an error', async () => {
+    const { client } = previewClient({
+      id: 'op-preview-1',
+      environmentId: 'env-1',
+      kind: 'preview',
+      phase: 'cancelled',
+      status: 'cancelled',
+      sequence: 2,
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment('env-1');
+    controller.setInstallSource('owner', 'octo');
+    controller.setInstallSource('name', 'dsh-plugin-demo');
+    await controller.previewPluginChange();
+    await flush();
+    const state = controller.getState();
+    expect(state.trackedOperation?.status).toBe('cancelled');
+    expect(state.notice).not.toBeNull();
+    expect(state.actionError).toBeNull();
     await controller.dispose();
   });
 });

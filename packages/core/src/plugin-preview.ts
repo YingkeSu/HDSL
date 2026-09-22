@@ -61,6 +61,12 @@ export interface PreviewSourceContext {
   readonly declarationDirectory: string;
   /** Isolated staging directory (never the environment home). */
   readonly stagingDirectory: string;
+  /**
+   * Managed Node executable of the current generation. It is REQUIRED: the
+   * resolution child must run under the managed runtime, never the host process
+   * binary (inside Electron, `process.execPath` is Electron and never exits).
+   */
+  readonly nodeExecutable: string;
 }
 
 /**
@@ -207,6 +213,11 @@ export class ChangePreviewService {
               'profile',
             ),
             stagingDirectory: join(this.#layout.tmp, `target-profile-${operationId}`),
+            nodeExecutable: join(
+              generationPaths(this.#layout, command.environmentId, environment.activeGenerationId).nodeDirectory,
+              'bin',
+              'node',
+            ),
           };
     let outcome: PortOutcome<PluginPreviewResolution>;
     try {
