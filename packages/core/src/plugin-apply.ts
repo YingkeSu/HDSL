@@ -39,6 +39,7 @@ import { EnvironmentStore, type EnvironmentRecord } from './environment-store.js
 import { OperationStore, isTerminalStatus } from './operation-store.js';
 import { managedProfileName, publishGenerationProfile } from './generation-profile.js';
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
+import { reuseGenerationRuntime } from './generation-runtime-reuse.js';
 import { ensureDirectory, readDirectoryNames, removePath, tryReadJsonFile, writeJsonAtomic } from './fsx.js';
 import { newGenerationId, newOperationId, newTransactionId } from './ids.js';
 
@@ -48,6 +49,10 @@ export interface PluginApplyStageCommand {
   readonly generationDirectory: string;
   readonly environmentDirectory: string;
   readonly homeDirectory: string;
+  /** Managed Node executable of the reused runtime. */
+  readonly nodeExecutable: string;
+  /** Composition lock of the current active generation (runtime is reused). */
+  readonly currentLock: CompositionLock;
   readonly plan: ChangePlan;
   readonly buildAuthorization: BuildAuthorization | null;
 }
@@ -96,6 +101,12 @@ export interface ChangeApplyServiceOptions {
   readonly operations: OperationStore;
   readonly compositionDigest: (lock: CompositionLock) => string;
   readonly port?: PluginApplyPort;
+  /** Reuses the existing managed-install identity verification for the copied runtime. */
+  readonly verifyGenerationRuntime?: (input: {
+    readonly manifestPath: string;
+    readonly nodeDirectory: string;
+    readonly dshDirectory: string;
+  }) => boolean;
   readonly now?: () => Date;
   /** Test-only fault injection. */
   readonly faults?: ChangeFaults;
@@ -131,6 +142,9 @@ export class ChangeApplyService {
   readonly #port: PluginApplyPort | undefined;
   readonly #now: () => Date;
   readonly #faults: ChangeFaults;
+  readonly #verifyGenerationRuntime:
+    | ((input: { readonly manifestPath: string; readonly nodeDirectory: string; readonly dshDirectory: string }) => boolean)
+    | undefined;
   readonly #inFlight = new Set<string>();
 
   constructor(options: ChangeApplyServiceOptions) {
@@ -142,6 +156,7 @@ export class ChangeApplyService {
     this.#port = options.port;
     this.#now = options.now ?? (() => new Date());
     this.#faults = options.faults ?? {};
+    this.#verifyGenerationRuntime = options.verifyGenerationRuntime;
   }
 
   get environmentStore(): EnvironmentStore {
@@ -266,6 +281,32 @@ export class ChangeApplyService {
       }
 
       ensureDirectory(paths.generationDirectory);
+      // Reuse the active generation's runtime (physical copy + identity binding)
+      // so the new generation keeps a usable Node/DSH install. A missing or
+      // unverified identity fails closed before any publish/commit.
+      const activeGenerationId = environment.activeGenerationId;
+      if (activeGenerationId === null) {
+        this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the environment has no active generation to reuse');
+        return;
+      }
+      const reused = reuseGenerationRuntime({
+        layout: this.#layout,
+        environmentId: command.environmentId,
+        fromGenerationId: activeGenerationId,
+        toGenerationId: ids.generationId,
+        ...(this.#verifyGenerationRuntime === undefined ? {} : { verify: this.#verifyGenerationRuntime }),
+      });
+      if (!reused.ok || reused.value.identityVerified !== true) {
+        this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the new generation runtime could not be verified');
+        return;
+      }
+      const currentLock = tryReadJsonFile<CompositionLock>(
+        generationPaths(this.#layout, command.environmentId, activeGenerationId).lockPath,
+      );
+      if (currentLock === undefined) {
+        this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the active generation has no composition lock');
+        return;
+      }
       const staged = await this.#port!.stage(
         {
           environmentId: command.environmentId,
@@ -273,6 +314,8 @@ export class ChangeApplyService {
           generationDirectory: paths.generationDirectory,
           environmentDirectory: join(this.#layout.environments, command.environmentId),
           homeDirectory: paths.homeDirectory,
+          nodeExecutable: join(paths.generationDirectory, 'node', 'bin', 'node'),
+          currentLock,
           plan,
           buildAuthorization: command.buildAuthorization,
         },
