@@ -23,6 +23,8 @@ import {
   GITHUB_SEARCH_RESULT_LIMIT,
   isPlainRecord,
   PLUGIN_SEARCH_PAGE_SIZE,
+  pluginRepositoryDetailSchema,
+  pluginSearchHitSchema,
   portFail,
   portOk,
   type PluginInspection,
@@ -31,6 +33,7 @@ import {
   type PluginSearchResult,
   type PluginSourceSelector,
   type PortOutcome,
+  type Schema,
 } from '@hdsl/contracts';
 
 /** Narrow fetch seam; the global `fetch` is structurally compatible. */
@@ -82,6 +85,20 @@ const asTopics = (value: unknown): string[] =>
     .filter((topic): topic is string => typeof topic === 'string' && topic.length > 0)
     .slice(0, 50);
 
+/**
+ * Clips free-text display values to the contract bound. A clipped value gets a
+ * visible ellipsis, so the result is never a silent truncation. Structural
+ * identifiers and URLs are **not** clipped here: an out-of-bound one makes the
+ * single hit fail the DTO and be dropped (reported through
+ * `incompleteResults`), which preserves its meaning instead of corrupting it.
+ */
+const clipFreeText = (value: string | null, max: number): string | null => {
+  if (value === null || value.length <= max) {
+    return value;
+  }
+  return `${value.slice(0, max - 1)}…`;
+};
+
 const asLicense = (value: unknown): string | null => {
   const record = asRecord(value);
   if (record === undefined) {
@@ -115,9 +132,10 @@ const mapSearchHit = (value: unknown): PluginSearchHit | undefined => {
   if (fullName === null || owner === null || name === null || htmlUrl === null) {
     return undefined;
   }
-  const description = nonEmpty(asString(item['description']));
+  const description = clipFreeText(nonEmpty(asString(item['description'])), 512);
   const defaultBranch = nonEmpty(asString(item['default_branch'])) ?? 'HEAD';
-  const updatedAt = nonEmpty(asString(item['updated_at'])) ?? 'unknown';
+  const updatedAt = clipFreeText(nonEmpty(asString(item['updated_at'])), 64) ?? 'unknown';
+  const license = clipFreeText(asLicense(item['license']), 128);
   return {
     fullName,
     owner,
@@ -130,7 +148,7 @@ const mapSearchHit = (value: unknown): PluginSearchHit | undefined => {
     updatedAt,
     archived: asBoolean(item['archived']) ?? false,
     fork: asBoolean(item['fork']) ?? false,
-    license: asLicense(item['license']),
+    license,
   };
 };
 
@@ -146,18 +164,22 @@ const mapRepositoryDetail = (value: unknown): PluginRepositoryDetail | undefined
   }
   return {
     fullName,
-    description: nonEmpty(asString(item['description'])),
+    description: clipFreeText(nonEmpty(asString(item['description'])), 512),
     htmlUrl,
     stars: Math.max(0, Math.trunc(asNumber(item['stargazers_count']) ?? 0)),
     topics: asTopics(item['topics']),
     defaultBranch: nonEmpty(asString(item['default_branch'])) ?? 'HEAD',
-    updatedAt: nonEmpty(asString(item['updated_at'])) ?? 'unknown',
+    updatedAt: clipFreeText(nonEmpty(asString(item['updated_at'])), 64) ?? 'unknown',
     archived: asBoolean(item['archived']) ?? false,
     fork: asBoolean(item['fork']) ?? false,
-    license: asLicense(item['license']),
+    license: clipFreeText(asLicense(item['license']), 128),
     homepage: asHomepage(item['homepage']),
   };
 };
+
+/** `pluginSearchHitSchema` is the authority; invalid hits are dropped, not trusted. */
+const isValidAgainst = <T>(schema: Schema<T>, value: unknown): boolean =>
+  schema(value, 'value', []) !== undefined;
 
 /** Parses `retry-after` (seconds) or `x-ratelimit-reset` (epoch seconds). */
 export const rateLimitRetryAfterSeconds = (
@@ -175,9 +197,27 @@ export const rateLimitRetryAfterSeconds = (
   return undefined;
 };
 
-type RequestOutcome =
+type Attempt =
   | { readonly kind: 'response'; readonly response: Response }
+  | { readonly kind: 'parsed'; readonly response: Response; readonly body: unknown }
+  | { readonly kind: 'unparseable'; readonly response: Response }
   | { readonly kind: 'unreachable' };
+
+/** Rejects as soon as the signal aborts, so a stalled body read cannot hang. */
+const rejectOnAbort = (signal: AbortSignal): Promise<never> =>
+  new Promise((_resolve, reject) => {
+    if (signal.aborted) {
+      reject(new Error('aborted'));
+      return;
+    }
+    signal.addEventListener(
+      'abort',
+      () => {
+        reject(new Error('aborted'));
+      },
+      { once: true },
+    );
+  });
 
 export const createGitHubPluginSource = (
   options: GitHubPluginSourceOptions,
@@ -189,7 +229,12 @@ export const createGitHubPluginSource = (
   const userAgent = options.userAgent ?? DEFAULT_USER_AGENT;
   let lastRequestUrl: string | null = null;
 
-  const request = async (url: string, signal: AbortSignal): Promise<RequestOutcome> => {
+  /**
+   * One bounded request. The timeout and the caller's abort stay active through
+   * `response.json()`, so the 15s hard deadline (and cancellation) covers the
+   * whole exchange, not just the headers (ADR 0005 D12).
+   */
+  const attempt = async (url: string, signal: AbortSignal): Promise<Attempt> => {
     lastRequestUrl = url;
     const inner = new AbortController();
     const timer = setTimeout(() => {
@@ -204,7 +249,20 @@ export const createGitHubPluginSource = (
         signal: inner.signal,
         headers: { accept: 'application/vnd.github+json', 'user-agent': userAgent },
       });
-      return { kind: 'response', response };
+      if (!response.ok) {
+        return { kind: 'response', response };
+      }
+      try {
+        const body = await Promise.race([response.json(), rejectOnAbort(inner.signal)]);
+        return { kind: 'parsed', response, body };
+      } catch {
+        // A real abort (deadline or caller) is a connection-level failure; a
+        // body that simply is not JSON reuses the transfer-failure code.
+        if (inner.signal.aborted || signal.aborted) {
+          return { kind: 'unreachable' };
+        }
+        return { kind: 'unparseable', response };
+      }
     } catch {
       return { kind: 'unreachable' };
     } finally {
@@ -232,40 +290,43 @@ export const createGitHubPluginSource = (
     return portFail('DOWNLOAD_FAILED', `GitHub returned HTTP ${String(status)}`);
   };
 
-  const readJson = async (response: Response): Promise<unknown | undefined> => {
-    try {
-      return await response.json();
-    } catch {
-      return undefined;
-    }
-  };
-
   return {
     async search(query, signal) {
       const url = `${apiBase}/search/repositories?q=${encodeURIComponent(query)}&per_page=${String(pageSize)}&page=1`;
-      const outcome = await request(url, signal);
+      const outcome = await attempt(url, signal);
       if (outcome.kind === 'unreachable') {
         return portFail('NETWORK_UNAVAILABLE', 'the GitHub search request could not connect');
       }
-      if (!outcome.response.ok) {
+      if (outcome.kind === 'response') {
         return failureForStatus(outcome.response);
       }
-      const body = await readJson(outcome.response);
-      const record = asRecord(body);
+      if (outcome.kind === 'unparseable') {
+        return portFail('DOWNLOAD_FAILED', 'the GitHub search response was not JSON');
+      }
+      const record = asRecord(outcome.body);
       if (record === undefined) {
         return portFail('DOWNLOAD_FAILED', 'the GitHub search response was not a JSON object');
       }
       const items = Array.isArray(record['items']) ? record['items'] : [];
-      const hits = items
-        .map(mapSearchHit)
-        .filter((hit): hit is PluginSearchHit => hit !== undefined);
+      const hits: PluginSearchHit[] = [];
+      let dropped = 0;
+      for (const item of items) {
+        const hit = mapSearchHit(item);
+        if (hit === undefined || !isValidAgainst(pluginSearchHitSchema, hit)) {
+          // A single out-of-bound hit must not fail the whole search; it is
+          // surfaced through `incompleteResults` instead of silent loss.
+          dropped += 1;
+          continue;
+        }
+        hits.push(hit);
+      }
       const totalCount = Math.max(0, Math.trunc(asNumber(record['total_count']) ?? 0));
       const reachable = Math.min(totalCount, GITHUB_SEARCH_RESULT_LIMIT);
       return portOk({
         query,
         hits,
         totalCount,
-        incompleteResults: asBoolean(record['incomplete_results']) ?? false,
+        incompleteResults: (asBoolean(record['incomplete_results']) ?? false) || dropped > 0,
         hasMore: hits.length < reachable,
         fetchedAt: now().toISOString(),
         fromCache: false,
@@ -274,16 +335,18 @@ export const createGitHubPluginSource = (
 
     async inspect(source, signal) {
       const url = `${apiBase}/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.name)}`;
-      const outcome = await request(url, signal);
+      const outcome = await attempt(url, signal);
       if (outcome.kind === 'unreachable') {
         return portFail('NETWORK_UNAVAILABLE', 'the GitHub repository request could not connect');
       }
-      if (!outcome.response.ok) {
+      if (outcome.kind === 'response') {
         return failureForStatus(outcome.response);
       }
-      const body = await readJson(outcome.response);
-      const repository = mapRepositoryDetail(body);
-      if (repository === undefined) {
+      if (outcome.kind === 'unparseable') {
+        return portFail('DOWNLOAD_FAILED', 'the GitHub repository response was not JSON');
+      }
+      const repository = mapRepositoryDetail(outcome.body);
+      if (repository === undefined || !isValidAgainst(pluginRepositoryDetailSchema, repository)) {
         return portFail('DOWNLOAD_FAILED', 'the GitHub repository response was malformed');
       }
       return portOk({

@@ -167,6 +167,81 @@ describe('plugins.search (GitHub read-only adapter)', () => {
     expect(outcome.code).toBe('NETWORK_UNAVAILABLE');
   });
 
+  it('keeps the body read inside the 15s deadline: a stalled body still times out', async () => {
+    const stalledBody = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => new Promise<never>(() => undefined),
+    } as unknown as Response;
+    const { source } = setup(() => Promise.resolve(stalledBody), { timeoutMs: 5 });
+    const outcome = await source.search('q', new AbortController().signal);
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe('NETWORK_UNAVAILABLE');
+  });
+
+  it('lets caller cancellation interrupt a stalled body read', async () => {
+    const stalledBody = {
+      ok: true,
+      status: 200,
+      headers: new Headers(),
+      json: () => new Promise<never>(() => undefined),
+    } as unknown as Response;
+    const { source } = setup(() => Promise.resolve(stalledBody), { timeoutMs: 60_000 });
+    const controller = new AbortController();
+    const pending = source.search('q', controller.signal);
+    setTimeout(() => {
+      controller.abort();
+    }, 5);
+    const outcome = await pending;
+    expect(outcome.ok).toBe(false);
+    if (outcome.ok) return;
+    expect(outcome.code).toBe('NETWORK_UNAVAILABLE');
+  });
+
+  it('clips oversized free-text description instead of failing the whole search', async () => {
+    const { source } = setup(() =>
+      Promise.resolve(
+        jsonResponse({
+          total_count: 1,
+          incomplete_results: false,
+          items: [repository({ description: 'x'.repeat(900) })],
+        }),
+      ),
+    );
+    const outcome = await source.search('topic:dsh-plugin', new AbortController().signal);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const description = outcome.value.hits[0]?.description ?? '';
+    expect([...description].length).toBeLessThanOrEqual(512);
+    expect(description.endsWith('…')).toBe(true);
+    expect(outcome.value.incompleteResults).toBe(false);
+  });
+
+  it('drops a structurally invalid hit but keeps the valid hits and flags incompleteness', async () => {
+    const { source } = setup(() =>
+      Promise.resolve(
+        jsonResponse({
+          total_count: 2,
+          incomplete_results: false,
+          items: [
+            repository(),
+            // A repository name is a schema-invalid structural identifier; the
+            // hit must be dropped, not silently corrupted by clipping.
+            repository({ full_name: 'octo/bad name', name: 'bad name', html_url: 'https://github.com/octo/bad name' }),
+          ],
+        }),
+      ),
+    );
+    const outcome = await source.search('topic:dsh-plugin', new AbortController().signal);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.hits.length).toBe(1);
+    expect(outcome.value.hits[0]?.name).toBe('dsh-plugin-demo');
+    expect(outcome.value.incompleteResults).toBe(true);
+  });
+
   it('sends no GitHub credential, even when GITHUB_TOKEN is present in the environment', async () => {
     const previous = process.env['GITHUB_TOKEN'];
     process.env['GITHUB_TOKEN'] = 'canary-token-should-not-be-read';
