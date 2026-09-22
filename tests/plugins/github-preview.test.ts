@@ -161,3 +161,48 @@ describe('GitHub preview adapter', () => {
     }
   });
 });
+
+describe('GitProvider injection (test seam; production default stays GitHub HTTPS)', () => {
+  it('resolves through an injected provider via the shared builder', async () => {
+    const adapter = createGitHubPluginSource({
+      fetch: async () => jsonResponse({}, 500),
+      gitProvider: {
+        resolveManifest: async (_source, _signal) => ({
+          ok: true,
+          value: {
+            commitSha: 'b'.repeat(40),
+            manifestText: JSON.stringify({
+              name: 'local-fixture-plugin',
+              version: '0.3.0',
+              dsh: { bundle: { patch: 'cordis.patch.yml' } },
+              scripts: { prepare: 'node build.js' },
+            }),
+            lockText: 'lockfileVersion: 9.0\n',
+          },
+        }),
+      },
+    });
+    const outcome = await adapter.previewSource(source, new AbortController().signal);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    expect(outcome.value.sourceLock.commitSha).toBe('b'.repeat(40));
+    expect(outcome.value.scriptAssessment).toBe('detected');
+    expect(outcome.value.sourceLock.closureLockSha256).toHaveLength(64);
+  });
+
+  it('propagates a provider-controlled failure unchanged', async () => {
+    const adapter = createGitHubPluginSource({
+      fetch: async () => jsonResponse({}, 500),
+      gitProvider: {
+        resolveManifest: async () => ({ ok: false, code: 'SOURCE_NOT_FOUND', message: 'locked commit is unreachable' }),
+      },
+    });
+    const outcome = await adapter.previewSource(source, new AbortController().signal);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('SOURCE_NOT_FOUND');
+    }
+  });
+});

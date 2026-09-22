@@ -21,6 +21,12 @@
  */
 import { createHash } from 'node:crypto';
 import {
+  buildPreviewResolution,
+  type GitProvider,
+  type PluginPreviewResolution,
+} from './preview-resolution.js';
+export type { GitProvider, PluginPreviewResolution, ResolvedSourceManifest } from './preview-resolution.js';
+import {
   GITHUB_SEARCH_RESULT_LIMIT,
   isPlainRecord,
   PLUGIN_SEARCH_PAGE_SIZE,
@@ -41,19 +47,7 @@ import {
   type ScriptAssessment,
 } from '@hdsl/contracts';
 
-/**
- * Structural mirror of core's `PluginPreviewResolution` (runtime and core do not
- * depend on each other; the composition root wires them structurally).
- */
-export interface PluginPreviewResolution {
-  readonly sourceLock: PluginSourceLock;
-  readonly scripts: readonly BuildScriptEntry[];
-  readonly scriptAssessment: ScriptAssessment;
-  readonly requiresBuildAuthorization: boolean;
-  readonly riskItems: readonly string[];
-  readonly executor: ExecutorIdentity | null;
-  readonly planInputsDigest: string;
-}
+
 
 const INSTALL_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
 const NO_SCRIPTS_RISK = 'no install-time scripts detected in the parsed manifest (dependency closure not enumerated)';
@@ -79,6 +73,8 @@ export interface GitHubPluginSourceOptions {
   readonly userAgent?: string;
   /** Managed executor identity bound into the plan inputs (E1); `null` until frozen. */
   readonly executor?: ExecutorIdentity | null;
+  /** Test-only provider injection; the production default is public GitHub HTTPS. */
+  readonly gitProvider?: GitProvider;
 }
 
 export interface GitHubPluginSource {
@@ -394,6 +390,12 @@ export const createGitHubPluginSource = (
 
 
     async previewSource(source, signal) {
+      if (options.gitProvider !== undefined) {
+        const resolved = await options.gitProvider.resolveManifest(source, signal);
+        return resolved.ok
+          ? buildPreviewResolution({ source, resolved: resolved.value, executor: options.executor ?? null })
+          : resolved;
+      }
       const owner = encodeURIComponent(source.owner);
       const name = encodeURIComponent(source.name);
       const commitsUrl =
