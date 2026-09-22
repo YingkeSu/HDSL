@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPluginRemovalPort, retainedDependenciesFromLock, type PluginExecutorPort } from '@hdsl/runtime';
+import { classifyManagedInstallFailure, createPluginRemovalPort, retainedDependenciesFromLock, type PluginExecutorPort } from '@hdsl/runtime';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -380,5 +380,21 @@ describe('createPluginRemovalPort', () => {
     if (!outcome.ok) return;
     // Drifted live profile => the reference scan is incomplete => unknown block.
     expect(outcome.value.blockingReferences.length).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('classifyManagedInstallFailure (bounded, evidence-based)', () => {
+  it('classifies only reliably identifiable failures and never fabricates a rate-limit mapping', () => {
+    expect(classifyManagedInstallFailure('ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/x: getaddrinfo ENOTFOUND registry.npmjs.org').code).toBe('NETWORK_UNAVAILABLE');
+    expect(classifyManagedInstallFailure('connect ECONNREFUSED 127.0.0.1:443').code).toBe('NETWORK_UNAVAILABLE');
+    expect(classifyManagedInstallFailure('getaddrinfo EAI_AGAIN registry.npmjs.org').code).toBe('NETWORK_UNAVAILABLE');
+    expect(classifyManagedInstallFailure('ERR_PNPM_TARBALL_INTEGRITY expected sha512 but got ...').code).toBe('DOWNLOAD_FAILED');
+    expect(classifyManagedInstallFailure('ERR_PNPM_BAD_TARBALL_SIZE').code).toBe('DOWNLOAD_FAILED');
+    expect(classifyManagedInstallFailure('socket hang up: ECONNRESET').code).toBe('DOWNLOAD_FAILED');
+    // pnpm routes ERR_PNPM_FETCH_403 to reportAuthError (auth, not rate limit):
+    // it must NOT be silently re-labelled as RATE_LIMITED.
+    expect(classifyManagedInstallFailure('ERR_PNPM_FETCH_403 Forbidden').code).toBe('INTERNAL_ERROR');
+    expect(classifyManagedInstallFailure('too many requests (429)').code).toBe('INTERNAL_ERROR');
+    expect(classifyManagedInstallFailure('an unrelated internal failure').code).toBe('INTERNAL_ERROR');
   });
 });

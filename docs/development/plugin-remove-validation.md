@@ -90,6 +90,25 @@ RESULT: PASS — 17/17 checks
 - **不是任意第三方插件的可卸载性**：服务级耦合仅在 HDSL 受限声明 + 核验记录范围内可判定；绝无核验记录的插件一律 unknown 阻塞。
 - 不覆盖 Windows/Linux；不覆盖真实桌面崩溃窗口的全相位 `SIGKILL`（见 `tests/core/a2-window-kill.test.ts`、`apply-window-kill.test.ts`）。
 
+## AC9：卸载路径的失败分类（有界、可证伪）
+
+**网络面事实**：卸载路径**不调用 GitHub API**（无 GitHub API 限流面）；但 preview 的 `pnpm install --lockfile-only` 与 apply 的 `pnpm install --frozen-lockfile --ignore-scripts` 由受管 pnpm 执行，executor 设置 `npm_config_registry`，pnpm 会从 registry 拉取剩余包、git 依赖从 codeload tarball 拉取 ⇒ **存在真实包获取网络面**。`EXECUTOR_UNAVAILABLE` **仅**表示受管执行器制品/身份问题，**不**覆盖包获取失败。
+
+**非零退出分类**（`classifyManagedInstallFailure`，作用域仅限移除端口；不扩 S2）：
+
+| 可观测证据（冻结 pnpm 11.7.0 的稳定 token） | 既有契约码 | retryable |
+| --- | --- | --- |
+| `ENOTFOUND` / `EAI_AGAIN` / `ECONNREFUSED`（连接未建立） | `NETWORK_UNAVAILABLE` | 是 |
+| `ECONNRESET` / `EPIPE` / `ECONNABORTED` / `ERR_STREAM_PREMATURE_CLOSE` / `UND_ERR_SOCKET` / `UND_ERR_BODY_TIMEOUT`（连接已建立后中断） | `DOWNLOAD_FAILED` | 是 |
+| `ERR_PNPM_TARBALL_INTEGRITY` / `ERR_PNPM_BAD_TARBALL_SIZE`（取物/校验失败） | `DOWNLOAD_FAILED` | 是 |
+| 其它/不可靠识别 | `INTERNAL_ERROR`（脱敏） | 否 |
+
+- **不编造限流映射**：冻结 pnpm 只对 401/403 有字面码且均路由到 `reportAuthError`（**403 是认证/权限，不是限流**），且不存在 `429`/`ERR_PNPM_FETCH_${status}` 模板 ⇒ registry 限流在本通道**不可靠识别**，保持 `INTERNAL_ERROR`；未设置 `retryAfterSeconds`（无机器可读依据）。
+- **不外泄**：只做整 token 匹配，错误文案固定且**绝不包含 stderr 原文**（无路径/凭据泄漏面）。
+- **跨版本失效**：该分类绑定受管 pnpm `11.7.0` 的稳定 token；换 pnpm 版本需重新核验。
+
+**负控**（`tests/core/removal-apply.test.ts` / `tests/plugins/removal-port.test.ts` / `tests/renderer/plugin-removal.test.ts`）：preview 与 apply 的运行期非零退出分别命中上述码；旧代际/指针/revision 不变、计划未消费、stage 目录清理（仅保留旧代）、同一计划用新 `requestId` 可重试成功；不可识别 ⇒ `INTERNAL_ERROR` 非重试且不含原始文本；UI 对可重试失败给出准确文案并保留重试入口。
+
 ## 本片修复的真实缺陷（均有回归测试）
 
 1. **完全剪除后的 lock 被判为不可解析**：`resolveLockClosure` 在 pruned lock 只剩根 importer、无 `packages`/`snapshots` 段时返回 `unsupported`，使「删掉最后一个直接依赖」的合法卸载失败。修复：根 importer 无直接依赖 ⇒ 空闭包（`ok`），仅在仍有直接依赖却无法解析时 fail-closed。回归 `tests/plugins/lock-closure.test.ts`。

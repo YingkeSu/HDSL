@@ -271,4 +271,17 @@ describe('renderer removal markup (DOM-free real React)', () => {
     expect(html).toContain('不能卸载');
     expect(html).not.toContain('确认卸载');
   });
+
+  it('shows a retryable network failure with the confirm action still available for a new attempt', () => {
+    const html = renderPluginRemoval({
+      state: state({
+        phase: 'ready',
+        changePlan: removePlan(),
+        actionError: { code: 'NETWORK_UNAVAILABLE', message: 'network error', retryable: true },
+      }),
+      actions,
+    });
+    expect(html).toContain('网络不可用');
+    expect(html).toContain('确认卸载');
+  });
 });

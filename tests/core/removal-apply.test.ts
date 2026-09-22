@@ -8,7 +8,7 @@
  * runtime copy, profile publish, pointer switch, journal, revision and ledger
  * paths are the SAME ones the install slice uses.
  */
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -139,10 +139,55 @@ const executor = (writtenLock: () => string): PluginExecutorPort => ({
   },
 });
 
+type FailureMode = 'network' | 'download' | 'unknown' | 'fail-once-then-ok';
+
+/** Deterministic managed-executor fake for the AC9 failure-classification branches. */
+const failureExecutor = (mode: FailureMode): PluginExecutorPort => {
+  let frozenAttempts = 0;
+  const okValue = (exitCode: number, stderr = '') => ({
+    ok: true as const,
+    value: {
+      executor: { id: 'pnpm' as const, version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) },
+      exitCode,
+      stdout: '',
+      stderr,
+      executedInstallScripts: [],
+    },
+  });
+  return {
+    identity: async () => ({
+      ok: true,
+      value: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) },
+    }),
+    run: async (request) => {
+      const lockOnly = request.args.includes('--lockfile-only');
+      if (!lockOnly) {
+        frozenAttempts += 1;
+      }
+      if (mode === 'network') {
+        return okValue(1, 'ERR_PNPM_META_FETCH_FAIL GET https://registry.npmjs.org/x: getaddrinfo ENOTFOUND registry.npmjs.org');
+      }
+      if (mode === 'unknown') {
+        return okValue(1, 'something we cannot classify');
+      }
+      if (mode === 'download' && !lockOnly) {
+        return okValue(1, 'ERR_PNPM_TARBALL_INTEGRITY expected sha512 but got a different digest');
+      }
+      if (mode === 'fail-once-then-ok' && !lockOnly && frozenAttempts === 1) {
+        return okValue(1, 'ECONNRESET while reading the response body');
+      }
+      writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), prunedLock());
+      return okValue(0);
+    },
+  };
+};
+
 interface FixtureOptions {
   readonly pluginId?: string;
   readonly installedViaB?: boolean;
   readonly userPatch?: string | null;
+  /** Replaces the default managed-executor fake (used by the failure classification tests). */
+  readonly executor?: PluginExecutorPort;
 }
 
 const build = (options: FixtureOptions = {}) => {
@@ -264,7 +309,7 @@ const build = (options: FixtureOptions = {}) => {
   }
 
   const writtenLock = options.installedViaB === true ? () => retainedViaOtherLock(pluginId) : () => prunedLock();
-  const removalPort = createPluginRemovalPort({ executor: executor(writtenLock) });
+  const removalPort = createPluginRemovalPort({ executor: options.executor ?? executor(writtenLock) });
   const preview = new ChangePreviewService({
     layout,
     removalPort,
@@ -323,10 +368,15 @@ const previewRemoval = async (
   }, started.value.operationId);
 };
 
-const applyPlan = async (fixture: ReturnType<typeof build>, plan: ChangePlan, port?: PluginRemovalPort) => {
+const applyPlan = async (
+  fixture: ReturnType<typeof build>,
+  plan: ChangePlan,
+  port?: PluginRemovalPort,
+  requestId = 'req-apply-remove',
+) => {
   const service = fixture.apply(port ?? fixture.removalPort);
   const started = service.applyChange({
-    requestId: 'req-apply-remove',
+    requestId,
     environmentId: ENVIRONMENT_ID,
     expectedRevision: plan.baseRevision,
     planId: plan.planId,
@@ -671,5 +721,59 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
     expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
     expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
+  });
+
+  it('maps a reliably identified pre-connection network failure in remove preview to NETWORK_UNAVAILABLE (retryable)', async () => {
+    const fixture = build({ executor: failureExecutor('network') });
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error?.code).toBe('NETWORK_UNAVAILABLE');
+    expect(snapshot.error?.retryable).toBe(true);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+  });
+
+  it('keeps an unidentifiable install failure a sanitized, non-retryable INTERNAL_ERROR', async () => {
+    const fixture = build({ executor: failureExecutor('unknown') });
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error?.code).toBe('INTERNAL_ERROR');
+    expect(snapshot.error?.retryable).toBe(false);
+    // The child's raw text is never surfaced.
+    expect(snapshot.error?.message ?? '').not.toContain('something we cannot classify');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+  });
+
+  it('fails a removal apply on a registry transfer/integrity failure with DOWNLOAD_FAILED and no commit', async () => {
+    const fixture = build({ executor: failureExecutor('download') });
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    const applied = await applyPlan(fixture, plan);
+    expect(applied.status).toBe('failed');
+    expect(applied.error?.code).toBe('DOWNLOAD_FAILED');
+    expect(applied.error?.retryable).toBe(true);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
+    // Stage cleanup: only the old generation remains.
+    expect(
+      readdirSync(join(fixture.layout.environments, ENVIRONMENT_ID, 'generations')).sort(),
+    ).toEqual([OLD_GENERATION]);
+  });
+
+  it('lets a new requestId retry a pre-commit removal apply failure to success', async () => {
+    const fixture = build({ executor: failureExecutor('fail-once-then-ok') });
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    const first = await applyPlan(fixture, plan, undefined, 'req-retry-1');
+    expect(first.status).toBe('failed');
+    expect(first.error?.code).toBe('DOWNLOAD_FAILED');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
+    const second = await applyPlan(fixture, plan, undefined, 'req-retry-2');
+    expect(second.status).toBe('succeeded');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
   });
 });
