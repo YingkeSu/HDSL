@@ -9,3 +9,4 @@ export * from './target-profile.js';
 export * from './resolving-preview.js';
 export * from './removal.js';
 export * from './patch-references.js';
+export * from './service-verifications.js';

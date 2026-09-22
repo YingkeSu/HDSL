@@ -48,6 +48,9 @@ const input = (overrides: Partial<PluginRemovalInput> = {}): PluginRemovalInput 
   installed: [{ id: 'demo-plugin', version: '1.0.0' }, { id: 'shared-dep', version: '1.0.0' }, { id: '@deepseek-ai/dsh-base', version: '0.1.5-rc.2' }],
   inBoxBundles: [{ name: '@deepseek-ai/dsh-base', version: '0.1.5-rc.2' }],
   referenceSources: [],
+  // Verified-empty baseline: the static rules are tested in isolation; the
+  // unknown-verification cases set this explicitly.
+  serviceVerification: { status: 'known', provides: [] },
   ...overrides,
 });
 
@@ -198,7 +201,7 @@ describe('resolvePluginRemoval', () => {
     expect(outcome.value.blockingReferences[0]?.detail).toContain('provides');
   });
 
-  it('D21 unknown verification: blocks while any retained consumer exists, never inferred safe', () => {
+  it('D21 unknown verification ALWAYS blocks (empty scans are not proof of safety)', () => {
     const withConsumer = resolvePluginRemoval(input({
       serviceVerification: { status: 'unknown' },
       referenceSources: [
@@ -209,14 +212,16 @@ describe('resolvePluginRemoval', () => {
     if (!withConsumer.ok) return;
     expect(withConsumer.value.blockingReferences[0]?.detail).toContain('not verified');
 
-    // No retained consumer at all: no service can depend on this plugin.
+    // Even with NO retained consumer found by the scan, unknown blocks: patch and
+    // manifest cannot fully describe code-level service dependencies.
     const noConsumers = resolvePluginRemoval(input({
       serviceVerification: { status: 'unknown' },
       referenceSources: [{ kind: 'bundle', detail: 'bundle without injects', references: [], services: [], unresolved: false }],
     }));
     expect(noConsumers.ok).toBe(true);
     if (!noConsumers.ok) return;
-    expect(noConsumers.value.blockingReferences).toEqual([]);
+    expect(noConsumers.value.blockingReferences).toHaveLength(1);
+    expect(noConsumers.value.blockingReferences[0]?.detail).toContain('not verified');
   });
 
   it('warns (never blocks) about patch-injected service overlap and never treats services as packages', () => {

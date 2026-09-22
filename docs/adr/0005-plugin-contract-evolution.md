@@ -218,7 +218,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 1. **元数据来源（HDSL 命名空间，非上游字段）**：插件可**可选**声明 `hdsl.services.provides`（HDSL 自有命名空间；**不得**表述为 DSH/上游官方字段，也不得复用 `dsh.*` 命名空间冒充官方）。该声明**语义仅是 HDSL 卸载分析的声明范围**，**不是**运行时沙箱/隔离/安全保证。
 2. **可信边界**：自报列表**不构成证明**。只有 HDSL 生成并保存的**核验记录**才使声明成为 known：记录绑定 `{repository, exact commitSha, 声明内容摘要, 源 manifest 摘要, 核验来源与 SHA, 独立 review 出处}`。三态而非两态：**(i) 显式 `provides: []` + 独立核验记录 ⇒ `known empty`**（**不是 unknown**，否则受控 fixture 不可卸载）；(ii) 缺失声明、空字符串、或声明存在但**未核验/摘要不匹配** ⇒ **unknown**；(iii) 显式非空 `provides` + 核验 + 与保留 consumers 相交 ⇒ 拦截。**不得**把“无声明”一律当成有证空。
 3. **核验来源（MVP）**：受控、经独立 review 的**精确源码**（当前 fixture **不提供服务**，即其 provides 记录为空/无）；HDSL 记录出处与 SHA。**任何源码升级（新 commit/新摘要）使既有记录失效**。不建立远程市场、不自动扫描任意 JS、不做 JS 模式猜测。
-4. **卸载判定（(i) 有限支持边界，不建覆盖图）**：`knownProviders(被移除插件) ∩ 保留 patch consumers` → `REFERENCED_BY_OTHER`（安全来源标识，无本地路径）；**unknown ⇒ 明确阻塞**（不默认可卸载）；**不阻塞** 仅限“**target 为 known 且与保留 consumers 不相交**”——**绝不**从“存在其它 provider”推出未知 target 安全；`known empty` 且无相交 ⇒ 放行。受限码映射见 D21 变更说明（在冻结错误码集内用 `REFERENCED_BY_OTHER` + 可解释 detail，不新增公开错误码）。
+4. **卸载判定（(i) 有限支持边界，不建覆盖图）**：`knownProviders(被移除插件) ∩ 保留 patch consumers` → `REFERENCED_BY_OTHER`（安全来源标识，无本地路径）；**unknown ⇒ 一律明确阻塞**（与是否存在保留 consumer 无关：扫描未发现消费者不等于不存在代码级依赖；不默认可卸载）；**不阻塞** 仅限“**target 为 known 且与保留 consumers 不相交**”——**绝不**从“存在其它 provider”或“扫描为空”推出未知 target 安全；`known empty` 与 `known 不相交` ⇒ 放行。受限码映射见 D21 变更说明（在冻结错误码集内用 `REFERENCED_BY_OTHER` + 可解释 detail，不新增公开错误码）。
 5. **未知 UX**：UI 必须呈现“**无法验证服务依赖，暂不能卸载**”，**不得**呈现为“插件安全/无影响/无引用”；也不得把 unknown 静默当通过。
 6. **安装保留与卸载重验**：核验记录在安装期建立并保留（内部记录，尽量不新增公开契约字段；确需公开时再同步契约与 fixtures）；卸载时**按精确 commit + 摘要重验**，漂移 → `PLAN_STALE`/unknown 阻塞。
 7. **既有代兼容策略**：本边界之前安装的代/插件**没有记录** ⇒ 其服务轴为 unknown；这些代仍可运行，但其卸载在服务轴按 unknown 阻塞，除非可完成核验；不做“默认无服务”的静默放行、不造假 trust 恒真。

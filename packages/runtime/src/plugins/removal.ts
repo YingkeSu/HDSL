@@ -142,8 +142,9 @@ export interface PluginRemovalInput {
    * - `known` + `provides: []` is a VERIFIED EMPTY set (removal may proceed when
    *   no retained consumer intersects);
    * - `unknown` (missing declaration, empty string, unverified or digest
-   *   mismatch) must block whenever a retained source injects ANY service; it is
-   *   never inferred safe from the existence of other providers.
+   *   mismatch) ALWAYS blocks: a scan that finds no retained consumer is not proof
+   *   that no code-level dependency exists, and it is never inferred safe from the
+   *   existence of other providers.
    */
   readonly serviceVerification?:
     | { readonly status: 'known'; readonly provides: readonly string[] }
@@ -298,10 +299,11 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
         });
       }
     }
-  } else if (injectedElsewhere.size > 0) {
-    // Unknown verification: NEVER infer safety from other providers. The absence
-    // of a static reference is not proof; block while any retained consumer can
-    // depend on a service this plugin may provide.
+  } else {
+    // Unknown verification ALWAYS blocks (ADR 0005 D21, ruling (i)): manifests and
+    // patches cannot fully describe code-level service dependencies, so "no
+    // retained consumer found by the scan" is not proof that no dependency exists.
+    // Never inferred safe from other providers or from an empty scan.
     blockingReferences.push({
       pluginId: input.pluginId,
       kind: 'config',
