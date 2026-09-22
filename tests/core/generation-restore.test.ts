@@ -139,3 +139,77 @@ describe('generations.restore', () => {
     expect(environments.read(ENVIRONMENT_ID)?.revision).toBe(2);
   });
 });
+
+describe('generations.restore: idempotency, mutual exclusion and crash reconciliation', () => {
+  it('is an idempotent no-op when the target is already active', () => {
+    const { environments, operations, service } = build();
+    const outcome = service.restoreGeneration(command({ targetGenerationId: GEN2 }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(operations.read(outcome.value.operationId)?.status).toBe('succeeded');
+    expect(environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(GEN2);
+    expect(environments.read(ENVIRONMENT_ID)?.revision).toBe(2);
+  });
+
+  it('refuses while another change transaction has an unresolved journal', () => {
+    const { layout, service } = build();
+    writeFileSync(join(layout.applyJournals, 'txn-00000000000000aa.json'), JSON.stringify({
+      schemaVersion: '1', kind: 'apply', transactionId: 'txn-00000000000000aa', requestId: 'req-x', operationId: 'op-00000000000000aa',
+      environmentId: ENVIRONMENT_ID, generationId: GEN1, planId: 'plan-0000000000000001', sourceLock: null, phase: 'verified',
+      createdAt: '2026-09-22T00:05:00.000Z', updatedAt: '2026-09-22T00:05:00.000Z',
+    }));
+    const outcome = service.restoreGeneration(command());
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('ENVIRONMENT_BUSY');
+  });
+
+  it('finalizes a restore journal when the pointer already switched (crash after switch)', () => {
+    const { layout, environments, service } = build();
+    // Pointer is already GEN1 (as if the crash happened after the switch).
+    environments.write({ ...environments.read(ENVIRONMENT_ID)!, activeGenerationId: GEN1, revision: 3, compositionDigest: '1'.repeat(64) });
+    writeFileSync(join(layout.applyJournals, 'txn-00000000000000bb.json'), JSON.stringify({
+      schemaVersion: '1', kind: 'restore', transactionId: 'txn-00000000000000bb', requestId: 'req-y', operationId: 'op-00000000000000bb',
+      environmentId: ENVIRONMENT_ID, generationId: GEN1, planId: '', sourceLock: null, phase: 'committed',
+      createdAt: '2026-09-22T00:05:00.000Z', updatedAt: '2026-09-22T00:05:00.000Z',
+    }));
+    const report = service.recover();
+    expect(report.finalized).toBeGreaterThanOrEqual(1);
+    expect(environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(GEN1);
+    expect(existsSync(generationPaths(layout, ENVIRONMENT_ID, GEN2).generationDirectory)).toBe(true);
+  });
+
+  it('discards an interrupted restore without deleting anything when the pointer did not switch', () => {
+    const { layout, environments, service } = build();
+    writeFileSync(join(layout.applyJournals, 'txn-00000000000000cc.json'), JSON.stringify({
+      schemaVersion: '1', kind: 'restore', transactionId: 'txn-00000000000000cc', requestId: 'req-z', operationId: 'op-00000000000000cc',
+      environmentId: ENVIRONMENT_ID, generationId: GEN1, planId: '', sourceLock: null, phase: 'committed',
+      createdAt: '2026-09-22T00:05:00.000Z', updatedAt: '2026-09-22T00:05:00.000Z',
+    }));
+    const report = service.recover();
+    expect(report.rolledBack).toBeGreaterThanOrEqual(1);
+    expect(environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(GEN2);
+    expect(existsSync(generationPaths(layout, ENVIRONMENT_ID, GEN1).generationDirectory)).toBe(true);
+    expect(existsSync(generationPaths(layout, ENVIRONMENT_ID, GEN2).generationDirectory)).toBe(true);
+  });
+});
+
+describe('generations.restore: mutual exclusion with apply and start', () => {
+  it('refuses a new apply while a restore journal is unresolved', () => {
+    const { layout, service } = build();
+    new ChangePlanStore(layout).write({ schemaVersion: '1', plan: {
+      planId: 'plan-0000000000000001', environmentId: ENVIRONMENT_ID, baseRevision: 2,
+      action: { kind: 'install', source: { owner: 'octo', name: 'dsh-plugin-demo' } },
+      createdAt: '2026-09-22T00:05:00.000Z', expiresAt: '2026-09-22T00:15:00.000Z', sourceLock: null,
+      scriptAssessment: 'none-detected', scripts: [], requiresBuildAuthorization: false,
+      riskItems: [], removals: [], retention: [], blockingReferences: [], executor: null, planInputsDigest: 'd'.repeat(64),
+    }, consumedBy: null });
+    writeFileSync(join(layout.applyJournals, 'txn-00000000000000dd.json'), JSON.stringify({
+      schemaVersion: '1', kind: 'restore', transactionId: 'txn-00000000000000dd', requestId: 'req-r', operationId: 'op-00000000000000dd',
+      environmentId: ENVIRONMENT_ID, generationId: GEN1, planId: '', sourceLock: null, phase: 'committed',
+      createdAt: '2026-09-22T00:05:00.000Z', updatedAt: '2026-09-22T00:05:00.000Z',
+    }));
+    const outcome = service.applyChange({ requestId: 'req-apply-blocked', environmentId: ENVIRONMENT_ID, expectedRevision: 2, planId: 'plan-0000000000000001', buildAuthorization: null });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('ENVIRONMENT_BUSY');
+  });
+});

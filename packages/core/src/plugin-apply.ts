@@ -126,6 +126,7 @@ export interface ChangeApplyServiceOptions {
 
 interface ApplyJournalRecord {
   readonly schemaVersion: '1';
+  readonly kind?: 'apply' | 'restore';
   readonly transactionId: string;
   readonly requestId: string;
   readonly operationId: string;
@@ -222,11 +223,13 @@ export class ChangeApplyService {
     if (!guarded.ok) {
       return guarded;
     }
+    // Busy/reconciliation-required is a client-facing condition and must be
+    // reported before any wiring/internal check.
+    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId)) {
+      return portFail('ENVIRONMENT_BUSY', 'another change transaction is in progress for this environment');
+    }
     if (this.#port === undefined) {
       return portFail('INTERNAL_ERROR', 'the change apply transaction is not wired');
-    }
-    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId)) {
-      return portFail('ENVIRONMENT_BUSY', 'another apply transaction is in progress for this environment');
     }
     const operationId = newOperationId();
     const generationId = newGenerationId();
@@ -281,6 +284,20 @@ export class ChangeApplyService {
     if (tryReadJsonFile(paths.manifestPath) === undefined) {
       return portFail('NOT_FOUND', 'the target generation has no install manifest');
     }
+    // Idempotent no-op when the target is already active.
+    if (environment.activeGenerationId === command.targetGenerationId) {
+      const operationId = newOperationId();
+      this.#operations.create({ id: operationId, kind: 'restore', environmentId: command.environmentId, phase: 'switched', status: 'running', createdAt: this.#now().toISOString() });
+      const created = this.#operations.read(operationId);
+      if (created !== undefined) {
+        this.#operations.update(created, { status: 'succeeded', phase: 'finished', output: this.#generationSummary(command, record) }, this.#now().toISOString());
+      }
+      return portOk({ operationId });
+    }
+    // Single-active: refuse while another apply/restore transaction is pending.
+    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId)) {
+      return portFail('ENVIRONMENT_BUSY', 'another change transaction is in progress for this environment');
+    }
     if (
       this.#verifyGenerationRuntime !== undefined &&
       !this.#verifyGenerationRuntime({
@@ -307,15 +324,34 @@ export class ChangeApplyService {
         error instanceof Error ? error.message : 'the target generation profile could not be published',
       );
     }
+    const transactionId = newTransactionId();
     const operationId = newOperationId();
+    const createdAt = this.#now().toISOString();
     this.#operations.create({
       id: operationId,
       kind: 'restore',
       environmentId: command.environmentId,
       phase: 'switching',
       status: 'running',
-      createdAt: this.#now().toISOString(),
+      createdAt,
     });
+    // Durable journal BEFORE the pointer switch: a crash after the switch is
+    // reconciled as finalize (pointer authoritative); a crash before it leaves
+    // nothing to roll back (restore has no staging).
+    writeJsonAtomic(applyJournalRecordPath(this.#layout, transactionId), {
+      schemaVersion: '1',
+      kind: 'restore',
+      transactionId,
+      requestId: command.requestId,
+      operationId,
+      environmentId: command.environmentId,
+      generationId: command.targetGenerationId,
+      planId: '',
+      sourceLock: null,
+      phase: 'committed',
+      createdAt,
+      updatedAt: createdAt,
+    } satisfies ApplyJournalRecord);
     this.#environments.write({
       ...environment,
       activeGenerationId: command.targetGenerationId,
@@ -342,7 +378,22 @@ export class ChangeApplyService {
         this.#now().toISOString(),
       );
     }
+    this.#removeJournal(transactionId);
     return portOk({ operationId });
+  }
+
+  #generationSummary(
+    command: RestoreGenerationCommand,
+    record: { readonly compositionDigest?: string; readonly profileName?: string; readonly createdAt?: string },
+  ): Record<string, unknown> {
+    return {
+      generationId: command.targetGenerationId,
+      environmentId: command.environmentId,
+      compositionDigest: record.compositionDigest,
+      profileName: typeof record.profileName === 'string' ? record.profileName : managedProfileName(command.targetGenerationId),
+      active: true,
+      createdAt: record.createdAt ?? this.#now().toISOString(),
+    };
   }
 
   /** Reconciles interrupted apply transactions: pointer decides roll-forward. */
@@ -353,9 +404,26 @@ export class ChangeApplyService {
       const environment = this.#environments.read(journal.environmentId);
       if (environment !== undefined && environment.activeGenerationId === journal.generationId) {
         this.#markOperationSucceeded(journal.operationId, journal.generationId, journal.planId, journal.sourceLock);
-        this.#plans.consumeIfUnused(journal.planId, journal.requestId);
+        if (journal.kind !== 'restore') {
+          this.#plans.consumeIfUnused(journal.planId, journal.requestId);
+        }
         this.#removeJournal(journal.transactionId);
         finalized += 1;
+        continue;
+      }
+      if (journal.kind === 'restore') {
+        // A restore has no staging: nothing to delete; the pointer still points
+        // at the previous generation, so this is simply discarded.
+        const record = this.#operations.read(journal.operationId);
+        if (record !== undefined && !isTerminalStatus(record.status)) {
+          this.#operations.update(
+            record,
+            { status: 'failed', phase: 'failed', error: contractError('INTERNAL_ERROR', 'the restore was interrupted before the pointer switch', { operationId: journal.operationId }) },
+            this.#now().toISOString(),
+          );
+        }
+        this.#removeJournal(journal.transactionId);
+        rolledBack += 1;
         continue;
       }
       this.#rollback(journal, 'INTERNAL_ERROR', 'apply was interrupted before the generation was committed');
