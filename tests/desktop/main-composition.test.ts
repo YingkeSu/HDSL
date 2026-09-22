@@ -7,13 +7,20 @@
  * opener, credential loader availability, close-failure lock retention and the
  * runtime/core process-port phase adapter.
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { portFail, portOk, type RuntimeCombination } from '@hdsl/contracts';
 import { createRuntimePort, type ProcessManager } from '@hdsl/runtime';
-import type { ManagedProcessPort } from '@hdsl/core';
+import {
+  EnvironmentStore,
+  OperationStore,
+  ensureLayout,
+  generationPaths,
+  resolveLayout,
+  type ManagedProcessPort,
+} from '@hdsl/core';
 import {
   adaptProcessPort,
   createDesktopComposition,
@@ -344,5 +351,68 @@ describe('adaptProcessPort', () => {
       consumeWebUIBootstrap: vi.fn(),
     } as unknown as ProcessManager;
     expect('consumeWebUIBootstrap' in adaptProcessPort(manager)).toBe(false);
+  });
+});
+
+/**
+ * P1 (QA33) at the composition boundary: a committed environment plus an
+ * orphaned non-terminal `preview` operation from a crash. Startup recovery must
+ * terminate the preview without clearing the environment's pointer/digest.
+ */
+const seedCommittedEnvironmentWithOrphanPreview = (dataRoot: string): void => {
+  const layout = resolveLayout(dataRoot);
+  ensureLayout(layout);
+  const environmentId = 'env-0000000000000001';
+  const generationId = 'gen-0000000000000001';
+  new EnvironmentStore(layout).write({
+    schemaVersion: '1', id: environmentId, name: 'P1 环境', revision: 1, stateVersion: 1,
+    state: 'stopped', activeGenerationId: generationId, compositionDigest: 'a'.repeat(64),
+    createdAt: '2026-09-20T00:00:00.000Z', updatedAt: '2026-09-20T00:00:00.000Z',
+  });
+  const paths = generationPaths(layout, environmentId, generationId);
+  mkdirSync(join(paths.nodeDirectory, 'bin'), { recursive: true });
+  mkdirSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
+  writeFileSync(join(paths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\n');
+  writeFileSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'bin.js'), '// dsh\n');
+  writeFileSync(paths.manifestPath, JSON.stringify({
+    schemaVersion: '1', installMode: 'artifacts-only',
+    node: { version: '22.19.0', treeDigest: '1'.repeat(64) },
+    dsh: { version: '0.1.5-rc.2', treeDigest: '2'.repeat(64) },
+  }));
+  writeFileSync(paths.lockPath, JSON.stringify({
+    schemaVersion: '1',
+    node: { version: '22.19.0', platform: 'darwin', arch: 'arm64', sha256: '1'.repeat(64) },
+    dsh: { version: '0.1.5-rc.2', platform: 'darwin', arch: 'arm64', sha256: '2'.repeat(64) },
+    plugins: [], sources: { node: { url: 'https://x/n', sha256: '1'.repeat(64) }, dsh: { url: 'https://x/d', sha256: '2'.repeat(64) } },
+  }));
+  writeFileSync(paths.generationRecordPath, JSON.stringify({
+    id: generationId, environmentId, compositionDigest: 'a'.repeat(64),
+    createdAt: '2026-09-20T00:00:00.000Z', profileName: `hdsl-${generationId}`,
+  }));
+  new OperationStore(layout).create({
+    id: 'op-00000000000000aa', kind: 'preview', environmentId, phase: 'planning', status: 'running',
+    createdAt: '2026-09-20T00:00:00.000Z',
+  });
+};
+
+describe('startup recovery with a crashed preview (P1)', () => {
+  it('terminates the orphan preview and keeps the committed environment intact', async () => {
+    const dataRoot = freshRoot('hdsl-comp-p1-');
+    seedCommittedEnvironmentWithOrphanPreview(dataRoot);
+    const { composition } = await compose(dataRoot);
+
+    expect(composition.previewRecovery.terminated).toBeGreaterThanOrEqual(1);
+    const environment = composition.port.findEnvironment('env-0000000000000001');
+    expect(environment.ok).toBe(true);
+    if (environment.ok) {
+      expect(environment.value.state).toBe('stopped');
+      expect(environment.value.activeGenerationId).toBe('gen-0000000000000001');
+      expect(environment.value.compositionDigest).toBe('a'.repeat(64));
+      expect(environment.value.revision).toBe(1);
+    }
+    const operation = composition.port.findOperation('op-00000000000000aa');
+    expect(operation.ok).toBe(true);
+    if (operation.ok) expect(operation.value.status).toBe('failed');
+    await composition.close();
   });
 });

@@ -132,6 +132,8 @@ export interface DesktopComposition {
   readonly recovery: RecoveryReport;
   /** Journal + idempotency-ledger reconciliation of crashed apply/restore transactions. */
   readonly applyRecovery: { readonly finalized: number; readonly rolledBack: number };
+  /** Reconciliation of crashed (read-only) preview operations; never changes an environment. */
+  readonly previewRecovery: { readonly terminated: number };
   readonly lockSnapshot: () => DataRootLockSnapshot;
   readonly exporterAvailable: boolean;
   /**
@@ -404,10 +406,14 @@ export const createDesktopComposition = async (
     changeApply,
   });
 
-  // Change transactions carry their own journal + dispatcher idempotency ledger;
-  // reconcile them before serving traffic so a crashed apply/restore cannot leave
-  // a requestId stuck in progress or an unresolved journal.
+  // Recovery ORDER + ownership (P1 fix): each service reconciles the operation
+  // kinds it owns BEFORE the environment service runs. `preview` is read-only
+  // (orphans are terminated without touching the environment), and
+  // `apply`/`restore` are journal/ledger-reconciled. The environment service no
+  // longer sees (or clears the pointer for) kinds it does not own, so a crashed
+  // preview can never invalidate a committed generation.
   const applyRecovery = changeApply.recover();
+  const previewRecovery = changePreview?.recover() ?? { terminated: 0 };
   const recovery = await service.recover();
   const recoveryReasons = (recovery.process ?? [])
     .filter((entry) => entry.resolution === 'unverifiable')
@@ -437,6 +443,7 @@ export const createDesktopComposition = async (
     available: service.available,
     recovery,
     applyRecovery,
+    previewRecovery,
     recoveryBlocked,
     recoveryReasons,
     lockSnapshot: () => service.lockSnapshot(),

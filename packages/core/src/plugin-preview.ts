@@ -12,6 +12,7 @@
  * pointer or any source lock (D6); it may write cache/journal/temp files.
  */
 import {
+  contractError,
   contractErrorForCode,
   portFail,
   portOk,
@@ -122,6 +123,35 @@ export class ChangePreviewService {
 
   get plans(): ChangePlanStore {
     return this.#plans;
+  }
+
+  /**
+   * Reconciliation for restart (P1 ownership dispatch): this service owns the
+   * `preview` kind. A non-terminal preview operation left by a crash is a
+   * READ-ONLY transaction, so it is terminated controllably here and the
+   * environment record is never touched — no pointer, composition digest or
+   * revision change. Live in-process operations are skipped.
+   */
+  recover(): { readonly terminated: number } {
+    let terminated = 0;
+    for (const record of this.#operations.list()) {
+      if (record.kind !== 'preview' || isTerminalStatus(record.status) || this.#controllers.has(record.id)) {
+        continue;
+      }
+      this.#operations.update(
+        record,
+        {
+          status: 'failed',
+          phase: 'failed',
+          error: contractError('INTERNAL_ERROR', 'the preview was interrupted and did not complete', {
+            operationId: record.id,
+          }),
+        },
+        this.#now().toISOString(),
+      );
+      terminated += 1;
+    }
+    return { terminated };
   }
 
   /** True when this service owns the operation id. */

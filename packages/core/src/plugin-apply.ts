@@ -456,12 +456,22 @@ export class ChangeApplyService {
     // only safe action is to fail the orphaned operation controllably.
     const journalOperationIds = new Set(this.#listJournals().map((journal) => journal.operationId));
     for (const record of this.#operations.list()) {
-      if (record.kind !== 'restore' || isTerminalStatus(record.status) || journalOperationIds.has(record.id)) {
+      // This service owns `apply` and `restore` (P1 ownership dispatch). An
+      // operation of either kind with no journal means the crash happened before
+      // any durable effect evidence (the apply journal is written before the
+      // pointer switch), so failing it controllably is safe and the environment
+      // record is deliberately left untouched — the active generation, digest and
+      // revision are never cleared here.
+      if (
+        (record.kind !== 'apply' && record.kind !== 'restore') ||
+        isTerminalStatus(record.status) ||
+        journalOperationIds.has(record.id)
+      ) {
         continue;
       }
       this.#operations.update(
         record,
-        { status: 'failed', phase: 'failed', error: contractError('INTERNAL_ERROR', 'the restore was interrupted before it could be committed', { operationId: record.id }) },
+        { status: 'failed', phase: 'failed', error: contractError('INTERNAL_ERROR', 'the change transaction was interrupted before it could be committed', { operationId: record.id }) },
         this.#now().toISOString(),
       );
       rolledBack += 1;
