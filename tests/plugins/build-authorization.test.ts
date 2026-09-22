@@ -190,19 +190,27 @@ const GITHUB_DEP_PATH =
 // package version; the snapshot repeats the key without a version.
 const GITHUB_LOCK = [
   "lockfileVersion: '9.0'",
+  '',
   'settings:',
   '  autoInstallPeers: true',
+  '  excludeLinksFromLockfile: false',
+  '',
   'importers:',
+  '',
   '  .:',
   '    dependencies:',
   '      hdsl-s4-gh-fixture-root:',
   '        specifier: github:YingkeSu/hdsl-s4-gh-fixture#cb265920d7b0d0d5f3616417cd4053176b998f80',
   '        version: https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80',
+  '',
   'packages:',
+  '',
   `  ${GITHUB_DEP_PATH}:`,
-  '    resolution: {gitHosted: true, tarball: https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80}',
+  '    resolution: {gitHosted: true, integrity: sha512-sTJ4c0o0zKJ6SOFmFr+b9GjW6osYzFTxEXChTI+NEh4HtvClnpv3c4bwmNgCfVZu7CPShk9H6sGEMwIajCAvJg==, tarball: https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80}',
   '    version: 0.0.1',
+  '',
   'snapshots:',
+  '',
   `  ${GITHUB_DEP_PATH}: {}`,
 ].join('\n');
 
