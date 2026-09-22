@@ -343,7 +343,7 @@ describe('environment creation', () => {
     await harness.managed.close();
   });
 
-  it('creates six environments concurrently from the same composition with one valid cache entry', async () => {
+  it('creates six environments concurrently from the same composition with one valid cache entry', { timeout: 20_000 }, async () => {
     const harness = await buildHarness({ catalog: [combinationA] });
     const operationIds = await Promise.all(
       Array.from({ length: 6 }, (_unused, index) =>

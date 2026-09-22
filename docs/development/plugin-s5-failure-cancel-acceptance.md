@@ -62,4 +62,5 @@
 - **损坏/不可解析 journal**：属**扩展健壮性**，非 S5 明列 AC；记录为覆盖边界，不自动加入产品范围。
 - **recovery 自身中断**：`ChangeFaults` 的 `pauseAt`/`failAt`（planned/staged/verified/committed/finalized）seam 已存在，**可定向复用**；是否留下提交状态分叉**未执行**，记为覆盖边界（若缺 seam 则只报告、不改产品）。
 - **remove 提交窗口内取消**：与 install 同源（缺陷 #92）；**已随 #93 合并（`3457769f`）并由 QA 独立验证**（install 侧 4 项含四元账本 + `removal-apply` 窗口用例）。
+- **CI 计时稳定性（#91 观察）**：同一提交 `f646b4c2` 的 `typecheck/build/unit` 两次运行在不同重 harness 用例上各超时一次：`tests/core/a2-window-kill.test.ts > after-publish`（run `35759611456` job `106854049193`，`Test timed out in 5000ms`）与 `tests/core/creation.test.ts > creates six environments concurrently`（同 run rerun job `106854966031`，5000ms）；同提交另一运行 run `35759606141` 全绿（`998 passed`，两条分别 994ms/473ms）。35 有界诊断：失败运行整体 50.89s vs 成功 21.51s，本地（含 10 核 20 忙循环）未复现 >5s ⇒ **推测为 CI runner 资源波动下默认 5s 预算不足**；**不据此声称产品无问题**。裁决：仅对上述两条重 harness 用例设**用例级** `{ timeout: 20_000 }`（全局 `testTimeout` 5s、其它用例、CI 并行/retry/skip 均不变；断言与子进程有界清理逐行不变）。
 - **真实 desktop 全链**：本 PR 走默认 CI 确定性优先，未跑；Windows 未测；E9 未证。
