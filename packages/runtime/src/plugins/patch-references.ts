@@ -73,6 +73,12 @@ export interface PatchReferences {
   readonly rowIds: readonly string[];
   /** Row ids this source OVERRIDES (`- id: X`), i.e. config-level references. */
   readonly rowTargets: readonly string[];
+  /**
+   * Cordis SERVICE names this source injects (`inject: [...]`). They are NOT
+   * package references (a service cannot be mapped to a package from a patch),
+   * but they are reported so callers can surface a non-blocking coupling warning.
+   */
+  readonly services: readonly string[];
   readonly unknown: readonly PatchUnknown[];
 }
 
@@ -95,6 +101,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
   const references = new Set<string>();
   const rowIds = new Set<string>();
   const rowTargets = new Set<string>();
+  const services = new Set<string>();
   const pushUnknown = (line: number, reason: string): void => {
     if (unknown.length < UNKNOWN_MAX) {
       unknown.push({ source, line, reason });
@@ -104,6 +111,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
     references: [...references].sort(),
     rowIds: [...rowIds].sort(),
     rowTargets: [...rowTargets].sort(),
+    services: [...services].sort(),
     unknown,
   });
 
@@ -223,6 +231,10 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
         }
         continue;
       }
+      if (keyValue === 'inject') {
+        collectServices(pair.value as Node | null | undefined, depth + 1);
+        continue;
+      }
       if (keyValue === 'insert') {
         const value = pair.value as Node | null | undefined;
         if (value !== null && value !== undefined && isAlias(value)) {
@@ -245,6 +257,34 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
       // `config`, `disabled`, `inject`, … are data (or service names, never
       // packages): walk only to surface unresolvable constructs.
       walkForUnresolved(pair.value as Node | null | undefined, depth + 1);
+    }
+  };
+
+  /** Collects `inject` service names (scalars only) without treating them as packages. */
+  const collectServices = (node: Node | null | undefined, depth: number): void => {
+    if (node === null || node === undefined || depth > PATCH_DEPTH_MAX) {
+      return;
+    }
+    if (isAlias(node)) {
+      pushUnknown(lineOf(node), 'alias in inject list cannot be resolved');
+      return;
+    }
+    if (hasCustomTag(node)) {
+      pushUnknown(lineOf(node), 'explicit tag in inject list is not interpreted');
+      return;
+    }
+    if (isSeq(node)) {
+      for (const item of node.items as readonly (Node | null | undefined)[]) {
+        if (item !== null && item !== undefined && isScalar(item) && typeof item.value === 'string' && item.value !== '') {
+          services.add(item.value);
+        } else if (item !== null && item !== undefined && (isAlias(item) || hasCustomTag(item))) {
+          pushUnknown(lineOf(item), 'inject entry cannot be resolved');
+        }
+      }
+      return;
+    }
+    if (isScalar(node) && typeof node.value === 'string' && node.value !== '') {
+      services.add(node.value);
     }
   };
 

@@ -114,6 +114,8 @@ export interface PluginReferenceSource {
   readonly references: readonly string[];
   /** Row ids this source overrides (`- id: X`): config-level references. */
   readonly rowTargets?: readonly string[];
+  /** Cordis service names this source injects (informational, never packages). */
+  readonly services?: readonly string[];
   /** True when the scanner could not classify the source (must fail closed). */
   readonly unresolved: boolean;
 }
@@ -131,12 +133,19 @@ export interface PluginRemovalInput {
   readonly referenceSources: readonly PluginReferenceSource[];
   /** Row ids introduced by the removed plugin's own patch rows. */
   readonly removedRowIds?: readonly string[];
+  /** Service names appearing in the removed plugin's own patch rows (informational). */
+  readonly removedServiceNames?: readonly string[];
 }
 
 export interface PluginRemovalResolution {
   readonly removals: readonly string[];
   readonly retention: readonly string[];
   readonly blockingReferences: readonly ChangeBlockingReference[];
+  /**
+   * Honest risk statements. Always includes the service-coupling limitation: the
+   * absence of a static reference never proves the removal is safe.
+   */
+  readonly riskItems: readonly string[];
   /** Declaration without the direct dependency entry and bundle reference. */
   readonly prunedDeclarationText: string;
   readonly prunedWorkspaceText: string | null;
@@ -241,6 +250,22 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
     'shared/transitive dependencies remain in the profile lock',
   ];
 
+  const SERVICE_COUPLING_LIMITATION =
+    'service-level coupling (another layer injecting a Cordis service provided by the removed plugin) is not decidable from patch files; no static reference does not prove the removal is free of impact';
+  const injectedElsewhere = new Set<string>();
+  for (const source of input.referenceSources) {
+    for (const service of source.services ?? []) {
+      injectedElsewhere.add(service);
+    }
+  }
+  const serviceOverlap = (input.removedServiceNames ?? []).filter((service) => injectedElsewhere.has(service));
+  const riskItems: string[] = [SERVICE_COUPLING_LIMITATION];
+  if (serviceOverlap.length > 0) {
+    riskItems.push(
+      `informational: service name(s) also referenced by other patch layers: ${serviceOverlap.slice(0, 8).join(', ')} (not a blocking reference)`,
+    );
+  }
+
   const { [input.pluginId]: _removed, ...remainingDependencies } = dependencies;
   void _removed;
   const prunedDeclarationText = `${JSON.stringify(
@@ -258,6 +283,7 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
     value: {
       removals,
       retention,
+      riskItems,
       blockingReferences,
       prunedDeclarationText,
       prunedWorkspaceText: input.workspaceText,

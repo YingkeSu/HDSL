@@ -158,6 +158,20 @@ describe('resolvePluginRemoval', () => {
     expect(outcome.value.blockingReferences[0]?.detail).toContain('cannot be resolved');
   });
 
+  it('warns (never blocks) about patch-injected service overlap and never treats services as packages', () => {
+    const outcome = resolvePluginRemoval(input({
+      removedServiceNames: ['webStartup', 'sharedService'],
+      referenceSources: [
+        { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-web-app', references: [], services: ['webStartup'], unresolved: false },
+      ],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences).toEqual([]);
+    expect(outcome.value.riskItems.some((item) => item.includes('webStartup'))).toBe(true);
+    expect(outcome.value.riskItems.some((item) => item.includes('sharedService'))).toBe(false);
+  });
+
   it('matches the plugin id as a whole token only', () => {
     const outcome = resolvePluginRemoval(input({
       referenceSources: [{ kind: 'bundle', detail: 'other patch', references: ['demo-plugin-extended'], unresolved: false }],
