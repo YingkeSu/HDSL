@@ -7,7 +7,7 @@
  * `button`/`form`/`label`/`select`/`progress`); the interactive pass is recorded
  * in the demo preview and the PR report, not claimed as Electron acceptance.
  */
-import type { EnvironmentSummary } from '@hdsl/contracts';
+import type { ChangePlan, EnvironmentSummary } from '@hdsl/contracts';
 import { describe, expect, it } from 'vitest';
 import { renderAppView, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import {
@@ -37,6 +37,7 @@ const noopActions: RendererActions = {
   cancelPluginSearch: () => undefined,
     setInstallSource: () => undefined,
     previewPluginChange: () => undefined,
+  setBuildAuthorizationConfirmed: () => undefined,
     applyPluginChange: () => undefined,
     cancelInstallOperation: () => undefined,
     loadGenerations: () => undefined,
@@ -371,5 +372,88 @@ describe('S2 panel terminal operation status (QA33 regression)', () => {
     expect(html).not.toContain('正在解析来源并生成计划…');
     expect(html).toContain('EXECUTOR_UNAVAILABLE');
     expect(buttonNamed(html, '重试预览')).toBeDefined();
+  });
+});
+
+const buildPlan = (overrides: Partial<ChangePlan> = {}): ChangePlan => ({
+  planId: 'plan-0000000000000002',
+  environmentId: 'env-1',
+  baseRevision: 2,
+  action: { kind: 'install', source: { owner: 'octo', name: 's4-fixture-root' } },
+  createdAt: '2026-09-22T00:00:00.000Z',
+  expiresAt: '2026-09-22T00:15:00.000Z',
+  sourceLock: {
+    sourceKind: 'github',
+    repository: { owner: 'octo', name: 's4-fixture-root' },
+    commitSha: 'e'.repeat(40),
+    ref: null,
+    packageName: 's4-fixture-root',
+    packageVersion: '0.0.1',
+    manifestSha256: 'a'.repeat(64),
+    closureLockSha256: 'b'.repeat(64),
+    isBuiltin: false,
+    buildAuthorization: null,
+    executor: null,
+  },
+  scriptAssessment: 'detected',
+  scripts: [
+    { packageName: 's4-fixture-root', packageVersion: '0.0.1', script: 'preinstall', source: 'root' },
+    { packageName: 's4-fixture-gitdep', packageVersion: '0.0.1', script: 'prepare', source: 'dependency' },
+  ],
+  requiresBuildAuthorization: true,
+  riskItems: [],
+  removals: [],
+  retention: [],
+  blockingReferences: [],
+  executor: null,
+  planInputsDigest: 'c'.repeat(64),
+  ...overrides,
+});
+
+describe('S4 explicit build authorization UI (issue #78)', () => {
+  it('states that install-time code runs unsandboxed and requires an explicit acknowledgement', () => {
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        changePlan: buildPlan(),
+        buildAuthorizationConfirmed: false,
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('不受 DSH 或 HDSL 沙箱保护');
+    expect(html).toContain('s4-fixture-gitdep@0.0.1 — prepare（依赖闭包）');
+    const confirm = buttonNamed(html, '确认并授权安装');
+    expect(confirm).toBeDefined();
+    expect(confirm?.attrs).toContain('disabled');
+  });
+
+  it('enables the authorization button only after the acknowledgement', () => {
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        changePlan: buildPlan(),
+        buildAuthorizationConfirmed: true,
+      }),
+      actions: noopActions,
+    });
+    const confirm = buttonNamed(html, '确认并授权安装');
+    expect(confirm).toBeDefined();
+    expect(confirm?.attrs).not.toContain('disabled');
+  });
+
+  it('never offers authorization for an unknown script set', () => {
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        changePlan: buildPlan({ scriptAssessment: 'unknown' }),
+        buildAuthorizationConfirmed: true,
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('无法完整枚举依赖闭包中的安装期脚本');
+    expect(buttonNamed(html, '确认并授权安装')).toBeUndefined();
   });
 });

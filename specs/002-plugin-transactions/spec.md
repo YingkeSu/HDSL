@@ -1,6 +1,6 @@
 # 002 插件事务与插件发现（规格）
 
-状态：**进行中（S1 已实现；S2 安装闭环已合入 #87；S3 本片实现，真实 Node 链已过；S4 未实现）**。
+状态：**进行中（S1 已实现；S2 安装闭环已合入 #87；S3 已实现，真实 Node 链已过；S4 本片实现，runtime 执行复核由独立子任务整合）**。
 契约差异清单的权威出处是 [ADR 0005](../../docs/adr/0005-plugin-contract-evolution.md) §4；本文件只固定 002 的行为边界与实现进度，不复制会漂移的清单。
 
 ## 背景与范围
@@ -12,7 +12,7 @@
 | S1（[#75](https://github.com/YingkeSu/HDSL/issues/75)） | 插件发现与详情：GitHub 只读检索闭环 | 已实现（本规格） |
 | S2（[#76](https://github.com/YingkeSu/HDSL/issues/76)） | 来源预览、变更计划、安装/卸载事务 | 安装闭环已实现（#87）；卸载见 S3 |
 | S3（[#77](https://github.com/YingkeSu/HDSL/issues/77)） | 卸载保护与生效观测 | 本片实现（真实 Node 链验证见 [记录](../../docs/development/plugin-remove-validation.md)） |
-| S4（[#78](https://github.com/YingkeSu/HDSL/issues/78)） | 构建脚本授权 | 未实现 |
+| S4（[#78](https://github.com/YingkeSu/HDSL/issues/78)） | 构建脚本授权 | 本片实现（契约/core/UI；runtime 执行复核与真实受控链由独立 runtime 子任务整合） |
 
 **本规格不声明 S2–S4 已实现**，也不把 ADR 的 `preview`/`apply`/`restore` 方法或 kind 加入可调用白名单。
 未实现的入口在界面与文档中明确标注为 S2，而不是返回伪造的成功。
@@ -68,6 +68,18 @@
 - **保留项**：共享/传递依赖按**完全 pin 的 lockfile** 保留（不要求同包在 lock/安装目录全部消失，预览 `retention` 说明）；用户 patch 层（`home/cordis.patch.yml`，**原字节不被写回**）、环境数据（`home/`/`data/`）、审计日志为保留项。
 - **内置保护**：`isBuiltin` 由**当前受管 DSH 安装**解析出的 in-box bundle 集合判定（F12a）；缺失或不可信路径 → 拒绝（不是空集合），同名 profile 依赖不改变保护；负控用真实 in-box 名。
 - **验收**：同 fixture **安装 → 卸载 → 重启**，以「活动代际记录 + 受管 DSH 离线解析组合树」判定启用集合不再包含该包；配置解析被破坏必须表现为可见受控失败。E9（离线组合树 == 运行期加载集合）等价性仍待实证，不作为唯一判据。真实受控链的精确 HEAD/fixture SHA、分阶段 marker 与负控见 [plugin-remove-validation.md](../../docs/development/plugin-remove-validation.md)（opt-in 真实 Node 链，非桌面验收）。
+
+## S4：显式构建授权（#78）
+
+- **默认仍拒执行**：需要安装期脚本而无显式授权 ⇒ `BUILD_NOT_AUTHORIZED` 终态，组成/指针/修订不变。
+- **授权绑定**：`BuildAuthorization { commitSha(40 hex), scripts: BuildScriptEntry[] }`；`BuildScriptEntry = { packageName, packageVersion, script, source: 'root'|'dependency' }`。commit 必须等于计划锁定的精确 commit；脚本集合必须与重新枚举集合**多重集完全相等**（无子集/前缀/通配）。`scriptAssessment === 'unknown'` 时不可授权（未知集合不得当已授权）。
+- **不提供**通配/按作者信任/全局放行等价配置（不写 `dangerouslyAllowAllBuilds`/`onlyBuiltDependencies` 等价开关，也不写名字-only 的 git `allowBuilds` 键）。
+- **漂移即失效**：源码/脚本/闭包/执行器漂移 ⇒ `AUTHORIZATION_MISMATCH`/`PLAN_STALE`/`PLUGIN_INTEGRITY_MISMATCH`/`EXECUTOR_UNAVAILABLE`，需重新预览并重新确认。
+- **执行期复核**：core 守卫（无副作用）之后，runtime 必须在任何写/执行前重解析并逐项复核授权；只在精确授权下写精确 `allowBuilds` 并放开脚本，否则恒为默认拒执行。观测到集合外脚本 ⇒ `UNAUTHORIZED_SCRIPT_EXECUTION`（提交前失败）。
+- **提交边界**：复用 S2 事务守卫/cache/journal/ledger/recover。提交前失败或取消 ⇒ 旧代不变、stage 清理、计划不消费；提交后 ⇒ pointer 权威前滚、`CANNOT_CANCEL`、可 `generations.restore`。**失败不提交 ≠ 副作用可回滚**：已执行的安装期脚本不在代数回滚范围内。
+- **UI/日志**：展示精确 commit + 完整脚本清单（含 `root`/`dependency` 来源）与“安装期在你的机器上执行该包代码，不受 DSH 或 HDSL 沙箱保护”；授权需显式勾选确认，未确认不发送授权；`unknown` 不提供授权入口。
+- **与 S3 服务核验正交**：构建授权只影响“是否允许执行安装期脚本”这一轴，**不**构成对 `hdsl.services.provides` 的核验，也不得把 S3 的 `unknown` 服务轴变为 `known`/confirmed。通过构建授权安装的新来源，其卸载仍按 S3 三态（无核验记录 ⇒ unknown 阻塞，UI 仍呈现“无法验证服务依赖，暂不能卸载”）。
+- **证据分层与未跑项**见 [plugin-build-authorization-validation.md](../../docs/development/plugin-build-authorization-validation.md)：默认 CI（契约/core/renderer + runtime 受控 executor seam 假执行器）已实现；opt-in 真实受控 node 链与真实 desktop **未跑**；**生产 GitHub 全链未跑**，不得声称端到端验收。`UNAUTHORIZED_SCRIPT_EXECUTION` 尚无可靠执行期观测信号，当前为构造性保证（默认拒执行 + 仅写精确 `allowBuilds`）。
 
 ## 未决与依赖
 

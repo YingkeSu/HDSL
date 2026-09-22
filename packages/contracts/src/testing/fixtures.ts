@@ -1158,6 +1158,51 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     }),
     expected: 'INVALID_INPUT',
   },
+  {
+    id: 'changes-apply-legal-authorized',
+    method: 'changes.apply',
+    kind: 'legal',
+    description:
+      'applies a plan with an explicit authorization bound to an exact commit and script set (S4)',
+    request: request('changes.apply', {
+      requestId: 'req-apply-authorized',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      planId: 'plan-0000000000000001',
+      buildAuthorization: {
+        commitSha: 'e'.repeat(40),
+        scripts: [
+          {
+            packageName: 'dsh-plugin-demo',
+            packageVersion: '1.0.0',
+            script: 'preinstall',
+            source: 'root',
+          },
+          {
+            packageName: 'dsh-plugin-dep',
+            packageVersion: '2.0.0',
+            script: 'postinstall',
+            source: 'dependency',
+          },
+        ],
+      },
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'changes-apply-invalid-authorization',
+    method: 'changes.apply',
+    kind: 'illegal',
+    description: 'an authorization whose commit is not 40 hex characters is rejected',
+    request: request('changes.apply', {
+      requestId: 'req-apply-bad-auth',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      planId: 'plan-0000000000000001',
+      buildAuthorization: { commitSha: 'abcd', scripts: [] },
+    }),
+    expected: 'INVALID_INPUT',
+  },
   // generations.restore (environment-scoped pointer transaction)
   {
     id: 'generations-restore-legal',

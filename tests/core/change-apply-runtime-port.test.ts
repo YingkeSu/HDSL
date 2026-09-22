@@ -285,15 +285,21 @@ describe('changes.apply through the runtime apply port', () => {
     expect(runCalls).toHaveLength(0);
   });
 
-  it('never treats a supplied build authorization as an unlock (S4 closed)', async () => {
-    const forged: BuildAuthorization = { commitSha: COMMIT, scripts: [] };
-    const { operations, service, runCalls } = build({ verify: () => true });
-    const started = service.applyChange(command({ buildAuthorization: forged }));
-    if (!started.ok) return;
-    const snapshot = await waitTerminal(operations, started.value.operationId);
-    expect(snapshot.status).toBe('failed');
-    expect(snapshot.error?.code).toBe('BUILD_NOT_AUTHORIZED');
-    expect(runCalls).toHaveLength(0);
+  it('rejects a forged authorization that does not exactly bind the plan (S4 exact binding)', async () => {
+    // Wrong commit + extra scripts: neither may be treated as an unlock.
+    const cases: readonly BuildAuthorization[] = [
+      { commitSha: 'a'.repeat(40), scripts: [] },
+      { commitSha: COMMIT, scripts: [{ packageName: 'dsh-plugin-demo', packageVersion: '1.2.3', script: 'preinstall', source: 'root' }] },
+    ];
+    for (const forged of cases) {
+      const { operations, service, runCalls } = build({ verify: () => true });
+      const started = service.applyChange(command({ buildAuthorization: forged }));
+      if (!started.ok) return;
+      const snapshot = await waitTerminal(operations, started.value.operationId);
+      expect(snapshot.status).toBe('failed');
+      expect(snapshot.error?.code).toBe('AUTHORIZATION_MISMATCH');
+      expect(runCalls).toHaveLength(0);
+    }
   });
 
   it('detects a managed install that silently rewrites the pinned lockfile', async () => {

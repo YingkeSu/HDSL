@@ -445,9 +445,20 @@ export class RendererController implements RendererActions {
     this.#update({
       installSource: { ...this.#state.installSource, [field]: value },
       changePlan: null,
+      buildAuthorizationConfirmed: false,
       changeApplication: null,
       actionError: null,
     });
+  }
+
+  /**
+   * Records the explicit acknowledgement of install-time code execution (S4).
+   * It never sends anything by itself: `applyPluginChange` still requires a live
+   * plan and derives the authorization from that plan's exact commit + script
+   * set, so an acknowledgement can never outlive its preview.
+   */
+  setBuildAuthorizationConfirmed(confirmed: boolean): void {
+    this.#update({ buildAuthorizationConfirmed: confirmed });
   }
 
   /** Starts `changes.preview` for the selected environment and direct source. */
@@ -459,7 +470,7 @@ export class RendererController implements RendererActions {
         this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
         return;
       }
-      this.#update({ actionError: null, notice: null, changePlan: null, changeApplication: null });
+      this.#update({ actionError: null, notice: null, changePlan: null, changeApplication: null, buildAuthorizationConfirmed: false });
       const result = await this.#call(
         'changes.preview',
         {
@@ -490,6 +501,13 @@ export class RendererController implements RendererActions {
         return;
       }
       this.#update({ actionError: null, notice: null, changeApplication: null });
+      // S4: the authorization is constructed ONLY from the confirmed plan's own
+      // exact commit and enumerated script set. The UI cannot widen it, and a
+      // drifted plan is rejected by core/runtime with the frozen error codes.
+      const buildAuthorization =
+        plan.requiresBuildAuthorization && this.#state.buildAuthorizationConfirmed && plan.sourceLock !== null
+          ? { commitSha: plan.sourceLock.commitSha, scripts: [...plan.scripts] }
+          : null;
       const result = await this.#call(
         'changes.apply',
         {
@@ -497,6 +515,7 @@ export class RendererController implements RendererActions {
           environmentId: plan.environmentId,
           expectedRevision: plan.baseRevision,
           planId: plan.planId,
+          ...(buildAuthorization === null ? {} : { buildAuthorization }),
         },
         operationRefSchema,
       );
@@ -593,7 +612,7 @@ export class RendererController implements RendererActions {
         this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
         return;
       }
-      this.#update({ actionError: null, notice: null, changePlan: null, changeApplication: null });
+      this.#update({ actionError: null, notice: null, changePlan: null, changeApplication: null, buildAuthorizationConfirmed: false });
       const result = await this.#call(
         'changes.preview',
         {
@@ -615,7 +634,6 @@ export class RendererController implements RendererActions {
     });
   }
 
-  /** Cancels an in-flight preview/apply only; terminal operations are unchanged. */
   async cancelInstallOperation(): Promise<void> {
     const tracked = this.#state.trackedOperation;
     if (
@@ -1004,7 +1022,7 @@ export class RendererController implements RendererActions {
         return;
       }
       const actionKind = this.#state.changePlan?.action.kind ?? null;
-      this.#update({ changeApplication: parsed, changePlan: null, lastChangeAction: actionKind });
+      this.#update({ changeApplication: parsed, changePlan: null, buildAuthorizationConfirmed: false, lastChangeAction: actionKind });
       return;
     }
     if (tracked.kind === 'inspect') {

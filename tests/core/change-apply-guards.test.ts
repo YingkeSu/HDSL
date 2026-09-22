@@ -20,7 +20,14 @@ import {
   type EnvironmentRecord,
 } from '@hdsl/core';
 import { computeCompositionDigest, sha256TreeDigestSync } from '@hdsl/runtime';
-import type { ChangeApplication, ChangePlan, CompositionLock } from '@hdsl/contracts';
+import type {
+  BuildAuthorization,
+  BuildScriptEntry,
+  ChangeApplication,
+  ChangePlan,
+  CompositionLock,
+  PluginSourceLock,
+} from '@hdsl/contracts';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -143,7 +150,54 @@ const build = (options: { state?: EnvironmentRecord['state']; faults?: ChangeFau
   return { layout, environments, plans, operations, service };
 };
 
-const command = () => ({ requestId: 'req-apply', environmentId: ENVIRONMENT_ID, expectedRevision: 3, planId: PLAN_ID, buildAuthorization: null });
+const command = (
+  overrides: Partial<{ requestId: string; expectedRevision: number; buildAuthorization: BuildAuthorization | null }> = {},
+) => ({
+  requestId: 'req-apply',
+  environmentId: ENVIRONMENT_ID,
+  expectedRevision: 3,
+  planId: PLAN_ID,
+  buildAuthorization: null,
+  ...overrides,
+});
+
+const COMMIT = 'e'.repeat(40);
+
+const sourceLock = (overrides: Partial<PluginSourceLock> = {}): PluginSourceLock => ({
+  sourceKind: 'github',
+  repository: { owner: 'octo', name: 'dsh-plugin-demo' },
+  commitSha: COMMIT,
+  ref: null,
+  packageName: 'dsh-plugin-demo',
+  packageVersion: '1.0.0',
+  manifestSha256: 'f'.repeat(64),
+  closureLockSha256: '1'.repeat(64),
+  isBuiltin: false,
+  buildAuthorization: null,
+  executor: null,
+  ...overrides,
+});
+
+const SCRIPT_SET: readonly BuildScriptEntry[] = [
+  { packageName: 'dsh-plugin-demo', packageVersion: '1.0.0', script: 'preinstall', source: 'root' },
+  { packageName: 'dsh-plugin-demo', packageVersion: '1.0.0', script: 'prepare', source: 'root' },
+  { packageName: 's4-fixture-gitdep', packageVersion: '0.0.1', script: 'postinstall', source: 'dependency' },
+];
+
+const authorizedPlan = (overrides: Partial<ChangePlan> = {}): ChangePlan =>
+  plan({
+    requiresBuildAuthorization: true,
+    scriptAssessment: 'detected',
+    scripts: [...SCRIPT_SET],
+    sourceLock: sourceLock(),
+    ...overrides,
+  });
+
+const authorizationFor = (planValue: ChangePlan, overrides: Partial<BuildAuthorization> = {}): BuildAuthorization => ({
+  commitSha: planValue.sourceLock?.commitSha ?? COMMIT,
+  scripts: [...planValue.scripts],
+  ...overrides,
+});
 
 const waitTerminal = async (operations: OperationStore, operationId: string) => {
   const deadline = Date.now() + 5_000;
@@ -264,5 +318,85 @@ describe('changes.apply guards + transaction', () => {
     expect(operation?.status).toBe('succeeded');
     expect(postCommit.plans.read(PLAN_ID)?.consumedBy).toBe('req-apply');
     expect(existsSync(generationPaths(postCommit.layout, ENVIRONMENT_ID, switched!).generationDirectory)).toBe(true);
+  });
+});
+
+describe('changes.apply explicit build authorization (S4, ADR 0005 D8/D14)', () => {
+  it('denies a script-requiring plan without an authorization and never executes', () => {
+    const harnessed = build({ plan: authorizedPlan() });
+    const outcome = harnessed.service.evaluateGuards(command());
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('BUILD_NOT_AUTHORIZED');
+  });
+
+  it('refuses to authorize an unknown script set even when the supplied set matches the plan', () => {
+    const harnessed = build({ plan: authorizedPlan({ scriptAssessment: 'unknown' }) });
+    const outcome = harnessed.service.evaluateGuards(command({ buildAuthorization: authorizationFor(harnessed.plans.read(PLAN_ID)!.plan) }));
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('BUILD_NOT_AUTHORIZED');
+  });
+
+  it('rejects an authorization bound to a different commit as AUTHORIZATION_MISMATCH', () => {
+    const harnessed = build({ plan: authorizedPlan() });
+    const outcome = harnessed.service.evaluateGuards(
+      command({ buildAuthorization: { commitSha: 'a'.repeat(40), scripts: [...SCRIPT_SET] } }),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('AUTHORIZATION_MISMATCH');
+  });
+
+  it('rejects subset, extra and renamed-script authorizations as AUTHORIZATION_MISMATCH', () => {
+    const harnessed = build({ plan: authorizedPlan() });
+    const cases: readonly BuildAuthorization[] = [
+      { commitSha: COMMIT, scripts: SCRIPT_SET.slice(0, 1) },
+      { commitSha: COMMIT, scripts: [...SCRIPT_SET, { packageName: 'extra', packageVersion: '1.0.0', script: 'install', source: 'dependency' }] },
+      { commitSha: COMMIT, scripts: [{ ...SCRIPT_SET[0]!, script: 'postinstall' }, ...SCRIPT_SET.slice(1)] },
+      { commitSha: COMMIT, scripts: [{ ...SCRIPT_SET[0]!, source: 'dependency' }, ...SCRIPT_SET.slice(1)] },
+    ];
+    for (const buildAuthorization of cases) {
+      const outcome = harnessed.service.evaluateGuards(command({ buildAuthorization }));
+      expect(outcome.ok).toBe(false);
+      if (!outcome.ok) expect(outcome.code).toBe('AUTHORIZATION_MISMATCH');
+    }
+  });
+
+  it('accepts an exact commit + script-set authorization and forwards it to the runtime port', async () => {
+    let forwarded: BuildAuthorization | null | undefined;
+    const port: PluginApplyPort = {
+      ...stagedPort(),
+      stage: async (stageCommand) => {
+        forwarded = stageCommand.buildAuthorization;
+        return stagedPort().stage(stageCommand, new AbortController().signal);
+      },
+    };
+    const { operations, plans, service, environments } = build({ plan: authorizedPlan(), port });
+    const authorization = authorizationFor(plans.read(PLAN_ID)!.plan);
+    const started = service.applyChange(command({ buildAuthorization: authorization }));
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const snapshot = await waitTerminal(operations, started.value.operationId);
+    expect(snapshot.status).toBe('succeeded');
+    expect(forwarded).toEqual(authorization);
+    expect(environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
+  });
+
+  it('keeps the old generation unchanged when the authorized install fails before commit', async () => {
+    const harnessed = build({ plan: authorizedPlan(), faults: { failAt: 'staged' } });
+    const authorization = authorizationFor(harnessed.plans.read(PLAN_ID)!.plan);
+    const started = harnessed.service.applyChange(command({ buildAuthorization: authorization }));
+    if (!started.ok) return;
+    const snapshot = await waitTerminal(harnessed.operations, started.value.operationId);
+    expect(snapshot.status).toBe('failed');
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBeNull();
+  });
+
+  it('rejects an authorization smuggled onto a plan that needs none', () => {
+    const harnessed = build({ plan: plan({ sourceLock: sourceLock() }) });
+    const outcome = harnessed.service.evaluateGuards(
+      command({ buildAuthorization: { commitSha: COMMIT, scripts: [...SCRIPT_SET] } }),
+    );
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('AUTHORIZATION_MISMATCH');
   });
 });

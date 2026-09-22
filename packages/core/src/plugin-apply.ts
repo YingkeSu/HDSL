@@ -25,6 +25,7 @@ import {
   portFail,
   portOk,
   type BuildAuthorization,
+  type BuildScriptEntry,
   type ChangeApplication,
   type ChangePlan,
   type ContractMethod,
@@ -162,6 +163,31 @@ export interface ApplyRecoveryReport {
 
 const ALL_PHASES: readonly ChangePhase[] = ['planned', 'staged', 'verified', 'committed', 'finalized'];
 
+/** Canonical identity of one authorized build-script entry. */
+const scriptEntryKey = (entry: BuildScriptEntry): string =>
+  JSON.stringify([entry.packageName, entry.packageVersion, entry.script, entry.source]);
+
+/**
+ * Exact binding check for an explicit build authorization (ADR 0005 D8/D14):
+ * the commit must equal the plan's locked commit and the script set must be
+ * exactly equal as a multiset. Returns the mismatch reason, or `null` when the
+ * authorization binds the plan exactly.
+ */
+const authorizationMismatch = (plan: ChangePlan, authorization: BuildAuthorization): string | null => {
+  if (plan.sourceLock === null) {
+    return 'the plan has no source lock to bind the authorization against';
+  }
+  if (authorization.commitSha !== plan.sourceLock.commitSha) {
+    return 'the authorization commit does not match the plan commit';
+  }
+  const expected = plan.scripts.map(scriptEntryKey).sort();
+  const supplied = authorization.scripts.map(scriptEntryKey).sort();
+  if (expected.length !== supplied.length || expected.some((key, index) => key !== supplied[index])) {
+    return 'the authorized script set does not exactly match the plan script set';
+  }
+  return null;
+};
+
 /** Methods whose crashed `in-progress` ledger entries this service reconciles. */
 const RECONCILABLE_IDEMPOTENT_METHODS: readonly ContractMethod[] = ['changes.apply', 'generations.restore'];
 
@@ -236,14 +262,38 @@ export class ChangeApplyService {
     if (plan.action.kind === 'remove' && plan.blockingReferences.length > 0) {
       return portFail('REFERENCED_BY_OTHER', 'the remove plan is blocked by a reference or an unverified service dependency');
     }
-    // S4 (build authorization) is not available in this slice. A source that
-    // needs build scripts is refused, and any supplied authorization is refused
-    // too: a non-null value is never treated as an unlock.
-    if (plan.requiresBuildAuthorization || command.buildAuthorization !== null) {
-      return portFail(
-        'BUILD_NOT_AUTHORIZED',
-        'install-time build scripts are refused by default; build authorization (S4) is not available in this slice',
-      );
+    // S4 explicit build authorization (ADR 0005 D8/D14). The default is deny:
+    // a source that declares install-time scripts is refused unless the caller
+    // supplies an authorization that binds the plan's EXACT commit and its
+    // EXACT script set (multiset equality, never a subset/prefix/wildcard). An
+    // `unknown` set (closure not enumerated) can never be authorized, because an
+    // incomplete set is not a known set. Everything here is side-effect free:
+    // the runtime re-resolves and re-checks before any write or execution (D8),
+    // and the commit point is the pointer switch (D10).
+    if (plan.requiresBuildAuthorization) {
+      if (command.buildAuthorization === null) {
+        return portFail(
+          'BUILD_NOT_AUTHORIZED',
+          'the source runs install-time build scripts and no explicit authorization was supplied',
+        );
+      }
+      if (plan.scriptAssessment === 'unknown') {
+        return portFail(
+          'BUILD_NOT_AUTHORIZED',
+          'the install-time script set could not be fully enumerated; an unknown set can never be authorized',
+        );
+      }
+      const mismatch = authorizationMismatch(plan, command.buildAuthorization);
+      if (mismatch !== null) {
+        return portFail('AUTHORIZATION_MISMATCH', mismatch);
+      }
+    } else if (command.buildAuthorization !== null) {
+      // A plan that needs no authorization must not have one smuggled in: it
+      // must still bind the exact commit and the (empty) script set.
+      const mismatch = authorizationMismatch(plan, command.buildAuthorization);
+      if (mismatch !== null) {
+        return portFail('AUTHORIZATION_MISMATCH', mismatch);
+      }
     }
     return portOk(plan);
   }

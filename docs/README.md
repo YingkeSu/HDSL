@@ -36,5 +36,7 @@
 | 插件代际 home 派生与回滚（#76 前置） | [实证记录](development/plugin-home-derivation-validation.md)（合成运行时 + 真实事务/恢复代码） |
 | 插件 profile 接线（#76 A2） | [验证记录](development/plugin-a2-profile-validation.md)（适配器/进程夹具 + opt-in 真实 npm-ci 全链） |
 | 受管 pnpm 默认拒执行哨兵（#76 E1） | [验证记录](development/plugin-executor-sentinel-validation.md)（冻结 pnpm 链 + 外部 marker） |
+| 插件卸载、内置保护与合法保留（#77 S3） | [验证记录](development/plugin-remove-validation.md)、[服务核验边界](development/plugin-remove-service-verification.md) |
+| 显式构建授权（#78 S4） | [验证边界与证据分层](development/plugin-build-authorization-validation.md) |
 
 验证记录保留历史结果与未测项；其中的计数和 SHA 不是当前版本的自动更新状态。

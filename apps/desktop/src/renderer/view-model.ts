@@ -102,6 +102,13 @@ export interface RendererState {
   readonly installSource: InstallSourceInput;
   /** Terminal `changes.preview` plan, or null. */
   readonly changePlan: ChangePlan | null;
+  /**
+   * True only after the user explicitly acknowledged that the install will run
+   * package code on this machine outside any HDSL/DSH sandbox. Reset on every
+   * new preview; it is the ONLY source of the `buildAuthorization` sent with
+   * `changes.apply` (S4, issue #78).
+   */
+  readonly buildAuthorizationConfirmed: boolean;
   /** Terminal `changes.apply` result, or null. */
   readonly changeApplication: ChangeApplication | null;
   /** Action kind of the last committed apply, so each panel reports only its own flow. */
@@ -143,6 +150,8 @@ export interface RendererActions {
   setInstallSource(field: keyof InstallSourceInput, value: string): void;
   /** Starts `changes.preview` for the selected environment. */
   previewPluginChange(): void;
+  /** Records the explicit install-time code-execution acknowledgement (S4). */
+  setBuildAuthorizationConfirmed(confirmed: boolean): void;
   /** Starts `changes.apply` for the current plan. */
   applyPluginChange(): void;
   /** Cancels an in-flight preview/apply/restore; terminal operations are untouched. */
@@ -184,6 +193,7 @@ export const INITIAL_STATE: RendererState = {
   selectedPluginFullName: null,
   installSource: { owner: '', name: '', ref: '' },
   changePlan: null,
+  buildAuthorizationConfirmed: false,
   changeApplication: null,
   lastChangeAction: null,
   generations: [],
