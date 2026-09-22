@@ -3,12 +3,21 @@
  *
  * It runs the *real* creation-transaction / recovery code (`@hdsl/core` dist)
  * against a temporary data root, a fake `ManagedRuntimePort` and no network, and
- * answers two falsifiable propositions:
+ * observes three things about the CURRENT creation transaction:
  *
- *   A. "User runtime data placed inside a staged generation directory survives a
- *       pre-commit rollback."                      -> expected to be REFUTED.
- *   B. "Runtime data kept in an environment-level home survives a pre-commit
- *       rollback and stays readable."              -> expected to be CONFIRMED.
+ *   A. The rollback/removal scope is the staged generation directory itself:
+ *      a file written under the staged generation home is gone after a
+ *      pre-commit rollback (A1/A2).
+ *   B. An environment-level home written by the harness is not touched by the
+ *      creation transaction (A3/A4/B1) — a structural observation about the
+ *      current code's delete scope, NOT a product guarantee (current code does
+ *      not know that path).
+ *   C. The commit point is the active-generation pointer (A0/B0).
+ *
+ * What this probe does NOT test: the "copy the previous home into the new
+ * generation" mechanism (there is no committed previous generation here), a
+ * two-generation change/restore transaction, or whether an old generation
+ * actually loads its own composition. Those are S2 gates.
  *
  * The probe never touches the host `$HOME`/`~/.dsh`, uses no credentials and
  * runs no third-party code. `install-manifest.json` written by the fake runtime
@@ -19,7 +28,7 @@
  *   pnpm run build            # the probe imports the built packages
  *   node scripts/research/home-derivation-probe.mjs [--keep]
  *
- * Exit code 0 = both propositions observed as expected; 1 = expectation failed.
+ * Exit code 0 = all observations as expected; 1 = expectation failed.
  */
 import {
   existsSync,
@@ -36,7 +45,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
-const { createManagedInstall, generationPaths, resolveLayout } = await import(
+const { createManagedInstall, generationPaths, generationsDirectory, resolveLayout } = await import(
   new URL('packages/core/dist/index.js', `file://${root}`)
 );
 const { computeCompositionDigest, resolveComposition } = await import(
@@ -146,6 +155,26 @@ const readJournals = (layout) =>
 const environmentDirectoryOf = (layout, environmentId) =>
   join(layout.environments, environmentId);
 
+/** Structural observation helper: any secret-shaped file left under a generation dir. */
+const findCredentialsUnder = (directory) => {
+  if (!existsSync(directory)) {
+    return [];
+  }
+  const found = [];
+  const walk = (current) => {
+    for (const entry of readdirSync(current, { withFileTypes: true })) {
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) {
+        walk(full);
+      } else if (entry.name === '.credentials.yaml') {
+        found.push(full);
+      }
+    }
+  };
+  walk(directory);
+  return found;
+};
+
 const plantEnvironmentHome = (layout, environmentId) => {
   const home = join(environmentDirectoryOf(layout, environmentId), 'home');
   mkdirSync(join(home, 'sessions'), { recursive: true });
@@ -218,12 +247,12 @@ try {
     `generationDirectory exists=${String(existsSync(stagedPaths.generationDirectory))}`,
   );
   record(
-    'A2 data inside the staged generation home is destroyed (proposition A refuted)',
+    'A2 structural: a file written under the staged generation home is removed by rollback',
     !existsSync(stagedSentinel) && !existsSync(join(stagedPaths.homeDirectory, '.credentials.yaml')),
     `staged home/sessions/sentinel.json exists=${String(existsSync(stagedSentinel))}`,
   );
   record(
-    'A3 environment-level home survives rollback and stays readable',
+    'A3 structural: environment-level home is outside the transaction delete scope and stays readable',
     existsSync(envSentinel) && readFileSync(envSentinel, 'utf8') === SENTINEL,
     `env home sentinel readable=${String(existsSync(envSentinel))}`,
   );
@@ -237,6 +266,12 @@ try {
     'A5 rollback is explained: no active generation, operation failed',
     environmentAfter.activeGenerationId === null && recovery.details.length === 1,
     `reconciled=${recovery.reconciled} rolledBack=${recovery.rolledBack} activeGenerationId=${String(environmentAfter.activeGenerationId)}`,
+  );
+  const credentialsA = findCredentialsUnder(generationsDirectory(layoutA, journal.environmentId));
+  record(
+    'A6 structural: no secret-shaped file left under any generation dir after rollback',
+    credentialsA.length === 0,
+    `credentials under generations=${credentialsA.length}`,
   );
   await second.close();
 
@@ -267,7 +302,7 @@ try {
     `operation=${snapshot.status} activeGenerationId=${String(environmentB.activeGenerationId)}`,
   );
   record(
-    'B1 commit leaves an environment-level home untouched and readable',
+    'B1 structural: commit does not touch the environment-level home written by the harness',
     existsSync(join(envHomeB, 'sessions', 'sentinel.json')) &&
       readFileSync(join(envHomeB, 'sessions', 'sentinel.json'), 'utf8') === SENTINEL,
     'env home sentinel still readable after commit',
@@ -276,6 +311,12 @@ try {
     'B2 committed generation home is a separate, empty directory (per-generation home baseline)',
     existsSync(committedPaths.homeDirectory) && readdirSync(committedPaths.homeDirectory).length === 0,
     `generation home entries=${String(readdirSync(committedPaths.homeDirectory).length)}`,
+  );
+  const credentialsB = findCredentialsUnder(generationsDirectory(layoutB, environmentB.id));
+  record(
+    'B3 structural: no secret-shaped file left under any generation dir after commit',
+    credentialsB.length === 0,
+    `credentials under generations=${credentialsB.length}`,
   );
   await third.close();
 } finally {

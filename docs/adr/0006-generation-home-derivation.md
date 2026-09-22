@@ -1,7 +1,8 @@
 # 0006：插件变更代的 home 派生与运行数据边界
 
 - 状态：**proposed**（等待独立复审；批准前不据此改生产实现）
-- 日期：2026-09-22
+- 修订：rev 2（回应独立审核 `5773952049` CHANGES_REQUESTED：拆开"共享 home"与"每代 profile 加载"、新增 E10b 硬门禁；补首次迁移细节；撤销对 creation 探针的过度归因；声明相位/注入形状无实现）
+- 日期：2026-09-22（rev 2：2026-09-22）
 - 关联：#76（本决策 owner，Parent #73）；`Refs #9`（M2 插件/事务路线）；`Related #8`（Windows x64 未测门禁）；承接 [ADR 0005](0005-plugin-contract-evolution.md) D18 / E10 / §9.7 的 #76 硬前置
 - 基线：HDSL main `21b653894dd58f92d4e59e42401e8e9e40dc8fe8`（PR #81 squash merge，含 ADR 0005 PR #80 `aa2a26e`）；上游固定 tag `dsh-v0.1.5-rc.2` = `fb2c4b9e698e30edb738bca4cf0618587db7d203`（不与 master 混用）
 - 依据（可直接核对）：
@@ -9,7 +10,7 @@
   - 实现 `packages/core/src/layout.ts`、`packages/core/src/creation-service.ts`（`#commit`/`#fail`/`#rollBack`/`recover`）、`packages/core/src/journal.ts`
   - 领域定义 `CONTEXT.md`（Generation = 组成快照，运行数据仍可变）
   - 上游 home 布局 [dsh-compatibility.md](../research/dsh-compatibility.md) R003（`$DSH_HOME` 下的 `sessions`/`storages`/`.credentials.yaml`/`cordis.patch.yml`）
-  - 可复现实证 `scripts/research/home-derivation-probe.mjs`；记录 `docs/development/plugin-home-derivation-validation.md`
+  - 可复现实证 `scripts/research/home-derivation-probe.mjs`（事务删除作用域）与 `scripts/research/dsh-profile-mechanism-probe.sh`（固定 rc.2 profile 选择机制）；记录 `docs/development/plugin-home-derivation-validation.md`
 
 ## 0. 范围与证据等级
 
@@ -42,15 +43,41 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 
 具体决定：
 
-- **D-A 单一共享 home**：目标布局把可变 home 提升到环境级 `<env>/home/`，所有代际共享同一 `home`。事务**不复制、不覆盖、不删除** `home` 内容；`generationPaths().homeDirectory` 的目标落点是环境级路径（具体字段迁移由 S2 实现切片完成）。
-- **D-B 代际只承载组成**：代目录只包含受管运行时产物、`composition.lock.json`、`generation.json`、`install-manifest.json` 与 profile/lock 三元组。代际是**不可变组成快照**，与 G5 的领域定义一致。
+- **D-A 单一共享 home 承载运行数据**：目标布局把可变 home 提升到环境级 `<env>/home/`，所有代际共享同一 `home`。事务**不复制、不覆盖、不删除**用户运行数据（`sessions`/`storages`/`.anonymous-user-id`/`.credentials.yaml`/用户 patch）；`generationPaths().homeDirectory` 的目标落点是环境级路径（具体字段迁移由 S2 实现切片完成）。
+- **D-B 代际承载组成快照**：代际是**不可变组成快照**（受管运行时 + `composition.lock.json`/`generation.json`/`install-manifest.json` + 本代 profile 组成），与 G5 的领域定义一致。
+  - **但"组成快照"不等于"已被 DSH 加载"**：共享 home 下，DSH 的 profile 固定解析在 `$DSH_HOME/profiles/<name>`（见 §2.3）。代际 profile 的**物理加载路径与选择机制是未决项**，由 **E10b** 硬门禁约束；在 E10b 通过前，不得声称某代际的 profile 组成已生效，也不得把 D18-2 的插件集部分或 D15 的生效观测写成已满足。
 - **D-C 含密产物单份**：`.credentials.yaml` 只存在于环境级 home 一份，0600 不变；不得复制进代目录、不得进入导出/日志/整合包（ADR 0002 边界不变）。事务与恢复路径不得读取或改写其内容。
 - **D-D 可变运行数据归环境**：`sessions/`、`storages/`、`.anonymous-user-id`、用户 patch `cordis.patch.yml` 以及进程 cwd 用的 `data/` 均为环境级、跨代共享、由用户/DSH 拥有；HDSL 事务不迁移、不改写、不回滚它们。
 - **D-E 提交点与回滚范围收窄**：提交点仍是**活动代际指针的原子写入**。提交前的失败/取消只清理本次新建的 stage 代目录，**不触碰环境级运行数据**；提交后只做 finalize。
 - **D-F 旧代可启动为条件性保证**：旧代可启动当且仅当 §4 的条件全部成立；其中"运行数据 schema 兼容"不由 HDSL 保证，必须在恢复前呈现为可解释状态，不得静默宣称成功。
 - **D-G 恢复不动数据**：`generations.restore` 只切换活动代际指针，不撤销 workspace、会话、存储、凭据或新代写下的数据，也不做 DSH 版本降级（§4.2）。
 
-该决策**取代** ADR 0005 D18 中"机制延后由 002 决定"的待定状态；D18 的四条不变量不变。
+### 2.3 未决：共享 home 与"每代 profile"的加载机制（E10b 硬门禁）
+
+**冲突陈述**：D-A 让 home 共享 ⇒ `DSH_HOME` 共享；而 DSH 把 profile 固定解析在 `$DSH_HOME/profiles/<name>`，启动 argv 目前只有 `web`（= `--profile web`）。因此若不做机制处理，所有代际会加载**同一个** `web` profile：代目录里的组成不会被读取，`generations.restore` 只换运行时、不换插件集，与 D-B/D18-2/D15 矛盾。**不能两边都声称。**
+
+**固定 rc.2 机制证据（verified，本片实测）**：
+
+| # | 事实 | 证据 |
+| --- | --- | --- |
+| P1 | `--profile <name>` 选择 `$DSH_HOME/profiles/<name>`；`web` 是 `--profile web` 的硬编码别名；profile 不存在时从 shipped 模板自动初始化 | rc.2 `lib/bin.js`（`--profile <name>` 说明与 `web` 别名）+ `scripts/research/dsh-profile-mechanism-probe.sh` |
+| P2 | 组合的 bundle 层来自该 profile 的 `package.json` `dsh.profile.bundles`；改写它（base-only）使 dump 的 bundle 头从 20 降到 1 | 同上（fresh `web`=20 头；`genA` 默认=20；`genA` base-only=1） |
+| P3 | 同一个共享 `DSH_HOME` 下两个 profile 名（`web`/`genA`）可分别选择、互不覆盖 | 同上 |
+
+证据等级：P1–P3 为 `raw`（固定 rc.2 实测，**config 解析路径**）。它们证明机制**可行**，但**不**证明运行期加载集合等价（E9）、也不证明 HDSL 能原子发布/切换 profile 而不破坏 D-A。
+
+**候选机制（不预选，含所需证据）**：
+
+| 方案 | 机制 | 需要的证据（E10b） | 风险 |
+| --- | --- | --- | --- |
+| P-A 共享 home + 每代 `--profile <genName>` | 启动传 `--profile <generation-profile-name>`；每代组成落在 `$DSH_HOME/profiles/<name>` | 真实 boot（非仅 dump）中"旧代加载集合 = 旧代组成摘要"；profile 发布的原子性与崩溃恢复；`profiles/node_modules` 回退 symlink 在换 DSH 安装时的行为 | 事务需要发布/切换共享 home 内的 profile 目录，D-A 需改写为"不修改用户运行数据，但可发布自己的代际 profile" |
+| P-B 每代 `DSH_HOME` + 共享运行数据 | 保留 `<gen>/home` 与各代 profile；把 `sessions`/`storages`/凭据等 symlink/挂载到环境级 | symlink 跟随、rename 跨 symlink、上游写入语义、半初始化崩溃 | **未证 symlink 安全**，不得预判 |
+| P-C 共享 home + 环境级单一 profile | 接受插件集是环境级 | 则必须修订 D-B/§4.1/D18-2：`restore` 不还原插件组成，插件回滚不在本 MVP | 与 #73/#76 的"代际回滚插件"目标冲突 |
+| P-D 独立 config 根覆盖 | 若上游支持 profile 根覆盖 | 需要 rc.2 实测支持；当前源码只显示 `$DSH_HOME/profiles` | 证据不足 |
+
+**硬门禁 E10b**：在固定 rc.2 上（真实 boot，非仅 `--dump-config`）证明所实现机制满足"**恢复后旧代实际加载集合 == 该代组成摘要**"，并证明 profile 发布/切换的原子性与崩溃恢复；在此之前，§2 D-B 的代际组成**只作设计目标**，不得当作已交付能力。
+
+该决策在获批后取代 ADR 0005 D18 中"机制延后由 002 决定"的待定状态；**批准前 D18 待定状态不变**（获批时再更新 ADR 0005 §9.7/D18 指针）。D18 的四条不变量不变。
 
 ## 3. 替代方案比较
 
@@ -67,6 +94,8 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 
 A 被否的核心理由：它把运行数据并入组成快照，违反 G5，并直接引入 D18-3 的分叉与 E10 的 home 派生崩溃窗口。B 与 C 的唯一差别是"事务是否允许写共享 home"；C 以"事务只读 home、只写 stage"把 D18-1 做成结构性保证，而不是靠写入顺序小心维持，因此选 C。
 
+**与 §2.3 的关系（重要）**：上表比较的是**运行数据**的派生方式，**不是**"每代 profile 如何被 DSH 加载"。creation 探针（§6）只观察到删除作用域，**不能单独否证复制方案**（其场景没有已提交旧代）；复制方案的否定依据是 G5/D18-3/E10 的设计推理，不是该探针。profile 加载机制另见 §2.3/E10b。
+
 ## 4. 归属、旧代条件与数据回退限制
 
 ### 4.1 归属表
@@ -74,7 +103,7 @@ A 被否的核心理由：它把运行数据并入组成快照，违反 G5，并
 | 对象 | 归属 | 事务行为 | 导出/整合包 |
 | --- | --- | --- | --- |
 | 受管运行时（node/dsh 产物） | 代际（不可变） | 新建 stage | 否（按摘要引用） |
-| profile 三元组（`package.json` + `pnpm-lock.yaml` + 生成 `cordis.patch.yml`） | 代际（不可变） | 新建 stage | 组成摘要，不含凭据 |
+| profile 三元组（`package.json` + `pnpm-lock.yaml` + 生成 `cordis.patch.yml`） | **组成身份**归代际；**物理加载位置未决（E10b）** | 新建 stage；共享 home 下需经批准机制发布到 `$DSH_HOME/profiles/<name>` 或等价位置 | 组成摘要，不含凭据 |
 | `composition.lock.json` / `generation.json` / `install-manifest.json` | 代际（不可变） | 新建 stage；提交后才可被指针引用 | 摘要/来源锁 |
 | `home/` 目录 | 环境（可变、共享） | **只读校验，不复制不删除** | 否 |
 | `.credentials.yaml`（0600，含密） | 环境（含密） | 只读校验存在性/权限，不读内容 | **永不** |
@@ -82,6 +111,7 @@ A 被否的核心理由：它把运行数据并入组成快照，违反 G5，并
 | `sessions/`、`storages/` | 环境（可变运行数据） | 不触碰 | 否 |
 | 用户 patch `$DSH_HOME/cordis.patch.yml` | 环境（用户拥有） | 不触碰；卸载若被其引用则 `REFERENCED_BY_OTHER`（D15） | 否 |
 | `data/`（DSH 进程 cwd） | 环境（可变） | 不触碰 | 否 |
+| `<gen>/config/` | 当前**无消费者**（`manager.ts` 只把 `dataDirectory` 当 cwd；`configDirectory` 仅透传） | S2 删除该字段或明确归属；**目标布局不引入 `<env>/config/`** | 否 |
 | 搜索/解析缓存、journal、计划 TTL 记录 | 应用数据（非环境组成） | 允许写；不算副作用 | 否 |
 
 ### 4.2 旧代际可启动的精确条件
@@ -105,6 +135,8 @@ A 被否的核心理由：它把运行数据并入组成快照，违反 G5，并
 
 ## 5. 事务提交点、相位与故障注入公共形状
 
+> **实现状态：`ChangePhase`/`ChangeFaults` 目前只是设计提案，无实现、无测试、无公共导出。** 不得当成已交付 seam 或被 QA 引用为现有接口。
+
 ### 5.1 相位名（提交点 = 活动代际指针切换）
 
 ```
@@ -121,6 +153,8 @@ committed 之后 → 只 finalize，如实报告"已提交，可显式 restore"
 | `verified` | 离线解析/校验通过；共享 home 只读校验通过 | 同 `staged` |
 | `committed` | `environment.json` 已原子指向新代 | recover 判 finalized（**不删**） |
 | `finalized` | journal 清除、幂等账本 completed | 无残留 |
+
+**与 profile 发布的顺序（E10b 未定前不写定）**：若 E10b 选择 P-A/P-B（事务需要发布/切换共享 home 内的 profile），则提交点必须同时覆盖"指针"与"profile 已可被新代读取"。候选顺序（待 E10b 选定）：先发布本代 profile（未提交、未被指针引用），再原子切换指针；崩溃于两者之间 → 指针仍指旧代，新 profile 为未被引用的孤儿，由 recover 清理。在 E10b 通过前，本表只描述指针提交点。
 
 ### 5.2 故障注入公共形状（对齐 `CreationFaults`）
 
@@ -143,20 +177,22 @@ interface ChangeFaults {
 
 | 不变量 / 门禁 | 验证方式 | 本片状态 |
 | --- | --- | --- |
-| D18-1 事务不破坏运行数据 | 事务代码路径不引用 home 写；实证 A1–A4 | 结构性 + fixture 已证（合成运行时） |
-| D18-2 提交前失败旧代可启动 | 实证 A0/A1（指针未变、只删 stage）；旧代完整保留 | fixture 部分；双代旧代启停属 S2 实现 seam |
-| D18-3 运行数据不分叉 | 环境级单份 home；实证 A3/B1 | fixture 已证 |
-| D18-4 含密产物不外泄 | home 单份 0600（A4）；导出/整合包排除属既有 ADR 0002 门禁 | 0600 已证；导出排除为既有门禁 |
-| E10 home 派生机制 | 本 ADR 决策 + §5 相位/注入形状 | **已完成决策**；S2 按此实现 |
-| E10 崩溃恢复 | 每相位抛错 + `SIGKILL` + `recover()` 解释 | 部分：rollback finalize/rollback 分支已证；全相位注入属 S2 |
+| D18-1 事务不破坏运行数据 | 事务代码路径不写用户运行数据；实证 A1–A4 | 结构性推理 + 合成 fixture（事务删除作用域）；**非真实 DSH 数据安全证据** |
+| D18-2 提交前失败旧代可启动 | 需 S2 双代 seam：gen1 已提交 → gen2 stage → 提交前失败后仍指向 gen1、可启动且摘要不变 | **未证**（creation 探针是单代 create 事务，无已提交旧代，不能代替） |
+| D18-3 运行数据不分叉 | 环境级单份 home（设计选择）；A3/B1 仅为删除作用域观察 | 设计选择；探针的 env home 是 harness 自建、当前代码不认识该路径 |
+| D18-4 含密产物不外泄 | 结构断言 A6/B3（任何代目录下无 `.credentials.yaml`）；导出/整合包排除属既有 ADR 0002 门禁 | A6/B3 已证；导出排除为既有门禁 |
+| E10 运行数据派生（home/data） | 本 ADR §2 决策 + §5 相位/注入形状 | **数据部分已决策**；实现属 S2 |
+| **E10b 每代 profile 加载机制** | rc.2 真实 boot 证明"恢复后旧代实际加载集合 == 该代组成摘要" + profile 发布原子性/崩溃恢复 | **部分**：P1–P3（`--profile` 选 `$DSH_HOME/profiles/<name>`、 bundles 来自 profile `package.json`、两个 profile 可分别选择）已实测；**加载等价性与原子性未证** |
+| E10 崩溃恢复 | 每相位抛错 + `SIGKILL` + `recover()` 解释 | 部分：rollback/finalize 分支已证；全相位注入属 S2 |
 | E9 `--dump-config` 等价性 | 受控 marker 实证 | **未证**，见 §7 |
 
 ## 7. 未决与后续闸门（不得当作已实现）
 
-- **E9 未证**：`--dump-config` 的静态性（不 require/执行 bundle 模块）与"离线解析组合树 == 运行期实际加载集合"的等价性未在本片验证。本片未找到已核身份的受管 DSH 安装，且宿主 pnpm `11.7.0` **不作为**受管执行器证据；需后续以受控 marker 插件在受管 DSH 安装上做有界实证。在此之前，生效判据只写"活动代际记录 + 离线解析组合树"，不得写成"运行期实际加载集合"。
-- **受管 pnpm 身份（E1）**：候选 `11.7.0` 仍未以受管方式冻结。本片只做了一次有界只读官方来源核对：`npm view pnpm@11.7.0`（registry.npmjs.org）返回 `dist.integrity = sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、`engines.node >= 22.13`。这是官方来源/版本约束核对，**不是**受管执行器冻结证据：仍需 S2 决定 HDSL 如何随包固定该 tarball 并在 apply 时校验摘要；宿主 pnpm `11.7.0` 不作为证据。
+- **E10b 未证（阻塞 D18-2/D15 的插件集部分）**：§2.3 只证明了 `--profile` 机制**可用**；尚未证明"恢复后旧代实际加载集合 == 该代组成摘要"及 profile 发布/切换的原子性与崩溃恢复。候选机制 P-A/P-B/P-C/P-D 均**未选定**，**不得预判 symlink 安全**。在 E10b 通过前，不得宣称旧代际加载其自身组成，也不得把 D18-2/D15 写成已满足。
+- **E9 未证**：`--dump-config` 的静态性（不 require/执行 bundle 模块）与"离线解析组合树 == 运行期实际加载集合"的等价性未验证。本片在已核身份的受管 rc.2 安装上（`0.1.5-rc.2`，tarball sha256 `f4c54839…`，见验证记录）做了**受控 marker 前置实验（config 解析路径）**，但未做 bundle 代码执行 marker；仍需后续以受控 marker 插件在受管 DSH 安装上有界实证。在此之前，生效判据只写"活动代际记录 + 离线解析组合树"。
+- **受管 pnpm 身份（E1）**：候选 `11.7.0` 仍未以受管方式冻结。本片只做了一次有界只读**网络**官方来源核对：`npm view pnpm@11.7.0`（`https://registry.npmjs.org/pnpm`）返回 `11.7.0`、`dist.integrity = sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、`engines.node >= 22.13`。这是官方来源/版本约束核对，**不是**受管执行器冻结证据：仍需 S2 决定 HDSL 如何随包固定该 tarball 并在 apply 时校验摘要；宿主 pnpm `11.7.0` 不作为证据。
 - **上游 home 数据版本兼容（§4.2 条件 4）**：需真实 session 迁移实验；当前只到格式版本/home 形态证据。
-- **实现落地**：布局从 `<gen>/home` 迁到 `<env>/home` 需要一次性、可崩溃恢复的迁移（旧环境只有一个活动代），属 S2 实现切片；本 ADR 不落实现。
+- **实现落地与首次迁移**：布局从 `<gen>/home` 迁到 `<env>/home` 需要一次性、可崩溃恢复的迁移；具体持久标志/提交点/启动前恢复顺序/含密副本生命周期/已提交代不可变的一次性例外见 [S2 设计 §1.1](../../specs/002-plugin-transactions/s2-home-and-transaction-design.md)；实现属 S2。
 - **E5 事务崩溃对账**：S2 需按 §5 相位补齐 `SIGKILL` 注入与 `recover()` 断言。
 
 ## 8. 后果
@@ -169,7 +205,10 @@ interface ChangeFaults {
 
 ## 9. 验证状态
 
-- 决策：本 ADR 已给出（`proposed`）。**批准前不据此修改生产实现**。
-- 实证：`scripts/research/home-derivation-probe.mjs` 在 macOS ARM64、Node `24.21.0`、合成运行时 + 真实 `@hdsl/core` dist 上 9/9 通过；记录见 [plugin-home-derivation-validation.md](../development/plugin-home-derivation-validation.md)。
-- 未验证：E1、E9、E2/E4/E5/E6/E7 与真实安装/桌面路径；本片未运行任何第三方插件代码或真实 DSH 安装。
-- 本 ADR 不关闭 #76，也不宣称 #76 门禁已完全满足（E9 与 S2 实现仍需后续；见 §7）。
+- 决策：本 ADR 已给出（`proposed`，rev 2）。**批准前不据此修改生产实现**。
+- 实证：
+  - `scripts/research/home-derivation-probe.mjs`（合成运行时 + 真实 `@hdsl/core` dist，零网络）在 macOS ARM64、Node `24.21.0` 上 **11/11 通过**：只证明事务删除作用域与指针提交点。
+  - `scripts/research/dsh-profile-mechanism-probe.sh`（自有副本 + 已核身份的真实 rc.2 安装）实测 P1–P3：`--profile <name>` 选 `$DSH_HOME/profiles/<name>`，bundle 集来自 profile `package.json`，两个 profile 可分别选择。
+- 记录见 [plugin-home-derivation-validation.md](../development/plugin-home-derivation-validation.md)。
+- 未验证：**E10b（每代 profile 真实加载等价性与发布原子性）未证**；E1、E9、E2/E4/E5/E6/E7 与真实安装/桌面路径未证。本片未运行任何第三方插件代码、未调用模型、未读个人凭据。
+- 本 ADR 不关闭 #76，也不宣称 #76 门禁已满足（E10b 与 S2 实现仍需后续；见 §7）。
