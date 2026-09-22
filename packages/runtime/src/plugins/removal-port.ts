@@ -91,20 +91,20 @@ export interface RemovalResolution extends PluginRemovalResolution {
 
 export interface RemovalApplyInput {
   readonly pluginId: string;
-  /** Pruned declaration + lock bound by the plan (read from the plan's cache). */
-  readonly declarationText: string;
-  readonly lockText: string;
-  readonly workspaceText: string | null;
+  /** Full resolution context (same shape as the preview) for apply-time re-verification. */
+  readonly resolve: RemovalResolveInput;
+  /** Pruned declaration + lock the plan bound (from the plan's cache). */
+  readonly planDeclarationText: string;
+  readonly planLockText: string;
   /** Generation directory whose `<gen>/profile` receives the pruned profile. */
   readonly generationDirectory: string;
   readonly homeDirectory: string;
   readonly nodeExecutable: string;
-  /** Installed plugins WITHOUT the removed one (the retained composition). */
-  readonly retainedPlugins: readonly { readonly id: string; readonly version: string; readonly sha256: string }[];
 }
 
 export interface RemovalApplyResult {
-  readonly installed: readonly { readonly id: string; readonly version: string; readonly sha256: string }[];
+  /** Retained composition derived from the RECOMPUTED lock, not by subtraction. */
+  readonly retainedLockDependencies: readonly string[];
   readonly lockSha256: string;
   readonly declarationSha256: string;
 }
@@ -134,6 +134,76 @@ const readOptional = (path: string): string | null => {
 
 const sha256Of = (text: string): string => createHash('sha256').update(text, 'utf8').digest('hex');
 
+/**
+ * Reads the root importer's dependency keys from a pnpm lock. The RETENTION set
+ * must come from the actually recomputed lock, never inferred by deleting the
+ * direct dependency from the declaration. Returns `undefined` when the importer
+ * section cannot be read (callers then fail closed).
+ */
+export const retainedDependenciesFromLock = (lockText: string): readonly string[] | undefined => {
+  const lines = lockText.split('\n');
+  let inImporters = false;
+  let inRoot = false;
+  let inDeps = false;
+  let depsIndent = -1;
+  let rootIndent = -1;
+  const found: string[] = [];
+  const indentOf = (line: string): number => line.length - line.trimStart().length;
+  for (const raw of lines) {
+    const trimmed = raw.trim();
+    if (trimmed === '' || trimmed.startsWith('#')) {
+      continue;
+    }
+    const indent = indentOf(raw);
+    if (!inImporters) {
+      if (trimmed === 'importers:') {
+        inImporters = true;
+      }
+      continue;
+    }
+    if (!inRoot) {
+      if (indent === 2 && (trimmed === '.:' || trimmed.startsWith('.:'))) {
+        inRoot = true;
+        rootIndent = indent;
+      }
+      continue;
+    }
+    if (indent <= rootIndent && !trimmed.startsWith('dependencies') && !trimmed.startsWith('devDependencies') && !trimmed.startsWith('optionalDependencies')) {
+      // Left the root importer block.
+      if (indent <= rootIndent) {
+        break;
+      }
+    }
+    const dependencySection = /^(dependencies|devDependencies|optionalDependencies):$/.test(trimmed);
+    if (dependencySection) {
+      inDeps = true;
+      depsIndent = indent;
+      continue;
+    }
+    if (inDeps) {
+      if (indent <= depsIndent) {
+        // Left the dependency section (e.g. another importer key or section).
+        inDeps = false;
+        continue;
+      }
+      if (indent !== depsIndent + 2) {
+        // Nested fields of a dependency entry (specifier/version) are not entries.
+        continue;
+      }
+      const match = /^(\S[^:]*|'[^']+'|"[^"]+"):/.exec(trimmed);
+      if (match === null) {
+        continue;
+      }
+      const name = match[1] ?? '';
+      const cleaned = name.startsWith("'") || name.startsWith('"') ? name.slice(1, -1) : name;
+      if (cleaned !== '') {
+        found.push(cleaned);
+      }
+    }
+  }
+  return found.length > 0 ? [...new Set(found)].sort() : found.length === 0 ? [] : undefined;
+};
+
 export const createPluginRemovalPort = (options: { readonly executor: PluginExecutorPort }): PluginRemovalPort => ({
   async listInstalled(input) {
     const inBox = resolveInBoxBundles(input.dshDirectory);
@@ -156,13 +226,26 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
   },
 
   async applyRemoval(input, signal) {
+    // APPLY-TIME re-verification: re-resolve with the same inputs (re-reading the
+    // user patch and every reference source) so a patch/reference change between
+    // preview and apply can never be installed from stale evidence.
+    const fresh = await this.resolveRemoval(input.resolve, signal);
+    if (!fresh.ok) {
+      return fresh;
+    }
+    if (fresh.value.blockingReferences.length > 0) {
+      return portFail('REFERENCED_BY_OTHER', 'the removal is blocked by a reference or an unverified service dependency');
+    }
+    if (fresh.value.targetDeclarationText !== input.planDeclarationText || fresh.value.targetLockText !== input.planLockText) {
+      return portFail('PLAN_STALE', 'the pruned target profile changed since the preview');
+    }
     const profileDirectory = join(input.generationDirectory, 'profile');
     try {
       mkdirSync(profileDirectory, { recursive: true });
-      writeFileSync(join(profileDirectory, 'package.json'), input.declarationText, 'utf8');
-      writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), input.lockText, 'utf8');
-      if (input.workspaceText !== null) {
-        writeFileSync(join(profileDirectory, 'pnpm-workspace.yaml'), input.workspaceText, 'utf8');
+      writeFileSync(join(profileDirectory, 'package.json'), fresh.value.targetDeclarationText, 'utf8');
+      writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), fresh.value.targetLockText, 'utf8');
+      if (fresh.value.targetWorkspaceText !== null) {
+        writeFileSync(join(profileDirectory, 'pnpm-workspace.yaml'), fresh.value.targetWorkspaceText, 'utf8');
       }
       const run = await options.executor.run(
         {
@@ -181,14 +264,17 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
         return portFail('INTERNAL_ERROR', 'the pruned profile install failed');
       }
       const lockAfter = readFileSync(join(profileDirectory, 'pnpm-lock.yaml'), 'utf8');
-      if (lockAfter !== input.lockText) {
-        // The install must not silently rewrite the pruned lock the plan bound.
+      if (lockAfter !== input.planLockText) {
         return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the pruned profile lock was rewritten during install');
       }
+      const retained = retainedDependenciesFromLock(lockAfter);
+      if (retained === undefined) {
+        return portFail('INTERNAL_ERROR', 'the installed pruned lock importer could not be read');
+      }
       return portOk({
-        installed: input.retainedPlugins,
+        retainedLockDependencies: retained,
         lockSha256: sha256Of(lockAfter),
-        declarationSha256: sha256Of(input.declarationText),
+        declarationSha256: sha256Of(fresh.value.targetDeclarationText),
       });
     } catch {
       return portFail('INTERNAL_ERROR', 'the pruned profile could not be installed');
@@ -336,8 +422,21 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
         return portFail('INTERNAL_ERROR', 'the pruned target profile resolution produced no lockfile');
       }
       const targetLockText = readFileSync(lockPath, 'utf8');
+      const retainedFromLock = retainedDependenciesFromLock(targetLockText);
+      if (retainedFromLock === undefined) {
+        return portFail('INTERNAL_ERROR', 'the recomputed pruned lock importer could not be read');
+      }
+      const constantRetention = resolution.value.retention.filter(
+        (entry) => !entry.startsWith('dependency entry ') && !entry.startsWith('enabled bundle '),
+      );
       return portOk({
         ...resolution.value,
+        // Retention is authoritative from the RECOMPUTED lock, not inferred from
+        // deleting the direct dependency.
+        retention: [
+          ...constantRetention,
+          ...retainedFromLock.map((id) => `lock dependency ${id}`),
+        ],
         targetLockText,
         targetLockSha256: sha256Of(targetLockText),
         targetDeclarationText: resolution.value.prunedDeclarationText,

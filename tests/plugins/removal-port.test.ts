@@ -7,7 +7,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createPluginRemovalPort, type PluginExecutorPort } from '@hdsl/runtime';
+import { createPluginRemovalPort, retainedDependenciesFromLock, type PluginExecutorPort } from '@hdsl/runtime';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -15,6 +15,13 @@ afterEach(() => {
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+/**
+ * Byte-exact content of the reviewed fixture manifest at the exact commit
+ * (`package.json`, sha256 ee613a2e…). The live installed file must match this to
+ * become `known`; embedding it keeps the test self-contained.
+ */
+const REVIEWED_MANIFEST_B64 = 'ewogICJuYW1lIjogImhkc2wtcGx1Z2luLWUyZS1maXh0dXJlIiwKICAidmVyc2lvbiI6ICIwLjAuMSIsCiAgInByaXZhdGUiOiBmYWxzZSwKICAiZGVzY3JpcHRpb24iOiAiSERTTCBjb250cm9sbGVkIGVuZC10by1lbmQgdGVzdCBmaXh0dXJlOiBhIG1pbmltYWwsIHJldmlld2VkIERTSCBidW5kbGUgd2l0aCBhIGxvYWQgbWFya2VyLiBObyBpbnN0YWxsLXRpbWUgc2NyaXB0cywgbm8gdGhpcmQtcGFydHkgZGVwZW5kZW5jaWVzLiIsCiAgInR5cGUiOiAibW9kdWxlIiwKICAibWFpbiI6ICJsaWIvaW5kZXgubWpzIiwKICAiZXhwb3J0cyI6IHsKICAgICIuIjogIi4vbGliL2luZGV4Lm1qcyIsCiAgICAiLi9jb3JkaXMucGF0Y2gueW1sIjogIi4vY29yZGlzLnBhdGNoLnltbCIsCiAgICAiLi9wYWNrYWdlLmpzb24iOiAiLi9wYWNrYWdlLmpzb24iCiAgfSwKICAiZmlsZXMiOiBbCiAgICAibGliL2luZGV4Lm1qcyIsCiAgICAiY29yZGlzLnBhdGNoLnltbCIsCiAgICAiUkVBRE1FLm1kIgogIF0sCiAgImxpY2Vuc2UiOiAiTUlUIiwKICAiZHNoIjogewogICAgImJ1bmRsZSI6IHsKICAgICAgInBhdGNoIjogIi4vY29yZGlzLnBhdGNoLnltbCIKICAgIH0KICB9Cn0K';
 
 const RUNTIME = {
   dshVersion: '0.1.5-rc.2',
@@ -65,6 +72,10 @@ const build = (options: { publishedDrift?: boolean; userPatch?: string | null; p
   for (const name of ['dsh-base', 'dsh-web-app']) {
     mkdirSync(join(dsh, 'node_modules', '@deepseek-ai', name), { recursive: true });
     writeJson(join(dsh, 'node_modules', '@deepseek-ai', name, 'package.json'), { name: `@deepseek-ai/${name}`, version: '0.1.5-rc.2', dsh: { bundle: { patch: './cordis.patch.yml' } } });
+  }
+  if (pluginId === 'hdsl-plugin-e2e-fixture') {
+    // Reviewed installed artifact: its manifest digest must equal the catalog one.
+    writeFileSync(join(published, 'node_modules', pluginId, 'package.json'), Buffer.from(REVIEWED_MANIFEST_B64, 'base64'));
   }
   mkdirSync(join(dsh, 'node_modules', '@deepseek-ai', 'cordis'), { recursive: true });
   mkdirSync(join(dsh, 'node_modules', '@deepseek-ai', 'cordis-plugin-loader'), { recursive: true });
@@ -134,6 +145,102 @@ describe('createPluginRemovalPort', () => {
     expect(outcome.value.blockingReferences).toEqual([]);
     expect(outcome.value.serviceVerification.status).toBe('known');
     expect(JSON.parse(outcome.value.targetDeclarationText).dependencies['hdsl-plugin-e2e-fixture']).toBeUndefined();
+  });
+
+  it('never trusts the live installed manifest: a mismatch with the reviewed digest stays unknown', async () => {
+    const fixture = build({ pluginId: 'hdsl-plugin-e2e-fixture' });
+    // The catalog reviews the manifest at the exact commit; the live installed
+    // package.json is tampered, so the lookup must NOT become known.
+    writeFileSync(join(fixture.published, 'node_modules', 'hdsl-plugin-e2e-fixture', 'package.json'), '{"name":"tampered"}');
+    const port = createPluginRemovalPort({ executor: executor([]) });
+    const outcome = await port.resolveRemoval(
+      {
+        pluginId: 'hdsl-plugin-e2e-fixture',
+        expectedCommitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838',
+        expectedManifestSha256: null,
+        declarationDirectory: fixture.declaration,
+        publishedProfileDirectory: fixture.published,
+        homeDirectory: fixture.home,
+        dshDirectory: fixture.dsh,
+        nodeExecutable: join(fixture.root, 'node'),
+        stagingDirectory: fixture.staging,
+        installed: [{ id: 'hdsl-plugin-e2e-fixture', version: '1.0.0', sha256: 'a'.repeat(64) }],
+        enabledBundles: ['hdsl-plugin-e2e-fixture'],
+        runtime: RUNTIME,
+      },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.serviceVerification.status).toBe('unknown');
+  });
+
+  it('derives retention from the RECOMPUTED lock and re-verifies before applying', async () => {
+    const fixture = build({ pluginId: 'hdsl-plugin-e2e-fixture' });
+    const port = createPluginRemovalPort({
+      executor: {
+        identity: async () => ({ ok: true, value: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) } }),
+        run: async (request) => {
+          writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), [
+            'lockfileVersion: 9.0',
+            'importers:',
+            '  .:',
+            '    dependencies:',
+            '      shared-dep:',
+            '        specifier: 1.0.0',
+            '        version: 1.0.0',
+            '',
+          ].join('\n'));
+          return { ok: true, value: { executor: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) }, exitCode: 0, stdout: '', stderr: '', executedInstallScripts: [] } };
+        },
+      },
+    });
+    const resolveInput = {
+      pluginId: 'hdsl-plugin-e2e-fixture',
+      expectedCommitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838',
+      expectedManifestSha256: null,
+      declarationDirectory: fixture.declaration,
+      publishedProfileDirectory: fixture.published,
+      homeDirectory: fixture.home,
+      dshDirectory: fixture.dsh,
+      nodeExecutable: join(fixture.root, 'node'),
+      stagingDirectory: fixture.staging,
+      installed: [{ id: 'hdsl-plugin-e2e-fixture', version: '1.0.0', sha256: 'a'.repeat(64) }],
+      enabledBundles: ['hdsl-plugin-e2e-fixture'],
+      runtime: RUNTIME,
+    } as const;
+    const preview = await port.resolveRemoval(resolveInput, new AbortController().signal);
+    if (!preview.ok) {
+      const { appendFileSync } = await import('node:fs');
+      appendFileSync('/tmp/rp2.txt', `code=${preview.code} msg=${preview.message}\n`);
+    }
+    expect(preview.ok).toBe(true);
+    if (!preview.ok) return;
+    expect(preview.value.retention).toContain('lock dependency shared-dep');
+
+    // Apply with the SAME plan binding succeeds and reports the lock-derived set.
+    const applied = await port.applyRemoval(
+      { pluginId: resolveInput.pluginId, resolve: resolveInput, planDeclarationText: preview.value.targetDeclarationText, planLockText: preview.value.targetLockText, generationDirectory: join(fixture.root, 'gen-1'), homeDirectory: fixture.home, nodeExecutable: join(fixture.root, 'node') },
+      new AbortController().signal,
+    );
+    expect(applied.ok).toBe(true);
+    if (!applied.ok) return;
+    expect(applied.value.retainedLockDependencies).toEqual(['shared-dep']);
+
+    // A user-patch change after the preview that now REFERENCES the removed plugin
+    // must invalidate the apply (apply-time re-verification of the user patch).
+    writeFileSync(join(fixture.home, 'cordis.patch.yml'), `- insert:\n    - id: new-row\n      name: ${resolveInput.pluginId}\n`);
+    const stale = await port.applyRemoval(
+      { pluginId: resolveInput.pluginId, resolve: resolveInput, planDeclarationText: preview.value.targetDeclarationText, planLockText: preview.value.targetLockText, generationDirectory: join(fixture.root, 'gen-2'), homeDirectory: fixture.home, nodeExecutable: join(fixture.root, 'node') },
+      new AbortController().signal,
+    );
+    expect(stale.ok).toBe(false);
+    if (!stale.ok) expect(['PLAN_STALE', 'REFERENCED_BY_OTHER']).toContain(stale.code);
+  });
+
+  it('reads retention from a pnpm lock importer, refusing malformed input', () => {
+    expect(retainedDependenciesFromLock('lockfileVersion: 9.0\nimporters:\n  .:\n    dependencies:\n      a:\n        specifier: 1\n      b:\n        specifier: 1\n')).toEqual(['a', 'b']);
+    expect(retainedDependenciesFromLock('lockfileVersion: 9.0\nimporters:\n  .:\n    dependencies: {}\n')).toEqual([]);
   });
 
   it('fails closed when the published profile drifted from the immutable declaration', async () => {
