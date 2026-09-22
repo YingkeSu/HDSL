@@ -158,6 +158,19 @@ describe('resolvePluginRemoval', () => {
     expect(outcome.value.blockingReferences[0]?.detail).toContain('cannot be resolved');
   });
 
+  it('blocks another layer that re-inserts the same row id as the removed plugin', () => {
+    const outcome = resolvePluginRemoval(input({
+      removedRowIds: ['timer', 'web-startup'],
+      referenceSources: [
+        { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-web-app', references: [], rowIds: ['web-startup'], rowTargets: [], unresolved: false },
+      ],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences[0]?.detail).toContain('inserts the same row id as this plugin');
+    expect(outcome.value.blockingReferences[0]?.detail).not.toContain('/Users');
+  });
+
   it('warns (never blocks) about patch-injected service overlap and never treats services as packages', () => {
     const outcome = resolvePluginRemoval(input({
       removedServiceNames: ['webStartup', 'sharedService'],

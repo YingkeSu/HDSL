@@ -114,6 +114,8 @@ export interface PluginReferenceSource {
   readonly references: readonly string[];
   /** Row ids this source overrides (`- id: X`): config-level references. */
   readonly rowTargets?: readonly string[];
+  /** Row ids this source INSERTS (`insert[].id`): duplicate-row breakage source. */
+  readonly rowIds?: readonly string[];
   /** Cordis service names this source injects (informational, never packages). */
   readonly services?: readonly string[];
   /** True when the scanner could not classify the source (must fail closed). */
@@ -212,6 +214,16 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
         pluginId: input.pluginId,
         kind: source.kind,
         detail: `${detail} overrides a row this plugin inserts`,
+      });
+      continue;
+    }
+    if (removedRowIds.length > 0 && (source.rowIds ?? []).some((id) => removedRowIds.includes(id))) {
+      // Another layer re-inserts the same row id ("last write winning"): removing
+      // this plugin's rows changes that layer's resolution.
+      blockingReferences.push({
+        pluginId: input.pluginId,
+        kind: source.kind,
+        detail: `${detail} inserts the same row id as this plugin`,
       });
       continue;
     }

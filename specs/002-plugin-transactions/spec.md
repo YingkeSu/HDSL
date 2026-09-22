@@ -63,7 +63,8 @@
 
 - rc.2 `cordis.patch.yml` 结构（真实受管安装样本 + dsh-base 注释）：**根为序列**，条目 `- insert: [ {id, name, disabled?, config?} ]` 与 `- id: X` 行覆盖；`name` 是**包引用**，`id` 是 profile 内的行身份；`inject` 是 **Cordis 服务名**（`webStartup`/`loader`/`acpAppStartup`/…），不是包引用。
 - **可静态判定并拦截**（`REFERENCED_BY_OTHER`，`blockingReferences` 带来源；detail 为安全标识，不含本地绝对路径）：其它源 insert 行 `name` == 被移除包；其它源以 `- id: X` 行覆盖命中被移除插件 insert 的 `rowIds`。`insert` 值不是行序列、行不是映射、缺标量 `id`、`name` 为 block scalar 或非字符串、别名/merge key/显式 tag、多文档、根既非序列也非映射、超尺寸/节点/深度 → **unknown ⇒ 阻塞**（宁过报不漏报、无解析能力不降级为"无引用"）。
-- **不可静态判定（不拦截）**：服务级耦合（插件**提供**的服务被其它层 `inject`）。预览 `riskItems` 必须声明该限制；可选地在服务名重叠时给出**非阻塞**警告。UI 不得把"未发现引用"呈现为"安全/无影响"。
+- **可静态判定并拦截**（已实现）：其它源 insert 行 `name` == 被移除包；其它源行覆盖（`- id: X`）命中被移除插件 insert 的 `rowIds`；其它源 insert 了与之一致的行 `id`（`last-write-wins`）。
+- **待决（不得据此弱化 AC）**：服务级耦合（插件**在代码中提供**的 Cordis 服务被保留层 `inject`）。固定 rc.2 **无声明性 service provider/consumer 映射**，故当前无法把服务名可靠映射到包名；预览 `riskItems` **必须**保留该事实限制，UI 不得把"未发现引用"呈现为"安全/无影响"；在口径裁决前**不得**声称 AC 满足、也**不得**默认可卸载。候选可实现子集与最小真实反例见 ADR 0005 §9.5a。
 - **保留项**：共享/传递依赖按**完全 pin 的 lockfile** 保留（不要求同包在 lock/安装目录全部消失，预览 `retention` 说明）；用户 patch 层（`home/cordis.patch.yml`，**原字节不被写回**）、环境数据（`home/`/`data/`）、审计日志为保留项。
 - **内置保护**：`isBuiltin` 由**当前受管 DSH 安装**解析出的 in-box bundle 集合判定（F12a）；缺失或不可信路径 → 拒绝（不是空集合），同名 profile 依赖不改变保护；负控用真实 in-box 名。
 - **验收**：同 fixture **安装 → 卸载 → 重启**，以「活动代际记录 + 受管 DSH 离线解析组合树」判定启用集合不再包含该包；配置解析被破坏必须表现为可见受控失败。E9（离线组合树 == 运行期加载集合）等价性仍待实证，不作为唯一判据。
