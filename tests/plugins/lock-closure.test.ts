@@ -135,6 +135,15 @@ describe('resolveLockClosure', () => {
     expect(closure.reachable).toEqual(['b@1.0.0']);
   });
 
+  it('treats a fully pruned lock (no direct dependencies) as an EMPTY closure, not unsupported', () => {
+    // After the last direct dependency is removed, pnpm emits a root importer
+    // with no `packages`/`snapshots` sections. That is a complete removal, not an
+    // uninterpretable lock.
+    const pruned = "lockfileVersion: '9.0'\nimporters:\n  .: {}\n";
+    expect(resolveLockClosure(pruned)).toEqual({ status: 'ok', direct: [], reachable: [] });
+    expect(targetRetentionInLock(pruned, 'a@1.0.0')).toMatchObject({ status: 'ok', retained: false, direct: [] });
+  });
+
   it('fails closed on unsupported shapes instead of claiming completion', () => {
     expect(resolveLockClosure('lockfileVersion: 9.0\n').status).toBe('unsupported');
     expect(resolveLockClosure('importers:\n  .:\n    dependencies:\n      a:\n        specifier: 1\n').status).toBe('unsupported');

@@ -58,6 +58,8 @@
 
 `CompositionLock` 保留下载来源记录 `sources: { node, dsh }`（各含 `url` 与 `sha256`），用于复现时的来源追溯；但 `RuntimeArtifactRef` **不含** `url`，且 `compositionDigest` 只对子集 `schemaVersion`、`node`/`dsh` 的 `version/platform/arch/sha256`、排序后的 `plugins` 做规范化 JSON + SHA-256。`sources` 永不进入摘要：改动下载 URL（含镜像、签名查询串）不改变摘要。规范化 JSON 的函数在 `packages/contracts/src/digest.ts`，T004 负责对其字节做 SHA-256 与持久化。
 
+**1.1 追加（ADR 0005 D13/D21，S2/S3）**：`CompositionLock` 新增**可选、非摘要**字段 `pluginSources`（`Record<pluginId, PluginSourceLock>`，缺失=无插件来源记录）。它记录已安装插件的精确 `repository/commitSha/manifestSha256/closureLockSha256` 来源身份，供卸载时按精确身份重验（不从 live 文件自建信任）；与 `sources` 同理**不进入 `compositionDigest`**（摘要输入投影只选 `schemaVersion`/`node`/`dsh`/`plugins`）。`pluginSources` 的 map 键与 `PluginLock.id`、`InstalledPlugin.id`、remove 目标 `pluginId` 一致，均为 **npm 包名**（可带 scope，如 `@deepseek-ai/dsh-base`）——比不透明 id 规则宽（真实 in-box bundle 与已安装插件都是包名），上界 214 字符；负控见 `tests/contracts/plugins-installed.test.ts`。
+
 ## 事件
 
 事件通道 `operation.updated` 由 `operations.subscribe` 建立，携带：`subscriptionId`、`operationId`、`sequence`、`phase`、`status`、`progress?`。`sequence` 是**每 operation** 单调递增计数（与 `Operation.sequence`、`OperationSnapshot.sequence` 同一域），不是订阅内全局计数；多操作订阅时按 operationId 分组递增，事件必带 operationId。百分比未知时不给假进度；事件不含 token、cookie 或本地路径：发布前逐个 `operationUpdatedEventSchema` 校验（`progress` 必须 0–100），`phase` 先脱敏，不合法事件在 dispatcher 边界映射为 `INTERNAL_ERROR`。客户端重连以 `operations.get` 为准；取消不等于系统回滚。preload 白名单只暴露上述订阅/退订方法，不暴露任意通道发送。

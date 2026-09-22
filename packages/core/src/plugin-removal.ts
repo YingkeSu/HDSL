@@ -7,6 +7,7 @@
  * controlled failure, not an empty/guessed context.
  */
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import { portFail, portOk, type PortOutcome } from '@hdsl/contracts';
 import { environmentPaths, generationPaths, type AppDataLayout } from './layout.js';
 import { managedProfileName } from './generation-profile.js';
@@ -173,6 +174,39 @@ export const readRemovalRuntimeIdentity = (input: {
   }
   return portOk({ dshVersion, dshSha256, loaderVersion, cordisVersion });
 };
+
+/**
+ * SHA-256 over the plan's full removal binding: the pruned declaration binding
+ * plus the target's exact recorded source identity and the verified runtime
+ * identity the service axis was decided under. It is stored in
+ * `ChangePlan.planInputsDigest` so `apply` can recompute it from the SAME
+ * derivation and refuse a source/runtime drift even when the pruned
+ * declaration+lock bytes happen to be unchanged (never a second public field).
+ */
+export const removalPlanInputsDigest = (input: {
+  readonly declarationSha256: string;
+  readonly pluginId: string;
+  readonly expectedCommitSha: string | null;
+  readonly expectedManifestSha256: string | null;
+  readonly runtime: RemovalRuntimeIdentity;
+}): string =>
+  createHash('sha256')
+    .update(
+      JSON.stringify({
+        declarationSha256: input.declarationSha256,
+        pluginId: input.pluginId,
+        expectedCommitSha: input.expectedCommitSha,
+        expectedManifestSha256: input.expectedManifestSha256,
+        runtime: {
+          dshVersion: input.runtime.dshVersion,
+          dshSha256: input.runtime.dshSha256,
+          loaderVersion: input.runtime.loaderVersion,
+          cordisVersion: input.runtime.cordisVersion,
+        },
+      }),
+      'utf8',
+    )
+    .digest('hex');
 
 /** Fully derived removal resolution input plus the active-generation context. */
 export interface RemovalResolveContext {

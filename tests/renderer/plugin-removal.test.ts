@@ -182,6 +182,47 @@ describe('RendererController plugin removal', () => {
     expect(controller.getState().actionError?.code).toBe('BUILTIN_BUNDLE_PROTECTED');
     await controller.dispose();
   });
+
+  it('renders a pre-S3 installed plugin (source: null) and shows the unknown-service block copy', async () => {
+    const preS3View: InstalledPluginsView = {
+      ...installedView(1),
+      plugins: [
+        { id: PLUGIN_ID, version: '0.0.1', sha256: 'b'.repeat(64), isBuiltin: false, enabledBundle: true, source: null },
+      ],
+    };
+    const blocked = removePlan({
+      blockingReferences: [
+        { pluginId: PLUGIN_ID, kind: 'config', detail: 'service dependencies for this plugin are not verified (no HDSL service verification record)' },
+      ],
+    });
+    const { client } = createTestRendererClient({
+      ...FIXTURE_SEED,
+      installedPlugins: { [ENVIRONMENT_ID]: preS3View },
+      removal: { plan: blocked },
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment(ENVIRONMENT_ID);
+    controller.loadInstalledPlugins();
+    await flush();
+    expect(controller.getState().installedPlugins?.plugins[0]?.source).toBeNull();
+    controller.selectInstalledPlugin(PLUGIN_ID);
+    await controller.previewPluginRemoval();
+    await flush();
+    expect(controller.getState().changePlan?.blockingReferences).toHaveLength(1);
+    const html = renderPluginRemoval({
+      state: state({
+        phase: 'ready',
+        installedPlugins: controller.getState().installedPlugins,
+        selectedInstalledPluginId: PLUGIN_ID,
+        changePlan: controller.getState().changePlan,
+      }),
+      actions,
+    });
+    expect(html).toContain('无法验证服务依赖，暂不能卸载');
+    expect(html).not.toContain('确认卸载');
+    await controller.dispose();
+  });
 });
 
 describe('renderer removal markup (DOM-free real React)', () => {

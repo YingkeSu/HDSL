@@ -45,7 +45,7 @@ import { managedProfileName, publishGenerationProfile } from './generation-profi
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
 import { reuseGenerationRuntime } from './generation-runtime-reuse.js';
 import { readTargetProfileCache, readTargetProfileCacheForRemoval } from './target-profile-cache.js';
-import { buildRemovalResolveInput, type PluginRemovalPort } from './plugin-removal.js';
+import { buildRemovalResolveInput, removalPlanInputsDigest, type PluginRemovalPort } from './plugin-removal.js';
 import { ensureDirectory, readDirectoryNames, removePath, tryReadJsonFile, writeJsonAtomic } from './fsx.js';
 import { newGenerationId, newOperationId, newTransactionId } from './ids.js';
 
@@ -228,6 +228,13 @@ export class ChangeApplyService {
     }
     if (record.consumedBy !== null && record.consumedBy !== command.requestId) {
       return portFail('PLAN_CONSUMED', 'the change plan was consumed by another request');
+    }
+    // A blocked removal still produces a plan for UI explanation but is NEVER
+    // applyable. Reject it here (before any operation/effect) with the accurate
+    // `REFERENCED_BY_OTHER`, never the misleading cache-miss `PLAN_STALE` (a
+    // programmatic caller that bypasses the UI must get the real reason).
+    if (plan.action.kind === 'remove' && plan.blockingReferences.length > 0) {
+      return portFail('REFERENCED_BY_OTHER', 'the remove plan is blocked by a reference or an unverified service dependency');
     }
     // S4 (build authorization) is not available in this slice. A source that
     // needs build scripts is refused, and any supplied authorization is refused
@@ -708,10 +715,10 @@ export class ChangeApplyService {
       return;
     }
     // Bind the plan to the pruned declaration the preview cached. A missing or
-    // tampered cache never triggers execution.
-    const cached = readTargetProfileCacheForRemoval(this.#layout, plan.planId, {
-      declarationSha256: plan.planInputsDigest,
-    });
+    // tampered cache never triggers execution. The cache read is plan-id + internal
+    // integrity; the plan's composite `planInputsDigest` below binds it to the
+    // target's exact source/runtime identity.
+    const cached = readTargetProfileCacheForRemoval(this.#layout, plan.planId);
     if (!cached.ok) {
       this.#rollbackJournal(ids, cached.code, cached.message);
       return;
@@ -725,6 +732,21 @@ export class ChangeApplyService {
     });
     if (!built.ok) {
       this.#rollbackJournal(ids, built.code, built.message);
+      return;
+    }
+    // Full binding re-check: the pruned declaration + the target's exact recorded
+    // commit/manifest + the verified runtime identity must match the preview. A
+    // drift is `PLAN_STALE` even when the pruned declaration/lock bytes are
+    // unchanged (all comparisons happen before any effect).
+    const binding = removalPlanInputsDigest({
+      declarationSha256: cached.value.declarationSha256,
+      pluginId,
+      expectedCommitSha: built.value.resolve.expectedCommitSha,
+      expectedManifestSha256: built.value.resolve.expectedManifestSha256,
+      runtime: built.value.resolve.runtime,
+    });
+    if (binding !== plan.planInputsDigest) {
+      this.#rollbackJournal(ids, 'PLAN_STALE', 'the removal source/runtime binding changed since the preview');
       return;
     }
     // applyRemoval re-resolves with the SAME derivation (re-reading the user

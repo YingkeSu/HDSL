@@ -144,6 +144,37 @@ describe('createPluginRemovalPort', () => {
     if (!missing.ok) expect(missing.code).toBe('INTERNAL_ERROR');
   });
 
+  it('protects a REAL in-box bundle name that is NOT in the profile lock (no executor side effect)', async () => {
+    // Reproduces the real shape: the in-box bundle is an enabled profile bundle
+    // but not a profile-lock dependency, so no target identity can be derived.
+    const fixture = build({ pluginId: 'demo-plugin' });
+    const calls: { nodeExecutable: string; args: readonly string[] }[] = [];
+    const port = createPluginRemovalPort({ executor: executor(calls) });
+    const outcome = await port.resolveRemoval(
+      {
+        pluginId: '@deepseek-ai/dsh-base',
+        expectedCommitSha: null,
+        expectedManifestSha256: null,
+        declarationDirectory: fixture.declaration,
+        publishedProfileDirectory: fixture.published,
+        homeDirectory: fixture.home,
+        dshDirectory: fixture.dsh,
+        nodeExecutable: join(fixture.root, 'node'),
+        stagingDirectory: fixture.staging,
+        installed: [{ id: 'demo-plugin', version: '1.0.0', sha256: 'a'.repeat(64) }],
+        enabledBundles: ['@deepseek-ai/dsh-base', 'demo-plugin'],
+        runtime: RUNTIME,
+      },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.isBuiltin).toBe(true);
+    expect(outcome.value.blockingReferences.some((reference) => reference.detail.includes('in-box bundle'))).toBe(true);
+    // Protected targets are never resolved by running the executor.
+    expect(calls).toHaveLength(0);
+  });
+
   it('recomputes the pruned lock under the managed Node and keeps the user patch untouched', async () => {
     const fixture = build({ pluginId: 'hdsl-plugin-e2e-fixture' });
     const calls: { nodeExecutable: string; args: readonly string[] }[] = [];

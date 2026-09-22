@@ -89,9 +89,6 @@ export const resolveLockClosure = (lockText: string): LockClosureOutcome => {
   const packages = collectInstances(root?.['packages']);
   const edges = new Map<string, string[]>([...packages.edges, ...snapshots.edges]);
   const known = new Set<string>([...packages.keys, ...snapshots.keys]);
-  if (known.size === 0) {
-    return { status: 'unsupported', reason: 'the lock exposes neither packages nor snapshots' };
-  }
 
   const direct: string[] = [];
   const seeds: string[] = [];
@@ -109,6 +106,17 @@ export const resolveLockClosure = (lockText: string): LockClosureOutcome => {
       }
       seeds.push(`${name}@${resolved}`);
     }
+  }
+
+  // A root importer with no dependencies has an EMPTY reachable closure. This is
+  // the legitimate state after the last direct dependency is pruned (pnpm then
+  // emits no `packages`/`snapshots` sections at all), and must NOT be reported as
+  // an uninterpretable lock — otherwise a complete removal fails closed.
+  if (seeds.length === 0) {
+    return { status: 'ok', direct: [], reachable: [] };
+  }
+  if (known.size === 0) {
+    return { status: 'unsupported', reason: 'the lock exposes neither packages nor snapshots' };
   }
 
   const isLocalEdge = (value: string): boolean =>

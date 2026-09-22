@@ -395,6 +395,28 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
       return portFail(resolution.code, resolution.message);
     }
 
+    // An in-box bundle of the CURRENT managed install is protected: it is not a
+    // profile-lock dependency, so the isolated pruned-lock recompute does not
+    // apply. Return the protected identity WITHOUT spawning the executor (no side
+    // effect) so core maps it to `BUILTIN_BUNDLE_PROTECTED` instead of a generic
+    // internal error.
+    if (resolution.value.isBuiltin) {
+      return portOk({
+        ...resolution.value,
+        directDependencies: [],
+        retainedTargetInClosure: false,
+        targetLockText: currentLockText ?? '',
+        targetLockSha256: sha256Of(currentLockText ?? ''),
+        targetDeclarationText: resolution.value.prunedDeclarationText,
+        targetWorkspaceText: resolution.value.prunedWorkspaceText,
+        targetDeclarationSha256: sha256Of(
+          JSON.stringify({ declaration: resolution.value.prunedDeclarationText, workspace: workspaceText }),
+        ),
+        inBoxBundles: inBox,
+        serviceVerification,
+      });
+    }
+
     const staging = input.stagingDirectory;
     try {
       rmSync(staging, { recursive: true, force: true });

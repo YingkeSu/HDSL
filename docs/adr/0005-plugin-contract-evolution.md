@@ -204,7 +204,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
   - **服务级耦合计口径：已裁决为 D21（HDSL 命名空间受限声明 + HDSL 核验；实现随完整 PR 评审）**，本 ADR 不再按“仅风险声明”弱化 AC。（某插件在**代码**中提供的 Cordis 服务被保留层的 `inject` 消费）。**固定 rc.2 不存在声明性 service provider/consumer 映射**（见下方"事实基线"），patch 只有消费侧服务名；把 `inject` 当包引用会假阳性并阻塞一切常规 patch（六个 in-box bundle 全部 inject 服务），而把"未发现引用"当作安全又会漏掉真实破坏。因此：(1) 预览 `riskItems` **必须**保留该事实限制（"无静态引用 ≠ 无影响"），UI 不得把"未发现引用"呈现为"安全"；(2) 在判定口径裁决前，**不得**声称本 AC 已满足，也**不得**把服务耦合默认可卸载。候选可实现子集与最小反例见 §9.5a；**判定口径按 D21（受限声明 + HDSL 核验）落地**。
 - **卸载验收必含**（非可选）：同 fixture **安装 → 卸载 → 重启**，以「活动代际记录 + 受管 DSH 离线解析组合树」判定启用集合不再包含该包；若配置解析被破坏，必须表现为**可见的受控失败**，不得静默通过。该验收**不能**替代服务耦合的判定口径（待决）。
 - **内置保护**：`isBuiltin` 必须由**当前受管 DSH 安装解析出的 in-box bundle 集合**判定（F12a，verified），不由客户端提供；命中 → `BUILTIN_BUNDLE_PROTECTED`。负控必须使用**当前安装的真实 in-box 名**，禁止用同名 profile 替身造假绿。F12b（解析顺序 / fail-loud）无仓库出处，**不作为本机制的论据，也不写入 issue 文案**（§9.5）。
-- **精确目标**：不做通配清理；只移除本次事务的直接依赖条目与启用引用。
+- **精确目标**：不做通配清理；只移除本次事务的直接依赖条目与启用引用。remove 计划 `sourceLock: null`；其 `planInputsDigest` 为内部组合摘要，绑定 pruned declaration + 目标精确 recorded commit/manifest + 受管 runtime 身份（不新增公开字段），composition/pruned lock 由 apply 时重解析逐字比对；阻塞计划 apply 返回 `REFERENCED_BY_OTHER`（不由 cache 缺失降级为 `PLAN_STALE`）。
 - **运行时生效观测**（QA §14.7）：文件检查**不构成**生效证据。生效判据由三面组合：
   1. 契约只读面：`generations.list` 返回活动代际、组成摘要与来源锁（HDSL 的权威记录）；
   2. 独立运行时解析：用受管 DSH 的**离线配置转储**（`--dump-config`/`--dump-default-config`，F14）得到**离线解析出的组合树**；它与"运行期实际加载集合"的等价性**待实证（E9）**，在实证前不得写成唯一生效 AC 或产品承诺；
@@ -462,4 +462,5 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
   - rev 3 同时修正 §4.4 的 `tests/**` 行：`tests/e2e/support/desktop-ui.ts` 改为引用共享 `API_VERSION`，`sender-frame-*.html` 改为版本占位符并在 E2E 宿主注入（本片承接，避免留已知损坏的 opt-in harness）。
   - 网络硬超时（D12）覆盖 body 读取：GitHub 适配器把 `response.json()` 纳入同一 deadline 与调用方 abort，已补「响应头已到、body 停住」的超时与取消测试。
   - 未受信外部字段按 DTO 上界防护：自由文本 `description` 带省略号裁剪；结构性标识/URL 不裁剪，超界/非法时只丢弃该条命中并以 `incompleteResults` 暴露，不静默丢失、不改义。
+- **实现进度（rev 4）**：S2 **安装闭环**（`changes.preview`/`changes.apply`、计划存储与消费、受管执行器默认拒执行、target-profile cache 绑定、代际复用/发布/指针切换/journal/幂等/recover）已合入 #87；S3 **卸载**（remove 三分支、内置保护、合法保留、服务核验三态、`plugins.installed` 只读面、UI 列表选择）在本片落地，真实受控 Node 链（安装→卸载→重启，活动代记录 + 离线组合树 + 分阶段 marker + 负控）17/17 见 [plugin-remove-validation.md](../development/plugin-remove-validation.md)。`contracts-v1.1.0` 标签仍待编排者按精确 merge SHA 打，本片**不**提前打标签、**不**声明 #9/#8/#15 完成。完整联网桌面链与 E9 等价性仍开放。
 - **本 P0 合入不宣称 D18 的运行数据/旧代可用保证已实现**：该保证为条件性承诺，#76 硬门禁与 E10 见 D18/§9.7。

@@ -36,6 +36,7 @@ import { writeTargetProfileCache } from './target-profile-cache.js';
 import { ChangePlanStore } from './change-plan-store.js';
 import {
   buildRemovalResolveInput,
+  removalPlanInputsDigest,
   type PluginRemovalPort,
 } from './plugin-removal.js';
 import { isTerminalStatus, OperationStore, toOperationSnapshot } from './operation-store.js';
@@ -413,7 +414,13 @@ export class ChangePreviewService {
       retention: [...resolution.retention],
       blockingReferences: [...resolution.blockingReferences],
       executor: null,
-      planInputsDigest: resolution.targetDeclarationSha256,
+      planInputsDigest: removalPlanInputsDigest({
+        declarationSha256: resolution.targetDeclarationSha256,
+        pluginId: command.action.pluginId,
+        expectedCommitSha: built.value.resolve.expectedCommitSha,
+        expectedManifestSha256: built.value.resolve.expectedManifestSha256,
+        runtime: built.value.resolve.runtime,
+      }),
     };
     // A blocked removal still produces a plan so the UI can explain it, but it is
     // NOT cached and therefore NOT applyable. Only a clean resolution caches the

@@ -401,21 +401,76 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(plan.blockingReferences.length).toBeGreaterThanOrEqual(1);
     expect(plan.blockingReferences.some((entry) => entry.detail.includes('service dependencies for this plugin are not verified'))).toBe(true);
 
-    // A blocked plan is never applyable (no cached target profile).
+    // A programmatic caller that bypasses the UI must get the REAL reason
+    // (`REFERENCED_BY_OTHER`), never the misleading cache-miss `PLAN_STALE`.
+    let applyCalls = 0;
+    const countingPort: PluginRemovalPort = {
+      ...fixture.removalPort,
+      applyRemoval: async (input, signal) => {
+        applyCalls += 1;
+        return fixture.removalPort.applyRemoval(input, signal);
+      },
+    };
+    const service = fixture.apply(countingPort);
+    const rejected = service.applyChange({
+      requestId: 'req-apply-blocked',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: plan.baseRevision,
+      planId: plan.planId,
+      buildAuthorization: null,
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.code).toBe('REFERENCED_BY_OTHER');
+    // No executor run, no plan consumption, no environment change.
+    expect(applyCalls).toBe(0);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
+  });
+
+  it('rejects a source-identity drift at apply even when the pruned declaration and lock are unchanged', async () => {
+    const fixture = build();
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    // Controlled drift of the recorded source identity in OUR temp generation lock
+    // (the pruned declaration+lock bytes the plan bound are untouched).
+    const lockText = readFileSync(fixture.generation.lockPath, 'utf8');
+    const drifted = JSON.parse(lockText) as { pluginSources: Record<string, { commitSha: string }> };
+    drifted.pluginSources[FIXTURE]!.commitSha = 'f'.repeat(40);
+    writeFileSync(fixture.generation.lockPath, `${JSON.stringify(drifted)}\n`);
     const applied = await applyPlan(fixture, plan);
     expect(applied.status).toBe('failed');
     expect(applied.error?.code).toBe('PLAN_STALE');
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
-    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
   });
 
-  it('protects a REAL in-box bundle of the managed install', async () => {
-    const fixture = build({ pluginId: '@deepseek-ai/dsh-base' });
+  it('protects a REAL in-box bundle of the managed install even when it is not a profile-lock dependency', async () => {
+    // The composition records a DIFFERENT plugin, while the in-box bundle is only
+    // an enabled profile bundle (the real shape). The preview must still fail with
+    // BUILTIN_BUNDLE_PROTECTED rather than a generic internal error.
+    const fixture = build({ pluginId: 'demo-plugin' });
     const snapshot = await previewRemoval(fixture, '@deepseek-ai/dsh-base');
     expect(snapshot.status).toBe('failed');
     expect(snapshot.error?.code).toBe('BUILTIN_BUNDLE_PROTECTED');
     // No plan and no environment side effect.
     expect(fixture.preview.plans.read('plan-0000000000000000')).toBeUndefined();
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+  });
+
+  it('treats a pre-S3 generation without a recorded source binding as unknown (blocked, not INTERNAL_ERROR)', async () => {
+    // Existing-generation compatibility (ADR 0005 D21.7): a composition without
+    // `pluginSources` has an unknown service axis and MUST be blocked with an
+    // explainable plan, never a generic internal error.
+    const fixture = build();
+    const lock = JSON.parse(readFileSync(fixture.generation.lockPath, 'utf8')) as Record<string, unknown>;
+    delete lock['pluginSources'];
+    writeFileSync(fixture.generation.lockPath, JSON.stringify(lock));
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    expect(plan.blockingReferences.some((entry) => entry.detail.includes('service dependencies for this plugin are not verified'))).toBe(true);
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
   });
 
@@ -491,6 +546,128 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     await new Promise((resolve) => setTimeout(resolve, 60));
     const report = service.recover();
     expect(report.rolledBack).toBe(1);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
+  });
+
+  it('cancels a removal preview as a terminal cancelled operation with no plan and no side effect', async () => {
+    const fixture = build();
+    const blockingPort: PluginRemovalPort = {
+      ...fixture.removalPort,
+      resolveRemoval: (_input, signal) =>
+        new Promise((resolve) => {
+          signal.addEventListener(
+            'abort',
+            () => resolve({ ok: false, code: 'INTERNAL_ERROR', message: 'aborted before resolution' }),
+            { once: true },
+          );
+        }),
+    };
+    const service = new ChangePreviewService({
+      layout: fixture.layout,
+      removalPort: blockingPort,
+      findEnvironment: (id) => fixture.environments.read(id),
+      now: () => new Date('2026-09-22T00:05:00.000Z'),
+    });
+    const started = service.previewChange({
+      requestId: 'req-cancel-preview',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: 3,
+      action: { kind: 'remove', pluginId: FIXTURE },
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const cancelled = service.cancelOperation(started.value.operationId);
+    expect(cancelled?.ok).toBe(true);
+    const operation = service.findOperation(started.value.operationId);
+    expect(operation?.ok ? operation.value.status : undefined).toBe('cancelled');
+    // No plan, no pointer/revision change (cancellation is terminal, no effect).
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+  });
+
+  it('cancels a removal apply before the commit point and keeps the old generation active', async () => {
+    const fixture = build();
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    const abortingPort: PluginRemovalPort = {
+      ...fixture.removalPort,
+      applyRemoval: (_input, signal) =>
+        new Promise((resolve) => {
+          signal.addEventListener(
+            'abort',
+            () => resolve({ ok: false, code: 'INTERNAL_ERROR', message: 'aborted before commit' }),
+            { once: true },
+          );
+        }),
+    };
+    const service = fixture.apply(abortingPort);
+    const started = service.applyChange({
+      requestId: 'req-cancel-apply',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: 3,
+      planId: plan.planId,
+      buildAuthorization: null,
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    const cancelled = service.cancelOperation(started.value.operationId);
+    expect(cancelled?.ok).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(fixture.operations.read(started.value.operationId)?.status).toBe('cancelled');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
+  });
+
+  it('fails a removal preview controllably when the managed executor is unavailable (no plan, no effect)', async () => {
+    const fixture = build();
+    const failingPort: PluginRemovalPort = {
+      ...fixture.removalPort,
+      resolveRemoval: async () => ({ ok: false, code: 'EXECUTOR_UNAVAILABLE', message: 'managed executor unavailable' }),
+    };
+    const service = new ChangePreviewService({
+      layout: fixture.layout,
+      removalPort: failingPort,
+      findEnvironment: (id) => fixture.environments.read(id),
+      now: () => new Date('2026-09-22T00:05:00.000Z'),
+    });
+    const started = service.previewChange({
+      requestId: 'req-exec-fail-preview',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: 3,
+      action: { kind: 'remove', pluginId: FIXTURE },
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const operation = await waitOperation(
+      (id) => {
+        const outcome = service.findOperation(id);
+        return outcome?.ok ? outcome.value : undefined;
+      },
+      started.value.operationId,
+    );
+    expect(operation.status).toBe('failed');
+    expect(operation.error?.code).toBe('EXECUTOR_UNAVAILABLE');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+  });
+
+  it('fails a removal apply controllably when the managed executor is unavailable and keeps the composition unchanged', async () => {
+    const fixture = build();
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    const failingPort: PluginRemovalPort = {
+      ...fixture.removalPort,
+      applyRemoval: async () => ({ ok: false, code: 'EXECUTOR_UNAVAILABLE', message: 'managed executor unavailable' }),
+    };
+    const applied = await applyPlan(fixture, plan, failingPort);
+    expect(applied.status).toBe('failed');
+    expect(applied.error?.code).toBe('EXECUTOR_UNAVAILABLE');
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
     expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
     expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
