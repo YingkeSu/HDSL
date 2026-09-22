@@ -25,6 +25,7 @@ import {
 import { buildPreviewResolution, type GitProvider } from './preview-resolution.js';
 import { composeAuthorizedWorkspace, decideBuildAuthorization, enumerateInstallScriptsFromInstalledTree } from './build-authorization.js';
 import { DEFAULT_INSTALL_ARGS, type PluginExecutorPort } from './executor.js';
+import { classifyManagedInstallFailure } from './pnpm-failure.js';
 
 export interface RuntimeApplyStageCommand {
   readonly environmentId: string;
@@ -212,7 +213,10 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
         return pre;
       }
       if (pre.value.exitCode !== 0) {
-        return portFail('INTERNAL_ERROR', 'the plan-bound profile could not be materialised for script enumeration');
+        return portFail(
+          classifyManagedInstallFailure(pre.value.stderr).code,
+          'the plan-bound profile could not be materialised for script enumeration',
+        );
       }
       ranDenyInstall = true;
       const dependencyScripts = enumerateInstallScriptsFromInstalledTree({
@@ -270,7 +274,10 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
         return authorized;
       }
       if (authorized.value.exitCode !== 0) {
-        return portFail('INTERNAL_ERROR', 'the authorized managed pnpm install failed for the new generation');
+        return portFail(
+          classifyManagedInstallFailure(authorized.value.stderr).code,
+          'the authorized managed pnpm install failed for the new generation',
+        );
       }
       sourceLock = { ...resolution.sourceLock, buildAuthorization: command.buildAuthorization };
     } else if (!ranDenyInstall) {
@@ -282,7 +289,10 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
         return denied;
       }
       if (denied.value.exitCode !== 0) {
-        return portFail('INTERNAL_ERROR', 'the managed pnpm install failed for the new generation');
+        return portFail(
+          classifyManagedInstallFailure(denied.value.stderr).code,
+          'the managed pnpm install failed for the new generation',
+        );
       }
     }
     // The install must not silently rewrite the pinned lock: if it did, the
