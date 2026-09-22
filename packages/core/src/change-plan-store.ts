@@ -62,6 +62,18 @@ export class ChangePlanStore {
     return updated;
   }
 
+  /** Consumes only when the plan is unused (or the same request); safe on recovery. */
+  consumeIfUnused(planId: string, requestId: string): ChangePlanRecord | undefined {
+    const record = this.read(planId);
+    if (record === undefined) {
+      return undefined;
+    }
+    if (record.consumedBy !== null) {
+      return record;
+    }
+    return this.consume(planId, requestId);
+  }
+
   list(): ChangePlanRecord[] {
     const records: ChangePlanRecord[] = [];
     for (const name of readDirectoryNames(this.#layout.plans)) {

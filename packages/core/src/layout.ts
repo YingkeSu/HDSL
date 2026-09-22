@@ -20,6 +20,7 @@
  *       config/ data/
  *   operations/<operation-id>.json
  *   transactions/<transaction-id>.json
+ *   apply-journals/<transaction-id>.json
  *   idempotency/<hashed-request-id>.json
  *   plans/<plan-id>.json
  * ```
@@ -40,6 +41,7 @@ export interface AppDataLayout {
   readonly operations: string;
   readonly plans: string;
   readonly transactions: string;
+  readonly applyJournals: string;
   readonly idempotency: string;
   readonly logs: string;
 }
@@ -55,6 +57,7 @@ export const resolveLayout = (dataRoot: string): AppDataLayout => {
     operations: join(root, 'operations'),
     plans: join(root, 'plans'),
     transactions: join(root, 'transactions'),
+    applyJournals: join(root, 'apply-journals'),
     idempotency: join(root, 'idempotency'),
     logs: join(root, 'logs'),
   };
@@ -70,6 +73,7 @@ export const ensureLayout = (layout: AppDataLayout): void => {
     layout.operations,
     layout.plans,
     layout.transactions,
+    layout.applyJournals,
     layout.idempotency,
     layout.logs,
   ]) {
@@ -189,5 +193,12 @@ export const transactionRecordPath = (layout: AppDataLayout, transactionId: stri
   assertWithin(
     layout.transactions,
     join(layout.transactions, `${assertOpaqueId(transactionId, 'transactionId')}.json`),
+    'transactionId',
+  );
+
+export const applyJournalRecordPath = (layout: AppDataLayout, transactionId: string): string =>
+  assertWithin(
+    layout.applyJournals,
+    join(layout.applyJournals, `${assertOpaqueId(transactionId, 'transactionId')}.json`),
     'transactionId',
   );
