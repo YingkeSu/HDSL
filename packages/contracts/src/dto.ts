@@ -18,6 +18,7 @@ import {
   nameSchema,
   opaqueIdSchema,
   operationIdSchema,
+  planIdSchema,
   pluginIdSchema,
   revisionSchema,
   sha256Schema,
@@ -37,6 +38,7 @@ import {
   sString,
   sUnknown,
   type Infer,
+  type Schema,
 } from './schema.js';
 
 const artifactVersionSchema = sString({
@@ -152,10 +154,13 @@ export const operationKindSchema = sLiteral(
   'stop',
   'openWebUI',
   'export',
-  // 1.1 plugin discovery (ADR 0005 D4/D5). `preview`/`apply`/`restore` are
-  // added by S2+ inside the same not-yet-tagged 1.1 surface (ADR §5.4).
+  // 1.1 plugin discovery (ADR 0005 D4/D5).
   'search',
   'inspect',
+  // 1.1 plugin transactions (ADR 0005 D4/D5, S2).
+  'preview',
+  'apply',
+  'restore',
 );
 export type OperationKind = Infer<typeof operationKindSchema>;
 
@@ -365,3 +370,144 @@ export const credentialReferenceSchema = sObject({
   key: sString({ minLength: 1, maxLength: 256 }),
 });
 export type CredentialReference = Infer<typeof credentialReferenceSchema>;
+
+// ---------------------------------------------------------------------------
+// Plugin transaction surface (ADR 0005 D4/D5/D6/D8/D13/D14/D20). Results are
+// retrieved ONLY from the terminal `OperationSnapshot.output` (D5); there is no
+// dual return value and `operation.updated` never carries `output`.
+// ---------------------------------------------------------------------------
+
+/** `none-detected` is parse evidence only; it is never a no-script guarantee. */
+export const scriptAssessmentSchema = sLiteral('none-detected', 'detected', 'unknown');
+export type ScriptAssessment = Infer<typeof scriptAssessmentSchema>;
+
+export const EXECUTOR_ID_MAX_LENGTH = 128;
+export const EXECUTOR_VERSION_MAX_LENGTH = 64;
+
+/** Managed executor identity: versioned artifact plus the verified digest. */
+export const executorIdentitySchema = sObject({
+  id: sString({ minLength: 1, maxLength: EXECUTOR_ID_MAX_LENGTH }),
+  version: sString({ minLength: 1, maxLength: EXECUTOR_VERSION_MAX_LENGTH }),
+  sha256: sha256Schema,
+});
+export type ExecutorIdentity = Infer<typeof executorIdentitySchema>;
+
+export const BUILD_SCRIPT_NAME_MAX_LENGTH = 64;
+export const BUILD_SCRIPT_ENTRIES_MAX = 128;
+
+/** One install-time script found in the dependency closure. */
+export const buildScriptEntrySchema = sObject({
+  packageName: sString({ minLength: 1, maxLength: 214 }),
+  packageVersion: sString({ minLength: 1, maxLength: 128 }),
+  script: sString({ minLength: 1, maxLength: BUILD_SCRIPT_NAME_MAX_LENGTH }),
+  source: sLiteral('root', 'dependency'),
+});
+export type BuildScriptEntry = Infer<typeof buildScriptEntrySchema>;
+
+/**
+ * Explicit build authorization. Exact commit + exact script set only; no
+ * wildcard, no author trust, no global allow switch (ADR 0005 D14).
+ */
+export const buildAuthorizationSchema = sObject({
+  commitSha: sString({ minLength: 40, maxLength: 40 }),
+  scripts: sArray(buildScriptEntrySchema, { maxLength: BUILD_SCRIPT_ENTRIES_MAX }),
+});
+export type BuildAuthorization = Infer<typeof buildAuthorizationSchema>;
+
+/** Non-digest provenance for an installed plugin source (ADR 0005 D13). */
+export const pluginSourceLockSchema = sObject({
+  sourceKind: sLiteral('github'),
+  repository: sObject({
+    owner: sString({ minLength: 1, maxLength: 100 }),
+    name: sString({ minLength: 1, maxLength: 100 }),
+  }),
+  commitSha: sString({ minLength: 40, maxLength: 40 }),
+  ref: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  packageName: sString({ minLength: 1, maxLength: 214 }),
+  packageVersion: sString({ minLength: 1, maxLength: 128 }),
+  manifestSha256: sha256Schema,
+  closureLockSha256: sha256Schema,
+  isBuiltin: sBoolean,
+  buildAuthorization: sNullable(buildAuthorizationSchema),
+  executor: sNullable(executorIdentitySchema),
+});
+export type PluginSourceLock = Infer<typeof pluginSourceLockSchema>;
+
+/** Install or remove action of a change plan (strict discriminated union). */
+export type ChangePlanAction =
+  | { readonly kind: 'install'; readonly source: PluginSourceSelector }
+  | { readonly kind: 'remove'; readonly pluginId: string };
+
+export const changePlanActionSchema: Schema<ChangePlanAction> = (value, path, issues) => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    issues.push({ path, message: 'must be an object' });
+    return undefined;
+  }
+  const record = value as Record<string, unknown>;
+  if (record['kind'] === 'install') {
+    const source = pluginSourceSelectorSchema(record['source'], `${path}.source`, issues);
+    return source === undefined ? undefined : { kind: 'install', source };
+  }
+  if (record['kind'] === 'remove') {
+    const pluginId = pluginIdSchema(record['pluginId'], `${path}.pluginId`, issues);
+    return pluginId === undefined ? undefined : { kind: 'remove', pluginId };
+  }
+  issues.push({ path: `${path}.kind`, message: 'must be "install" or "remove"' });
+  return undefined;
+};
+
+export const CHANGE_PLAN_RISK_ITEMS_MAX = 32;
+export const CHANGE_PLAN_BLOCKING_MAX = 32;
+
+/**
+ * Durable change plan (ADR 0005 D5/D6/D8/D20). Identity and script evidence are
+ * bound here so `changes.apply` can re-resolve and compare before any write.
+ */
+export const changePlanSchema = sObject({
+  planId: planIdSchema,
+  environmentId: environmentIdSchema,
+  baseRevision: revisionSchema,
+  action: changePlanActionSchema,
+  createdAt: sString({ minLength: 1, maxLength: 64 }),
+  expiresAt: sString({ minLength: 1, maxLength: 64 }),
+  sourceLock: sNullable(pluginSourceLockSchema),
+  scriptAssessment: scriptAssessmentSchema,
+  scripts: sArray(buildScriptEntrySchema, { maxLength: BUILD_SCRIPT_ENTRIES_MAX }),
+  requiresBuildAuthorization: sBoolean,
+  riskItems: sArray(sString({ minLength: 1, maxLength: 256 }), { maxLength: CHANGE_PLAN_RISK_ITEMS_MAX }),
+  removals: sArray(sString({ minLength: 1, maxLength: 214 }), { maxLength: CHANGE_PLAN_BLOCKING_MAX }),
+  retention: sArray(sString({ minLength: 1, maxLength: 214 }), { maxLength: CHANGE_PLAN_BLOCKING_MAX }),
+  blockingReferences: sArray(
+    sObject({
+      pluginId: sString({ minLength: 1, maxLength: 214 }),
+      kind: sLiteral('bundle', 'config', 'userPatch'),
+      detail: sString({ minLength: 1, maxLength: 256 }),
+    }),
+    { maxLength: CHANGE_PLAN_BLOCKING_MAX },
+  ),
+  executor: sNullable(executorIdentitySchema),
+  planInputsDigest: sha256Schema,
+});
+export type ChangePlan = Infer<typeof changePlanSchema>;
+
+/** Terminal `changes.apply` payload. */
+export const changeApplicationSchema = sObject({
+  planId: planIdSchema,
+  environmentId: environmentIdSchema,
+  generationId: generationIdSchema,
+  compositionDigest: sha256Schema,
+  sourceLock: sNullable(pluginSourceLockSchema),
+  committedAt: sString({ minLength: 1, maxLength: 64 }),
+});
+export type ChangeApplication = Infer<typeof changeApplicationSchema>;
+
+/** One generation summary for `generations.list` / `generations.restore`. */
+export const generationSummarySchema = sObject({
+  generationId: generationIdSchema,
+  environmentId: environmentIdSchema,
+  compositionDigest: sha256Schema,
+  profileName: sNullable(sString({ minLength: 1, maxLength: 80 })),
+  active: sBoolean,
+  createdAt: sString({ minLength: 1, maxLength: 64 }),
+});
+export type GenerationSummary = Infer<typeof generationSummarySchema>;

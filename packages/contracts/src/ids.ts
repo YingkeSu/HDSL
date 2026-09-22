@@ -37,6 +37,7 @@ export const generationIdSchema = opaqueIdSchema('generationId');
 export const catalogCombinationIdSchema = opaqueIdSchema('catalogCombinationId');
 export const exportIdSchema = opaqueIdSchema('exportId');
 export const pluginIdSchema = opaqueIdSchema('pluginId');
+export const planIdSchema = opaqueIdSchema('planId');
 
 export const requestIdSchema = sString({
   minLength: 1,
