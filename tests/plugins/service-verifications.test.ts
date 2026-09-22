@@ -34,20 +34,23 @@ describe('lookupServiceVerification', () => {
     expect(lookupServiceVerification({ ...query, commitSha: null }, [CONFIRMED]).status).toBe('unknown');
   });
 
-  it('ships the controlled fixture entry as pending even with the exact reviewed digest', () => {
-    // The digest IS recorded from the read-only fetch of the exact commit, but the
-    // record stays unknown until hdsl-33 confirms the service behavior.
+  it('resolves the controlled fixture to a VERIFIED EMPTY provider set (hdsl-33 confirmed)', () => {
     const exact = 'ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c';
     const lookup = lookupServiceVerification(
       { pluginId: 'hdsl-plugin-e2e-fixture', commitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838', manifestSha256: exact },
     );
-    expect(lookup.status).toBe('unknown');
-    if (lookup.status === 'unknown') expect(lookup.reason).toContain('pending');
+    expect(lookup.status).toBe('known');
+    if (lookup.status === 'known') expect(lookup.provides).toEqual([]);
 
-    // A different digest never matches the reviewed source.
+    // Any other digest/commit is a different (unreviewed) source => unknown.
     expect(
       lookupServiceVerification(
         { pluginId: 'hdsl-plugin-e2e-fixture', commitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838', manifestSha256: 'f'.repeat(64) },
+      ).status,
+    ).toBe('unknown');
+    expect(
+      lookupServiceVerification(
+        { pluginId: 'hdsl-plugin-e2e-fixture', commitSha: 'a'.repeat(40), manifestSha256: exact },
       ).status,
     ).toBe('unknown');
   });

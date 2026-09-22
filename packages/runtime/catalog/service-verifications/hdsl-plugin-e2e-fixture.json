@@ -5,27 +5,51 @@
   "commitSha": "e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838",
   "manifestSha256": "ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c",
   "files": [
-    { "path": "README.md", "sha256": "9c59037693e2e7de28a102c5b32b073cf5a6b3f8635895f992df5bec3689c0c7" },
-    { "path": "cordis.patch.yml", "sha256": "6bb83e39e6fe843fc61dda6520d52262c453393856585e461b06eb7ada918211" },
-    { "path": "lib/index.mjs", "sha256": "a8cf6175a2ebcf9fc6538704c3b68de697012476c4b8f9446b49a902d8579263" },
-    { "path": "package.json", "sha256": "ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c" },
-    { "path": "pnpm-lock.yaml", "sha256": "17c814b167307942d3609c7b9d916ceddb85839573ab39baa114e30edb132a1a" }
+    {
+      "path": "README.md",
+      "sha256": "9c59037693e2e7de28a102c5b32b073cf5a6b3f8635895f992df5bec3689c0c7"
+    },
+    {
+      "path": "cordis.patch.yml",
+      "sha256": "6bb83e39e6fe843fc61dda6520d52262c453393856585e461b06eb7ada918211"
+    },
+    {
+      "path": "lib/index.mjs",
+      "sha256": "a8cf6175a2ebcf9fc6538704c3b68de697012476c4b8f9446b49a902d8579263"
+    },
+    {
+      "path": "package.json",
+      "sha256": "ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "17c814b167307942d3609c7b9d916ceddb85839573ab39baa114e30edb132a1a"
+    }
   ],
   "manifestSha256Coverage": "package.json only (the plugin manifest at this exact commit)",
-  "observedContentSummary": "dsh.bundle.patch = ./cordis.patch.yml; the patch inserts one row (id hdsl-e2e-marker, name hdsl-plugin-e2e-fixture) with no inject; lib/index.mjs exports name/apply and writes one marker file under $DSH_HOME; no provide/inject/service registration and no third-party imports were observed by static reading",
+  "observedContentSummary": "dsh.bundle.patch = ./cordis.patch.yml; the patch inserts one row (id hdsl-e2e-marker, name hdsl-plugin-e2e-fixture) with no inject; lib/index.mjs exports name/apply and writes one marker file under $DSH_HOME; no provide/inject/service registration and no third-party imports were observed by static reading | QA33 independent verdict: known empty providers at this exact commit",
   "provenance": {
     "method": "read-only git fetch of the exact public commit into a temporary directory; no install, no execution, no network beyond the fetch",
     "obtainedAt": "2026-09-22",
     "fetchedBy": "hdsl-32 (implementation worker)"
   },
   "review": {
-    "status": "pending",
-    "verifier": "hdsl-33 (independent QA service-behavior verification)",
+    "status": "confirmed",
+    "verifier": "hdsl-33 (independent QA service-behavior review, limited read-only source review)",
+    "verdict": "known empty providers (registers/provides no Cordis service)",
+    "reviewedAt": "2026-09-22",
+    "reviewMethod": "one bounded fetch of the exact public commit archive (codeload tar.gz, HTTP200, 1876B) into a temporary directory; no fixture execution, no model, no keychain, no repo changes",
     "scope": [
-      "confirm at exactly this commit that the plugin registers/provides no Cordis service",
-      "confirm the dynamic-load boundary (default export/name/apply shape cannot register services at load time)",
-      "confirm the listed per-file and manifest digests match the reviewed source"
+      "exact commit e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838 only; any commit/file change invalidates this record",
+      "lib/index.mjs exports only name/apply/default; no Service class, no provide/ctx/inject/.set(",
+      "apply() takes no arguments (no ctx) so it cannot register or claim a service",
+      "cordis.patch.yml has one insert row (id hdsl-e2e-marker, name=package) with no provide/service/inject declaration",
+      "no dynamic import()/require/eval/new Function; zero third-party dependencies; only node:fs/node:path",
+      "side effect limited to writing <DSH_HOME>/hdsl-e2e-marker/applied (no DSH_HOME => no file); errors swallowed"
     ],
-    "evidence": "awaiting hdsl-33 verdict; the catalog entry stays UNKNOWN until then (ADR 0005 D21)"
-  }
+    "boundary": "not a general plugin safety guarantee; runtime loading/service-resolution behavior was not executed or proven",
+    "report": "/tmp/qa33/fixture-cordis-review-e7825788.md"
+  },
+  "treeSha256": "a0336c83accebb1430d2f95f8bb12c8c7f5da808221765854547fc46296ebc2e",
+  "treeSha256Coverage": "sha256 over sorted (relpath, file sha256) pairs"
 }

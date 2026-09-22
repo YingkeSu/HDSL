@@ -65,9 +65,9 @@ export const SERVICE_VERIFICATION_RECORDS: readonly ServiceVerificationRecord[] 
     manifestSha256: 'ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c',
     provides: [],
     review: {
-      status: 'pending',
+      status: 'confirmed',
       evidence:
-        'exact public commit fetched read-only; per-file + manifest SHA-256 recorded in catalog/service-verifications/hdsl-plugin-e2e-fixture.json; hdsl-33 must confirm the reviewed source registers/provides no Cordis service (incl. dynamic-load boundary) before status becomes confirmed',
+        'hdsl-33 independent review of the exact commit (one bounded fetch of the public archive, no execution): known empty providers; per-file + manifest + tree SHA-256 recorded in catalog/service-verifications/hdsl-plugin-e2e-fixture.json; valid only for this commit',
     },
   },
 ];
