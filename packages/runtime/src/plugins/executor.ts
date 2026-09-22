@@ -51,7 +51,7 @@ export const PNPM_EXECUTOR_SPEC: PnpmExecutorSpec = {
   sha256: 'deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee',
   entryPath: 'bin/pnpm.mjs',
   entrySha256: 'ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd',
-  treeSha256: 'b364f1bde35b9716f9af7b6018b64834490b63b783e3e3b462962e22c0dae1d1',
+  treeSha256: '8c69f816165f8a2b005fa2fc104cf64d30f9d2beba4fc02be794244dc8b4e899',
 };
 
 /** Deterministic digest over an extracted tree (files + symlink targets). */

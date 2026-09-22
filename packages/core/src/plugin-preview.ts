@@ -28,7 +28,10 @@ import {
   type PortOutcome,
   type ScriptAssessment,
 } from '@hdsl/contracts';
+import { join } from 'node:path';
 import { newOperationId, newPlanId } from './ids.js';
+import { generationPaths } from './layout.js';
+import { writeTargetProfileCache } from './target-profile-cache.js';
 import { ChangePlanStore } from './change-plan-store.js';
 import { isTerminalStatus, OperationStore, toOperationSnapshot } from './operation-store.js';
 import type { AppDataLayout } from './layout.js';
@@ -42,6 +45,22 @@ export interface PluginPreviewResolution {
   readonly riskItems: readonly string[];
   readonly executor: ExecutorIdentity | null;
   readonly planInputsDigest: string;
+  /** Target profile lock resolved in isolation; `null` for a source-only preview. */
+  readonly targetLockText: string | null;
+  /** Target profile declaration; `null` for a source-only preview. */
+  readonly targetDeclarationText: string | null;
+  /** Workspace resolution config used for the target; `null` when absent. */
+  readonly targetWorkspaceText: string | null;
+  /** Target declaration digest; `null` for a source-only preview. */
+  readonly targetDeclarationSha256: string | null;
+}
+
+/** Context for resolving the EXPECTED TARGET PROFILE in isolation. */
+export interface PreviewSourceContext {
+  /** Current generation's immutable declaration source directory. */
+  readonly declarationDirectory: string;
+  /** Isolated staging directory (never the environment home). */
+  readonly stagingDirectory: string;
 }
 
 /**
@@ -53,6 +72,7 @@ export interface PluginPreviewPort {
   previewSource(
     source: PluginSourceSelector,
     signal: AbortSignal,
+    context?: PreviewSourceContext,
   ): Promise<PortOutcome<PluginPreviewResolution>>;
 }
 
@@ -75,6 +95,7 @@ export interface ChangePreviewServiceOptions {
 export const CHANGE_PLAN_DEFAULT_TTL_MS = 15 * 60_000;
 
 export class ChangePreviewService {
+  readonly #layout: AppDataLayout;
   readonly #plans: ChangePlanStore;
   readonly #operations: OperationStore;
   readonly #port: PluginPreviewPort;
@@ -84,6 +105,7 @@ export class ChangePreviewService {
   readonly #controllers = new Map<string, AbortController>();
 
   constructor(options: ChangePreviewServiceOptions) {
+    this.#layout = options.layout;
     this.#plans = new ChangePlanStore(options.layout);
     this.#operations = new OperationStore(options.layout);
     this.#port = options.port;
@@ -173,9 +195,22 @@ export class ChangePreviewService {
     if (command.action.kind !== 'install') {
       return;
     }
+    // The target profile is resolved from the CURRENT generation's immutable
+    // declaration source, in an isolated staging directory (never the env home).
+    const environment = this.#findEnvironment(command.environmentId);
+    const context: PreviewSourceContext | undefined =
+      environment?.activeGenerationId == null
+        ? undefined
+        : {
+            declarationDirectory: join(
+              generationPaths(this.#layout, command.environmentId, environment.activeGenerationId).generationDirectory,
+              'profile',
+            ),
+            stagingDirectory: join(this.#layout.tmp, `target-profile-${operationId}`),
+          };
     let outcome: PortOutcome<PluginPreviewResolution>;
     try {
-      outcome = await this.#port.previewSource(command.action.source, signal);
+      outcome = await this.#port.previewSource(command.action.source, signal, context);
     } catch {
       outcome = portFail('INTERNAL_ERROR', 'the plugin preview source threw');
     }
@@ -205,6 +240,19 @@ export class ChangePreviewService {
         executor: resolution.executor,
         planInputsDigest: resolution.planInputsDigest,
       };
+      // Cache the target profile bound to the plan, so apply can verify and use
+      // it. A source-only resolution has nothing to cache.
+      if (resolution.targetLockText !== null && resolution.targetDeclarationText !== null) {
+        const cached = writeTargetProfileCache(this.#layout, plan.planId, {
+          lockText: resolution.targetLockText,
+          declarationText: resolution.targetDeclarationText,
+          workspaceText: resolution.targetWorkspaceText,
+        });
+        if (!cached.ok) {
+          this.#operations.update(record, { status: 'failed', phase: 'failed', error: contractErrorForCode(cached.code, {}) }, now.toISOString());
+          return;
+        }
+      }
       this.#plans.write({ schemaVersion: '1', plan, consumedBy: null });
       this.#operations.update(
         record,

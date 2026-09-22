@@ -1,0 +1,169 @@
+/**
+ * Target-profile resolution (review 5776435420): the closure digest bound to a
+ * plan must be the EXPECTED TARGET PROFILE lock, not the source repository's own
+ * lock.
+ *
+ * The target declaration is built from the CURRENT generation's immutable
+ * declaration source (never the mutable live profile): its dependencies, its
+ * `dsh` profile bundles and any pnpm workspace resolution config are preserved,
+ * and only the exact GitHub commit of the new plugin is added. Resolution runs
+ * with the fixed managed executor under `--ignore-scripts` (the default deny)
+ * into an ISOLATED staging directory, so preview never writes the environment
+ * home, the active pointer or the source lock, and never enables build scripts
+ * (no `allowBuilds`, no host config).
+ */
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { isPlainRecord, portFail, portOk, type PluginSourceSelector, type PortOutcome } from '@hdsl/contracts';
+import type { GitProvider } from './preview-resolution.js';
+import type { PluginExecutorPort } from './executor.js';
+
+export interface TargetProfileInput {
+  readonly source: PluginSourceSelector;
+  /** Exact commit the source was previewed at. */
+  readonly commitSha: string;
+  /** Current generation's immutable declaration source directory. */
+  readonly declarationDirectory: string;
+  /** Isolated staging directory (must not be the environment home). */
+  readonly stagingDirectory: string;
+}
+
+export interface TargetProfileResolution {
+  readonly targetLockText: string;
+  readonly targetLockSha256: string;
+  readonly targetDeclarationText: string;
+  /** Workspace resolution config participating in the target (nullable). */
+  readonly targetWorkspaceText: string | null;
+  /** Binding digest over package.json + workspace config (not the lock). */
+  readonly targetDeclarationSha256: string;
+}
+
+const sha256 = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
+
+const readOptional = (path: string): string | null =>
+  existsSync(path) ? readFileSync(path, 'utf8') : null;
+
+export const resolveTargetProfileLock = async (
+  gitProvider: GitProvider,
+  executor: PluginExecutorPort,
+  input: TargetProfileInput,
+  signal: AbortSignal,
+): Promise<PortOutcome<TargetProfileResolution>> => {
+  // The source manifest is re-read so the caller cannot supply a stale name.
+  const resolved = await gitProvider.resolveManifest(input.source, signal);
+  if (!resolved.ok) {
+    return resolved;
+  }
+  if (resolved.value.commitSha !== input.commitSha) {
+    return portFail('PLAN_STALE', 'the source commit changed during target-profile resolution');
+  }
+
+  const declarationPath = join(input.declarationDirectory, 'package.json');
+  const currentDeclaration = readOptional(declarationPath);
+  if (currentDeclaration === null) {
+    return portFail('INTERNAL_ERROR', 'the current generation has no immutable profile declaration source');
+  }
+  let declaration: Record<string, unknown>;
+  try {
+    const parsed: unknown = JSON.parse(currentDeclaration);
+    if (!isPlainRecord(parsed)) {
+      return portFail('INTERNAL_ERROR', 'the current profile declaration is malformed');
+    }
+    declaration = parsed;
+  } catch {
+    return portFail('INTERNAL_ERROR', 'the current profile declaration is not valid JSON');
+  }
+  const workspace = readOptional(join(input.declarationDirectory, 'pnpm-workspace.yaml'));
+  const currentLock = readOptional(join(input.declarationDirectory, 'pnpm-lock.yaml'));
+
+  // The plugin's own package name comes from the source manifest at the pinned
+  // commit; it is the dependency key AND the profile bundle entry.
+  let pluginName: string;
+  try {
+    const sourceManifest: unknown = JSON.parse(resolved.value.manifestText);
+    const record = isPlainRecord(sourceManifest) ? sourceManifest : undefined;
+    const name = record?.['name'];
+    if (typeof name !== 'string' || name === '') {
+      return portFail('SOURCE_MANIFEST_INVALID', 'the source manifest has no package name');
+    }
+    pluginName = name;
+  } catch {
+    return portFail('SOURCE_MANIFEST_INVALID', 'the source manifest is not valid JSON');
+  }
+
+  // Build the target declaration: preserve everything, add only the exact
+  // GitHub commit dependency for the new plugin.
+  const dependencies = isPlainRecord(declaration['dependencies']) ? { ...declaration['dependencies'] } : {};
+  const gitSpec = `github:${input.source.owner}/${input.source.name}#${input.commitSha}`;
+  dependencies[pluginName] = gitSpec;
+  const dsh = isPlainRecord(declaration['dsh']) ? { ...declaration['dsh'] } : {};
+  const profile = isPlainRecord(dsh['profile']) ? { ...dsh['profile'] } : {};
+  const bundles = Array.isArray(profile['bundles']) ? [...profile['bundles']] : [];
+  if (!bundles.includes(pluginName)) {
+    bundles.push(pluginName);
+  }
+  const targetDeclarationText = `${JSON.stringify(
+    { ...declaration, dependencies, dsh: { ...dsh, profile: { ...profile, bundles } } },
+    null,
+    2,
+  )}\n`;
+
+  // The declaration binding covers package.json + every workspace config that
+  // participates in resolution (not the lock, which is bound separately).
+  const targetDeclarationSha256 = sha256(
+    JSON.stringify({ declaration: targetDeclarationText, workspace }),
+  );
+
+  const staging = input.stagingDirectory;
+  try {
+    rmSync(staging, { recursive: true, force: true });
+    mkdirSync(staging, { recursive: true });
+    writeFileSync(join(staging, 'package.json'), targetDeclarationText, 'utf8');
+    if (workspace !== null) {
+      writeFileSync(join(staging, 'pnpm-workspace.yaml'), workspace, 'utf8');
+    }
+    if (currentLock !== null) {
+      writeFileSync(join(staging, 'pnpm-lock.yaml'), currentLock, 'utf8');
+    }
+
+    // Resolution only, default deny. No allowBuilds and no host config.
+    const run = await executor.run(
+      {
+        cwd: staging,
+        homeDirectory: staging,
+        nodeExecutable: process.execPath,
+        args: ['install', '--lockfile-only', '--ignore-scripts'],
+      },
+      signal,
+    );
+    if (!run.ok) {
+      return run;
+    }
+    if (run.value.exitCode !== 0) {
+      return portFail('INTERNAL_ERROR', 'the target profile lock could not be resolved');
+    }
+    const lockPath = join(staging, 'pnpm-lock.yaml');
+    if (!existsSync(lockPath)) {
+      return portFail('INTERNAL_ERROR', 'the target profile resolution produced no lockfile');
+    }
+    const targetLockText = readFileSync(lockPath, 'utf8');
+    return portOk({
+      targetLockText,
+      targetLockSha256: sha256(targetLockText),
+      targetDeclarationText,
+      targetWorkspaceText: workspace,
+      targetDeclarationSha256,
+    });
+  } catch {
+    return portFail('INTERNAL_ERROR', 'the target profile could not be resolved in isolation');
+  } finally {
+    // The staging directory is isolated preview cache; leave nothing behind that
+    // could be mistaken for environment state.
+    rmSync(staging, { recursive: true, force: true });
+  }
+};
+
+/** Test helper: list the staging directory contents (must be empty after a run). */
+export const stagingIsClean = (stagingDirectory: string): boolean =>
+  !existsSync(stagingDirectory) || readdirSync(stagingDirectory).length === 0;

@@ -10,7 +10,7 @@
 | sha512（= registry integrity） | `sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==` |
 | sha256（制品） | `deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee` |
 | 入口 `bin/pnpm.mjs` sha256 | `ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd` |
-| 解包树摘要 | `b364f1bde35b9716f9af7b6018b64834490b63b783e3e3b462962e22c0dae1d1` |
+| 解包树摘要 | `8c69f816165f8a2b005fa2fc104cf64d30f9d2beba4fc02be794244dc8b4e899`（用执行器自身的 `executorTreeDigest` 复核；早前一版 `b364f1bd…` 为临时脚本方案，已在真实链中修正） |
 
 受管 Node 身份：`v22.19.0`（已核受管安装）。固定为 `PNPM_EXECUTOR_SPEC`（常量，非 renderer 任意 URL）。
 

@@ -35,6 +35,12 @@ export interface RuntimeApplyStageCommand {
   readonly currentLock: CompositionLock;
   readonly plan: ChangePlan;
   readonly buildAuthorization: BuildAuthorization | null;
+  /** Verified target profile (frozen lock + declaration); when present it is used verbatim. */
+  readonly targetProfile?: {
+    readonly lockText: string;
+    readonly declarationText: string;
+    readonly workspaceText: string | null;
+  };
 }
 
 export interface RuntimeApplyStaged {
@@ -104,11 +110,21 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     if (planLock.manifestSha256 !== resolution.sourceLock.manifestSha256) {
       return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the manifest at the previewed commit has changed');
     }
-    if (planLock.closureLockSha256 === null || resolution.sourceLock.closureLockSha256 === null) {
-      return portFail('PLAN_STALE', 'the dependency closure is not fully pinned; refusing to install a non-deterministic composition');
-    }
-    if (planLock.closureLockSha256 !== resolution.sourceLock.closureLockSha256) {
-      return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the dependency closure has changed since the preview');
+    if (command.targetProfile !== undefined) {
+      // The plan binds the EXPECTED TARGET PROFILE lock; verify the cached lock
+      // matches it (core already verified the cache digest, this is defence in
+      // depth inside the adapter).
+      if (planLock.closureLockSha256 !== createHash('sha256').update(command.targetProfile.lockText, 'utf8').digest('hex')) {
+        return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the target profile lock does not match the plan');
+      }
+    } else {
+      // Legacy/source-only: the closure must be pinned and unchanged.
+      if (planLock.closureLockSha256 === null || resolution.sourceLock.closureLockSha256 === null) {
+        return portFail('PLAN_STALE', 'the dependency closure is not fully pinned; refusing to install a non-deterministic composition');
+      }
+      if (planLock.closureLockSha256 !== resolution.sourceLock.closureLockSha256) {
+        return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the dependency closure has changed since the preview');
+      }
     }
     if (
       command.plan.executor === null ||
@@ -127,22 +143,42 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     //    and install it with the default-deny arguments.
     const profileDirectory = join(command.generationDirectory, 'profile');
     mkdirSync(profileDirectory, { recursive: true });
-    const profilePackage = {
-      name: `hdsl-profile-${command.generationId}`,
-      private: true,
-      dependencies: { [resolution.sourceLock.packageName]: resolution.sourceLock.packageVersion },
-      dsh: { profile: { bundles: [resolution.sourceLock.packageName] } },
-    };
-    writeFileSync(join(profileDirectory, 'package.json'), `${JSON.stringify(profilePackage, null, 2)}\n`, 'utf8');
-    if (resolved.value.lockText !== null) {
-      writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), resolved.value.lockText, 'utf8');
+    const targetProfile = command.targetProfile;
+    let installArgs: readonly string[];
+    let expectedLockText: string | null;
+    if (targetProfile !== undefined) {
+      // Install exactly the resolved TARGET profile: its declaration and its
+      // frozen lock, both bound to the plan.
+      writeFileSync(join(profileDirectory, 'package.json'), targetProfile.declarationText, 'utf8');
+      writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), targetProfile.lockText, 'utf8');
+      if (targetProfile.workspaceText !== null) {
+        writeFileSync(join(profileDirectory, 'pnpm-workspace.yaml'), targetProfile.workspaceText, 'utf8');
+      }
+      installArgs = ['install', '--frozen-lockfile', '--ignore-scripts'];
+      expectedLockText = targetProfile.lockText;
+    } else {
+      // The profile dependency is pinned to the EXACT previewed source (git URL +
+      // commit SHA), never a bare version/range.
+      const gitSpec = `github:${source.owner}/${source.name}#${resolution.sourceLock.commitSha}`;
+      const profilePackage = {
+        name: `hdsl-profile-${command.generationId}`,
+        private: true,
+        dependencies: { [resolution.sourceLock.packageName]: gitSpec },
+        dsh: { profile: { bundles: [resolution.sourceLock.packageName] } },
+      };
+      writeFileSync(join(profileDirectory, 'package.json'), `${JSON.stringify(profilePackage, null, 2)}\n`, 'utf8');
+      if (resolved.value.lockText !== null) {
+        writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), resolved.value.lockText, 'utf8');
+      }
+      installArgs = [...DEFAULT_INSTALL_ARGS];
+      expectedLockText = resolved.value.lockText;
     }
     const run = await options.executor.run(
       {
         cwd: profileDirectory,
         homeDirectory: command.homeDirectory,
         nodeExecutable: command.nodeExecutable,
-        args: [...DEFAULT_INSTALL_ARGS],
+        args: installArgs,
         ...(options.registry === undefined ? {} : { registry: options.registry }),
       },
       signal,
@@ -155,11 +191,11 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     }
     // The install must not silently rewrite the pinned lock: if it did, the
     // composition is no longer what the plan bound.
-    if (resolved.value.lockText !== null) {
+    if (expectedLockText !== null) {
       const lockPath = join(profileDirectory, 'pnpm-lock.yaml');
       try {
         const after = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
-        const expected = createHash('sha256').update(resolved.value.lockText, 'utf8').digest('hex');
+        const expected = createHash('sha256').update(expectedLockText, 'utf8').digest('hex');
         if (after !== expected) {
           return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the managed install rewrote the pinned lockfile');
         }

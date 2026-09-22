@@ -56,6 +56,10 @@ const resolution = (): PluginPreviewResolution => ({
   riskItems: ['no install-time scripts detected in the parsed closure'],
   executor: { id: 'pnpm', version: '11.7.0', sha256: 'e'.repeat(64), entrySha256: '1'.repeat(64), treeSha256: '2'.repeat(64) },
   planInputsDigest: 'f'.repeat(64),
+  targetLockText: null,
+  targetDeclarationText: null,
+  targetWorkspaceText: null,
+  targetDeclarationSha256: null,
 });
 
 const port = (overrides: Partial<PluginPreviewPort> = {}): PluginPreviewPort => ({

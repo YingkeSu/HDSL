@@ -433,6 +433,12 @@ export const pluginSourceLockSchema = sObject({
   manifestSha256: sha256Schema,
   /** `null` when no fully-pinned lockfile was available (risk is then unknown). */
   closureLockSha256: sNullable(sha256Schema),
+  /**
+   * Optional: digest of the TARGET profile declaration/config the plan resolved
+   * (current immutable declaration + workspace config + the exact source). It is
+   * not part of the composition digest; it binds the plan to what was resolved.
+   */
+  targetDeclarationSha256: sOptional(sha256Schema),
   isBuiltin: sBoolean,
   buildAuthorization: sNullable(buildAuthorizationSchema),
   executor: sNullable(executorIdentitySchema),

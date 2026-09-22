@@ -37,6 +37,14 @@ export interface PluginPreviewResolution {
   readonly riskItems: readonly string[];
   readonly executor: ExecutorIdentity | null;
   readonly planInputsDigest: string;
+  /** Target profile lock resolved in isolation; `null` for a source-only preview. */
+  readonly targetLockText: string | null;
+  /** Target profile declaration resolved in isolation; `null` for a source-only preview. */
+  readonly targetDeclarationText: string | null;
+  /** Workspace resolution config used for the target; `null` when absent. */
+  readonly targetWorkspaceText: string | null;
+  /** Target declaration digest; `null` for a source-only preview. */
+  readonly targetDeclarationSha256: string | null;
 }
 
 /** A source manifest resolved at an exact, immutable commit. */
@@ -142,5 +150,9 @@ export const buildPreviewResolution = (input: {
     riskItems,
     executor,
     planInputsDigest,
+    targetLockText: null,
+    targetDeclarationText: null,
+    targetWorkspaceText: null,
+    targetDeclarationSha256: null,
   });
 };

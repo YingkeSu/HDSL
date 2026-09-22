@@ -47,6 +47,7 @@ import {
   createPluginApplyPort,
   createManagedPnpmExecutor,
   createGenerationRuntimeVerifier,
+  createResolvingPreviewPort,
   computeCompositionDigest,
   PNPM_EXECUTOR_SPEC,
   createLaunchCredentialPort,
@@ -341,9 +342,27 @@ export const createDesktopComposition = async (
   });
   // Environment-scoped change preview. The default adapter is the same GitHub
   // source; tests inject a controlled preview port instead.
-  const previewPort =
+  const executorIdentity = {
+    id: 'pnpm' as const,
+    version: PNPM_EXECUTOR_SPEC.version,
+    sha256: PNPM_EXECUTOR_SPEC.sha256,
+    entrySha256: PNPM_EXECUTOR_SPEC.entrySha256,
+    treeSha256: PNPM_EXECUTOR_SPEC.treeSha256,
+  };
+  const managedPnpmExecutor = createManagedPnpmExecutor({
+    spec: PNPM_EXECUTOR_SPEC,
+    cacheDirectory: join(service.layout.root, 'pnpm-cache'),
+    fetch: globalThis.fetch,
+  });
+  const previewPort: PluginPreviewPort | undefined =
     options.pluginPreview ??
-    (options.pluginSource === undefined ? (defaultGitHubSource as unknown as PluginPreviewPort) : undefined);
+    (options.pluginSource === undefined
+      ? createResolvingPreviewPort({
+          gitProvider: defaultGitHubSource,
+          executor: managedPnpmExecutor,
+          executorIdentity,
+        })
+      : undefined);
   const changePreview =
     previewPort === undefined
       ? undefined
@@ -361,11 +380,7 @@ export const createDesktopComposition = async (
   // runtime is verified with the managed-install tree digest before any commit.
   const applyPort = createPluginApplyPort({
     gitProvider: defaultGitHubSource,
-    executor: createManagedPnpmExecutor({
-      spec: PNPM_EXECUTOR_SPEC,
-      cacheDirectory: join(service.layout.root, 'pnpm-cache'),
-      fetch: globalThis.fetch,
-    }),
+    executor: managedPnpmExecutor,
   });
   const changeApply = new ChangeApplyService({
     layout: service.layout,

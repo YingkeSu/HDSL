@@ -20,6 +20,7 @@
  */
 import {
   isPlainRecord,
+  contractError,
   contractErrorForCode,
   portFail,
   portOk,
@@ -40,6 +41,7 @@ import { OperationStore, isTerminalStatus, toOperationSnapshot } from './operati
 import { managedProfileName, publishGenerationProfile } from './generation-profile.js';
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
 import { reuseGenerationRuntime } from './generation-runtime-reuse.js';
+import { readTargetProfileCache } from './target-profile-cache.js';
 import { ensureDirectory, readDirectoryNames, removePath, tryReadJsonFile, writeJsonAtomic } from './fsx.js';
 import { newGenerationId, newOperationId, newTransactionId } from './ids.js';
 
@@ -55,6 +57,15 @@ export interface PluginApplyStageCommand {
   readonly currentLock: CompositionLock;
   readonly plan: ChangePlan;
   readonly buildAuthorization: BuildAuthorization | null;
+  /**
+   * Verified target-profile content from the plan cache. When present the
+   * adapter installs with this frozen lock; when absent it uses the legacy path.
+   */
+  readonly targetProfile?: {
+    readonly lockText: string;
+    readonly declarationText: string;
+    readonly workspaceText: string | null;
+  };
 }
 
 /** Result of staging a new generation composition (before the pointer switch). */
@@ -317,6 +328,24 @@ export class ChangeApplyService {
         this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the active generation has no composition lock');
         return;
       }
+      // A plan that binds a target profile must have a verified cache entry; a
+      // missing/tampered/mismatched cache fails closed before any execution.
+      let targetProfile: { lockText: string; declarationText: string; workspaceText: string | null } | undefined;
+      if (plan.sourceLock?.targetDeclarationSha256 !== undefined) {
+        const cached = readTargetProfileCache(this.#layout, plan.planId, {
+          lockSha256: plan.sourceLock.closureLockSha256,
+          declarationSha256: plan.sourceLock.targetDeclarationSha256,
+        });
+        if (!cached.ok) {
+          this.#rollbackJournal(ids, cached.code, cached.message);
+          return;
+        }
+        targetProfile = {
+          lockText: cached.value.lockText,
+          declarationText: cached.value.declarationText,
+          workspaceText: cached.value.workspaceText,
+        };
+      }
       const staged = await this.#port!.stage(
         {
           environmentId: command.environmentId,
@@ -328,6 +357,7 @@ export class ChangeApplyService {
           currentLock,
           plan,
           buildAuthorization: command.buildAuthorization,
+          ...(targetProfile === undefined ? {} : { targetProfile }),
         },
         controller.signal,
       );
@@ -481,7 +511,11 @@ export class ChangeApplyService {
     if (record !== undefined && !isTerminalStatus(record.status)) {
       this.#operations.update(
         record,
-        { status: 'failed', phase: 'failed', error: contractErrorForCode(code, {}) },
+        {
+          status: 'failed',
+          phase: 'failed',
+          error: contractError(code, message, { operationId: journal.operationId }),
+        },
         this.#now().toISOString(),
       );
     }
