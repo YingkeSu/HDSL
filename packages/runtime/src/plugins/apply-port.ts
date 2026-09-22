@@ -10,7 +10,7 @@
  * It never loads plugin code in-process and never receives a credential.
  */
 import { createHash } from 'node:crypto';
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   portFail,
@@ -23,6 +23,7 @@ import {
   type PortOutcome,
 } from '@hdsl/contracts';
 import { buildPreviewResolution, type GitProvider } from './preview-resolution.js';
+import { composeAuthorizedWorkspace, decideBuildAuthorization, enumerateInstallScriptsFromInstalledTree } from './build-authorization.js';
 import { DEFAULT_INSTALL_ARGS, type PluginExecutorPort } from './executor.js';
 
 export interface RuntimeApplyStageCommand {
@@ -87,15 +88,10 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     }
     const resolution = built.value;
 
-    // 3) S4 is NOT open in this slice. A source that needs install-time scripts
-    //    is refused, and a supplied authorization must never be treated as an
-    //    unlock: any non-null buildAuthorization is also refused.
-    if (resolution.requiresBuildAuthorization || command.buildAuthorization !== null) {
-      return portFail(
-        'BUILD_NOT_AUTHORIZED',
-        'install-time build scripts are refused by default; build authorization (S4) is not available in this slice',
-      );
-    }
+    // 3) Build authorization (S4) is decided AFTER the plan/executor binding
+    //    checks below; it needs the re-resolved script set and the plan-bound lock
+    //    and MUST complete before any write or executor run. Until then the
+    //    default-deny shape is preserved.
 
     // 4) Bind to the PREVIEWED exact commit and closure. A branch that moved, a
     //    different closure lock, or an unrecorded/unpinned closure is drift, not
@@ -139,26 +135,57 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
       return portFail('PLAN_STALE', 'the plan inputs digest does not match the re-resolved source');
     }
 
-    // 4) Materialise the profile declaration source (pinned to the exact commit)
-    //    and install it with the default-deny arguments.
+    // S4 authorization decision: exact commit + exact enumerated script set +
+    // plan-bound lock identity, evaluated BEFORE any write or execution.
     const profileDirectory = join(command.generationDirectory, 'profile');
     mkdirSync(profileDirectory, { recursive: true });
     const targetProfile = command.targetProfile;
-    let installArgs: readonly string[];
+    const runInstall = async (args: readonly string[]) =>
+      options.executor.run(
+        {
+          cwd: profileDirectory,
+          homeDirectory: command.homeDirectory,
+          nodeExecutable: command.nodeExecutable,
+          args,
+          ...(options.registry === undefined ? {} : { registry: options.registry }),
+        },
+        signal,
+      );
+
+    // S4 authorization decision (before any write or run). `enumerate` means an
+    // explicit authorization is present and the dependency closure must first be
+    // materialised with DEFAULT DENY (no scripts) and read read-only.
+    let authorization = decideBuildAuthorization({
+      authorization: command.buildAuthorization,
+      commitSha: resolution.sourceLock.commitSha,
+      scriptAssessment: resolution.scriptAssessment,
+      scripts: resolution.scripts,
+      closureEnumerated: resolution.dependencyClosureEnumerated,
+      lockText: command.targetProfile?.lockText ?? null,
+    });
+    if (!authorization.ok) {
+      return portFail(authorization.code, authorization.message);
+    }
+    let sourceLock = resolution.sourceLock;
     let expectedLockText: string | null;
+    let workspacePath: string | null = null;
+    let ranDenyInstall = false;
+
+    // 4) Materialise the profile declaration source (pinned to the exact commit).
     if (targetProfile !== undefined) {
-      // Install exactly the resolved TARGET profile: its declaration and its
-      // frozen lock, both bound to the plan.
       writeFileSync(join(profileDirectory, 'package.json'), targetProfile.declarationText, 'utf8');
       writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), targetProfile.lockText, 'utf8');
+      workspacePath = join(profileDirectory, 'pnpm-workspace.yaml');
       if (targetProfile.workspaceText !== null) {
-        writeFileSync(join(profileDirectory, 'pnpm-workspace.yaml'), targetProfile.workspaceText, 'utf8');
+        writeFileSync(workspacePath, targetProfile.workspaceText, 'utf8');
+      } else {
+        rmSync(workspacePath, { force: true });
       }
-      installArgs = ['install', '--frozen-lockfile', '--ignore-scripts'];
       expectedLockText = targetProfile.lockText;
     } else {
-      // The profile dependency is pinned to the EXACT previewed source (git URL +
-      // commit SHA), never a bare version/range.
+      if (command.buildAuthorization !== null) {
+        return portFail('BUILD_NOT_AUTHORIZED', 'build authorization requires a plan-bound target profile lock');
+      }
       const gitSpec = `github:${source.owner}/${source.name}#${resolution.sourceLock.commitSha}`;
       const profilePackage = {
         name: `hdsl-profile-${command.generationId}`,
@@ -170,24 +197,86 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
       if (resolved.value.lockText !== null) {
         writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), resolved.value.lockText, 'utf8');
       }
-      installArgs = [...DEFAULT_INSTALL_ARGS];
       expectedLockText = resolved.value.lockText;
     }
-    const run = await options.executor.run(
-      {
-        cwd: profileDirectory,
-        homeDirectory: command.homeDirectory,
-        nodeExecutable: command.nodeExecutable,
-        args: installArgs,
-        ...(options.registry === undefined ? {} : { registry: options.registry }),
-      },
-      signal,
-    );
-    if (!run.ok) {
-      return run;
+    const isAuthorizedTarget = targetProfile !== undefined;
+
+    // 5) Enumerate the closure read-only with a default-deny materialisation,
+    //    then re-decide against the FULL enumerated script set.
+    if (authorization.mode === 'enumerate') {
+      if (!isAuthorizedTarget) {
+        return portFail('BUILD_NOT_AUTHORIZED', 'build authorization requires a plan-bound target profile lock');
+      }
+      const pre = await runInstall(['install', '--frozen-lockfile', '--ignore-scripts']);
+      if (!pre.ok) {
+        return pre;
+      }
+      if (pre.value.exitCode !== 0) {
+        return portFail('INTERNAL_ERROR', 'the plan-bound profile could not be materialised for script enumeration');
+      }
+      ranDenyInstall = true;
+      const dependencyScripts = enumerateInstallScriptsFromInstalledTree({
+        nodeModulesDirectory: join(profileDirectory, 'node_modules'),
+        excludePackageName: resolution.sourceLock.packageName,
+        readPackageJsonText: (path) => {
+          try {
+            return readFileSync(path, 'utf8');
+          } catch {
+            return undefined;
+          }
+        },
+      });
+      const effectiveScripts = [...resolution.scripts, ...dependencyScripts];
+      const final = decideBuildAuthorization({
+        authorization: command.buildAuthorization,
+        commitSha: resolution.sourceLock.commitSha,
+        scriptAssessment: 'detected',
+        scripts: effectiveScripts,
+        closureEnumerated: true,
+        lockText: targetProfile.lockText,
+      });
+      if (!final.ok) {
+        return portFail(final.code, final.message);
+      }
+      authorization = final;
     }
-    if (run.value.exitCode !== 0) {
-      return portFail('INTERNAL_ERROR', 'the managed pnpm install failed for the new generation');
+
+    // 6) Install: default deny, or the exact single-install authorization (its
+    //    `allowBuilds` map is written for this install and cleared immediately
+    //    after, so it can never become a resident allowlist).
+    if (authorization.mode === 'allow' && isAuthorizedTarget && targetProfile !== undefined) {
+      const composed = composeAuthorizedWorkspace(targetProfile.workspaceText, authorization.depPaths);
+      if (!composed.ok) {
+        return portFail('AUTHORIZATION_MISMATCH', composed.message);
+      }
+      writeFileSync(workspacePath as string, composed.text, 'utf8');
+      const restoreWorkspace = (): void => {
+        if (targetProfile.workspaceText === null) {
+          rmSync(workspacePath as string, { force: true });
+        } else {
+          writeFileSync(workspacePath as string, targetProfile.workspaceText, 'utf8');
+        }
+      };
+      const authorized = await runInstall(['install', '--frozen-lockfile', '--ignore-scripts=false']);
+      restoreWorkspace();
+      if (!authorized.ok) {
+        return authorized;
+      }
+      if (authorized.value.exitCode !== 0) {
+        return portFail('INTERNAL_ERROR', 'the authorized managed pnpm install failed for the new generation');
+      }
+      sourceLock = { ...resolution.sourceLock, buildAuthorization: command.buildAuthorization };
+    } else if (!ranDenyInstall) {
+      const denyArgs = isAuthorizedTarget
+        ? (['install', '--frozen-lockfile', '--ignore-scripts'] as const)
+        : DEFAULT_INSTALL_ARGS;
+      const denied = await runInstall([...denyArgs]);
+      if (!denied.ok) {
+        return denied;
+      }
+      if (denied.value.exitCode !== 0) {
+        return portFail('INTERNAL_ERROR', 'the managed pnpm install failed for the new generation');
+      }
     }
     // The install must not silently rewrite the pinned lock: if it did, the
     // composition is no longer what the plan bound.
@@ -231,7 +320,7 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     // live files (ADR 0005 D13/D21). It never changes the composition digest.
     const pluginSources = {
       ...(command.currentLock.pluginSources ?? {}),
-      [resolution.sourceLock.packageName]: resolution.sourceLock,
+      [resolution.sourceLock.packageName]: sourceLock,
     };
     const compositionLock: CompositionLock = {
       ...command.currentLock,
@@ -240,7 +329,7 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     };
     return portOk({
       compositionLock,
-      sourceLock: resolution.sourceLock,
+      sourceLock,
       stagedProfileDirectory: profileDirectory,
     });
   },
