@@ -23,6 +23,7 @@ import { portFail, portOk, type PortOutcome } from '@hdsl/contracts';
 import { resolveInBoxBundles, type InBoxBundle } from './removal.js';
 import { resolvePluginRemoval, type PluginReferenceSource, type PluginRemovalResolution } from './removal.js';
 import { scanPatchReferences } from './patch-references.js';
+import { resolveLockClosure, targetRetentionInLock } from './lock-closure.js';
 import {
   lookupServiceVerification,
   type ServiceVerificationLookup,
@@ -80,6 +81,10 @@ export interface RemovalResolveInput {
 }
 
 export interface RemovalResolution extends PluginRemovalResolution {
+  /** Root-importer direct dependency names (the DIRECT set, not full retention). */
+  readonly directDependencies: readonly string[];
+  /** True when the removed plugin is still reachable in the pruned lock closure. */
+  readonly retainedTargetInClosure: boolean;
   readonly targetLockText: string;
   readonly targetLockSha256: string;
   readonly targetDeclarationText: string;
@@ -426,16 +431,36 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
       if (retainedFromLock === undefined) {
         return portFail('INTERNAL_ERROR', 'the recomputed pruned lock importer could not be read');
       }
+      // Full retention must come from the REACHABLE CLOSURE of the pruned lock,
+      // not from the root importer's direct list. The target's exact resolved
+      // identity is taken from the PRE-removal lock (git => codeload tarball URL).
+      const previousClosure = resolveLockClosure(currentLockText ?? '');
+      let targetIdentity: string | null = null;
+      if (previousClosure.status === 'ok') {
+        const prefix = `${input.pluginId}@`;
+        targetIdentity = previousClosure.reachable.find((identity) => identity.startsWith(prefix)) ?? null;
+      }
+      const retentionCheck =
+        targetIdentity === null ? { status: 'unsupported' as const, reason: 'the target identity is not present in the current lock closure' } : targetRetentionInLock(targetLockText, targetIdentity);
+      if (retentionCheck.status === 'unsupported') {
+        // Never present a removal as complete when the lock cannot be interpreted.
+        return portFail('INTERNAL_ERROR', `the pruned lock closure could not be interpreted: ${retentionCheck.reason}`);
+      }
       const constantRetention = resolution.value.retention.filter(
         (entry) => !entry.startsWith('dependency entry ') && !entry.startsWith('enabled bundle '),
       );
       return portOk({
         ...resolution.value,
-        // Retention is authoritative from the RECOMPUTED lock, not inferred from
-        // deleting the direct dependency.
+        directDependencies: retainedFromLock,
+        retainedTargetInClosure: retentionCheck.retained,
+        // Retention is authoritative from the RECOMPUTED lock closure, not inferred
+        // from deleting the direct dependency.
         retention: [
           ...constantRetention,
-          ...retainedFromLock.map((id) => `lock dependency ${id}`),
+          ...retainedFromLock.map((id) => `direct dependency ${id}`),
+          ...(retentionCheck.retained
+            ? [`the plugin remains reachable in the pruned lock closure (legitimately retained; it is no longer an enabled bundle)`]
+            : []),
         ],
         targetLockText,
         targetLockSha256: sha256Of(targetLockText),

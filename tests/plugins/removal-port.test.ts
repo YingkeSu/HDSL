@@ -32,11 +32,45 @@ const RUNTIME = {
 
 const writeJson = (path: string, value: unknown): void => writeFileSync(path, JSON.stringify(value));
 
+/** Current (pre-removal) lock containing the target as a git dependency. */
+const currentLockFor = (pluginId: string): string =>
+  [
+    "lockfileVersion: '9.0'",
+    'importers:',
+    '  .:',
+    '    dependencies:',
+    `      ${pluginId}:`,
+    '        specifier: 1.0.0',
+    '        version: 1.0.0',
+    'packages:',
+    `  ${pluginId}@1.0.0:`,
+    '    resolution: {integrity: sha512-x}',
+    'snapshots:',
+    `  ${pluginId}@1.0.0: {}`,
+  ].join('\n');
+
+/** Pruned lock: target gone, a shared dependency remains (closure-verified). */
+const prunedLock = (): string =>
+  [
+    "lockfileVersion: '9.0'",
+    'importers:',
+    '  .:',
+    '    dependencies:',
+    '      shared-dep:',
+    '        specifier: 1.0.0',
+    '        version: 1.0.0',
+    'packages:',
+    '  shared-dep@1.0.0:',
+    '    resolution: {integrity: sha512-y}',
+    'snapshots:',
+    '  shared-dep@1.0.0: {}',
+  ].join('\n');
+
 const executor = (calls: { nodeExecutable: string; args: readonly string[] }[]): PluginExecutorPort => ({
   identity: async () => ({ ok: true, value: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) } }),
   run: async (request) => {
     calls.push({ nodeExecutable: request.nodeExecutable, args: request.args });
-    writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\nimporters:\n  .: {}\n');
+    writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), prunedLock());
     return { ok: true, value: { executor: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) }, exitCode: 0, stdout: '', stderr: '', executedInstallScripts: [] } };
   },
 });
@@ -59,7 +93,7 @@ const build = (options: { publishedDrift?: boolean; userPatch?: string | null; p
     dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', pluginId] } },
   });
   writeFileSync(join(declaration, 'package.json'), declarationText);
-  writeFileSync(join(declaration, 'pnpm-lock.yaml'), 'lockfileVersion: 9.0\n');
+  writeFileSync(join(declaration, 'pnpm-lock.yaml'), currentLockFor(pluginId));
   writeFileSync(join(published, 'package.json'), options.publishedDrift === true ? `${declarationText} ` : declarationText);
   // In-box bundle patch: inserts an unrelated plugin (must not block demo-plugin) and injects a service.
   writeFileSync(join(published, 'node_modules', '@deepseek-ai/dsh-web-app', 'cordis.patch.yml'), '- insert:\n    - id: other\n      name: other-plugin\n- id: system-prompt\n  config:\n    inject: [webStartup]\n');
@@ -147,6 +181,60 @@ describe('createPluginRemovalPort', () => {
     expect(JSON.parse(outcome.value.targetDeclarationText).dependencies['hdsl-plugin-e2e-fixture']).toBeUndefined();
   });
 
+  it('mandatory regression: a retained dependency that depends on the removed plugin keeps it in the closure', async () => {
+    const fixture = build({ pluginId: 'hdsl-plugin-e2e-fixture' });
+    const retainedLock = [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      b:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  b@1.0.0:',
+      '    resolution: {integrity: sha512-b}',
+      '  hdsl-plugin-e2e-fixture@1.0.0:',
+      '    resolution: {integrity: sha512-a}',
+      'snapshots:',
+      '  b@1.0.0:',
+      '    dependencies:',
+      '      hdsl-plugin-e2e-fixture: 1.0.0',
+      '  hdsl-plugin-e2e-fixture@1.0.0: {}',
+    ].join('\n');
+    const port = createPluginRemovalPort({
+      executor: {
+        identity: async () => ({ ok: true, value: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) } }),
+        run: async (request) => {
+          writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), retainedLock);
+          return { ok: true, value: { executor: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) }, exitCode: 0, stdout: '', stderr: '', executedInstallScripts: [] } };
+        },
+      },
+    });
+    const outcome = await port.resolveRemoval(
+      {
+        pluginId: 'hdsl-plugin-e2e-fixture',
+        expectedCommitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838',
+        expectedManifestSha256: null,
+        declarationDirectory: fixture.declaration,
+        publishedProfileDirectory: fixture.published,
+        homeDirectory: fixture.home,
+        dshDirectory: fixture.dsh,
+        nodeExecutable: join(fixture.root, 'node'),
+        stagingDirectory: fixture.staging,
+        installed: [{ id: 'hdsl-plugin-e2e-fixture', version: '1.0.0', sha256: 'a'.repeat(64) }, { id: 'b', version: '1.0.0', sha256: 'b'.repeat(64) }],
+        enabledBundles: ['hdsl-plugin-e2e-fixture'],
+        runtime: RUNTIME,
+      },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.retainedTargetInClosure).toBe(true);
+    expect(outcome.value.retention.some((entry) => entry.includes('remains reachable in the pruned lock closure'))).toBe(true);
+    expect(outcome.value.removals.some((entry) => entry.includes('enabled bundle reference'))).toBe(true);
+  });
+
   it('never trusts the live installed manifest: a mismatch with the reviewed digest stays unknown', async () => {
     const fixture = build({ pluginId: 'hdsl-plugin-e2e-fixture' });
     // The catalog reviews the manifest at the exact commit; the live installed
@@ -181,16 +269,7 @@ describe('createPluginRemovalPort', () => {
       executor: {
         identity: async () => ({ ok: true, value: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) } }),
         run: async (request) => {
-          writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), [
-            'lockfileVersion: 9.0',
-            'importers:',
-            '  .:',
-            '    dependencies:',
-            '      shared-dep:',
-            '        specifier: 1.0.0',
-            '        version: 1.0.0',
-            '',
-          ].join('\n'));
+          writeFileSync(join(request.cwd, 'pnpm-lock.yaml'), prunedLock());
           return { ok: true, value: { executor: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) }, exitCode: 0, stdout: '', stderr: '', executedInstallScripts: [] } };
         },
       },
@@ -216,7 +295,10 @@ describe('createPluginRemovalPort', () => {
     }
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
-    expect(preview.value.retention).toContain('lock dependency shared-dep');
+    expect(preview.value.retention).toContain('direct dependency shared-dep');
+    expect(preview.value.directDependencies).toEqual(['shared-dep']);
+    // The pruned lock no longer reaches the target: truly removed.
+    expect(preview.value.retainedTargetInClosure).toBe(false);
 
     // Apply with the SAME plan binding succeeds and reports the lock-derived set.
     const applied = await port.applyRemoval(
