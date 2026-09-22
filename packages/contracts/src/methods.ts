@@ -15,7 +15,12 @@ import {
   revisionSchema,
   subscriptionIdSchema,
 } from './ids.js';
-import { pluginSourceSelectorSchema, PLUGIN_QUERY_MAX_LENGTH, PLUGIN_QUERY_MIN_LENGTH } from './dto.js';
+import {
+  changePlanActionSchema,
+  pluginSourceSelectorSchema,
+  PLUGIN_QUERY_MAX_LENGTH,
+  PLUGIN_QUERY_MIN_LENGTH,
+} from './dto.js';
 import { sLiteral, sObject, sOptional, sString, type Infer, type Schema } from './schema.js';
 
 export const CONTRACT_METHODS = [
@@ -33,6 +38,8 @@ export const CONTRACT_METHODS = [
   // 1.1 plugin discovery (ADR 0005 D4).
   'plugins.search',
   'plugins.inspect',
+  // 1.1 plugin transactions (ADR 0005 D4).
+  'changes.preview',
   // 1.1 read-only generation read (ADR 0005 D4).
   'generations.list',
 ] as const;
@@ -93,6 +100,12 @@ export const methodInputSchemas = {
     requestId: requestIdSchema,
     source: pluginSourceSelectorSchema,
   }),
+  'changes.preview': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    action: changePlanActionSchema,
+  }),
   'generations.list': sObject({
     environmentId: environmentIdSchema,
   }),
@@ -138,6 +151,7 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'diagnostics.export': define('diagnostics.export', { readOnly: false, idempotent: true }),
   'plugins.search': define('plugins.search', { readOnly: false, idempotent: true }),
   'plugins.inspect': define('plugins.inspect', { readOnly: false, idempotent: true }),
+  'changes.preview': define('changes.preview', { readOnly: false, idempotent: true }),
   'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
 };
 

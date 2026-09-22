@@ -19,6 +19,7 @@
  * (DNS/offline/TLS/timeout) → `NETWORK_UNAVAILABLE`, any other established
  * HTTP/parse failure → `DOWNLOAD_FAILED`.
  */
+import { createHash } from 'node:crypto';
 import {
   GITHUB_SEARCH_RESULT_LIMIT,
   isPlainRecord,
@@ -34,7 +35,30 @@ import {
   type PluginSourceSelector,
   type PortOutcome,
   type Schema,
+  type BuildScriptEntry,
+  type ExecutorIdentity,
+  type PluginSourceLock,
+  type ScriptAssessment,
 } from '@hdsl/contracts';
+
+/**
+ * Structural mirror of core's `PluginPreviewResolution` (runtime and core do not
+ * depend on each other; the composition root wires them structurally).
+ */
+export interface PluginPreviewResolution {
+  readonly sourceLock: PluginSourceLock;
+  readonly scripts: readonly BuildScriptEntry[];
+  readonly scriptAssessment: ScriptAssessment;
+  readonly requiresBuildAuthorization: boolean;
+  readonly riskItems: readonly string[];
+  readonly executor: ExecutorIdentity | null;
+  readonly planInputsDigest: string;
+}
+
+const INSTALL_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
+const NO_SCRIPTS_RISK = 'no install-time scripts detected in the parsed manifest (dependency closure not enumerated)';
+const UNKNOWN_RISK = 'the dependency closure was not fully enumerated; install-time scripts may exist';
+const SCRIPT_RISK = 'the package declares install-time scripts; HDSL rejects them by default at apply';
 
 /** Narrow fetch seam; the global `fetch` is structurally compatible. */
 export type PluginFetchLike = (
@@ -53,6 +77,8 @@ export interface GitHubPluginSourceOptions {
   readonly timeoutMs?: number;
   readonly pageSize?: number;
   readonly userAgent?: string;
+  /** Managed executor identity bound into the plan inputs (E1); `null` until frozen. */
+  readonly executor?: ExecutorIdentity | null;
 }
 
 export interface GitHubPluginSource {
@@ -61,6 +87,15 @@ export interface GitHubPluginSource {
     source: PluginSourceSelector,
     signal: AbortSignal,
   ): Promise<PortOutcome<PluginInspection>>;
+  /**
+   * Read-only preview resolution: exact commit SHA -> manifest -> optional
+   * pinned lockfile -> install-time script assessment. It never downloads or
+   * executes plugin code.
+   */
+  previewSource(
+    source: PluginSourceSelector,
+    signal: AbortSignal,
+  ): Promise<PortOutcome<PluginPreviewResolution>>;
   /** Exact URL of the most recent request; test/diagnostic only. */
   lastRequestUrl(): string | null;
 }
@@ -354,6 +389,148 @@ export const createGitHubPluginSource = (
         repository,
         fetchedAt: now().toISOString(),
         fromCache: false,
+      });
+    },
+
+
+    async previewSource(source, signal) {
+      const owner = encodeURIComponent(source.owner);
+      const name = encodeURIComponent(source.name);
+      const commitsUrl =
+        source.ref === undefined
+          ? `${apiBase}/repos/${owner}/${name}/commits?per_page=1`
+          : `${apiBase}/repos/${owner}/${name}/commits/${encodeURIComponent(source.ref)}`;
+      const commitAttempt = await attempt(commitsUrl, signal);
+      if (commitAttempt.kind === 'unreachable') {
+        return portFail('NETWORK_UNAVAILABLE', 'the GitHub commit request could not connect');
+      }
+      if (commitAttempt.kind === 'response') {
+        return failureForStatus(commitAttempt.response);
+      }
+      if (commitAttempt.kind === 'unparseable') {
+        return portFail('DOWNLOAD_FAILED', 'the GitHub commit response was not JSON');
+      }
+      const commitRecord = Array.isArray(commitAttempt.body)
+        ? asRecord(commitAttempt.body[0])
+        : asRecord(commitAttempt.body);
+      const commitSha = asString(commitRecord?.['sha']);
+      if (commitSha === undefined || !/^[0-9a-f]{40}$/.test(commitSha)) {
+        return portFail('SOURCE_NOT_FOUND', 'GitHub did not return an exact 40-character commit SHA');
+      }
+
+      const readFile = async (
+        path: string,
+      ): Promise<{ readonly kind: 'text'; readonly text: string } | { readonly kind: 'missing' } | { readonly kind: 'failure'; readonly outcome: PortOutcome<never> }> => {
+        const url = `${apiBase}/repos/${owner}/${name}/contents/${path}?ref=${commitSha}`;
+        const outcome = await attempt(url, signal);
+        if (outcome.kind === 'unreachable') {
+          return { kind: 'failure', outcome: portFail('NETWORK_UNAVAILABLE', 'the GitHub contents request could not connect') };
+        }
+        if (outcome.kind === 'response') {
+          return outcome.response.status === 404
+            ? { kind: 'missing' }
+            : { kind: 'failure', outcome: failureForStatus(outcome.response) };
+        }
+        if (outcome.kind === 'unparseable') {
+          return { kind: 'failure', outcome: portFail('DOWNLOAD_FAILED', 'the GitHub contents response was not JSON') };
+        }
+        const record = asRecord(outcome.body);
+        const content = asString(record?.['content']);
+        if (content === undefined) {
+          return { kind: 'failure', outcome: portFail('SOURCE_MANIFEST_INVALID', 'the GitHub contents response had no content') };
+        }
+        const text =
+          asString(record?.['encoding']) === 'base64'
+            ? Buffer.from(content.replace(/\n/g, ''), 'base64').toString('utf8')
+            : content;
+        return { kind: 'text', text };
+      };
+
+      const manifestFile = await readFile('package.json');
+      if (manifestFile.kind === 'failure') {
+        return manifestFile.outcome;
+      }
+      if (manifestFile.kind === 'missing') {
+        return portFail('SOURCE_MANIFEST_INVALID', 'the repository has no package.json at the resolved commit');
+      }
+      let manifest: Record<string, unknown>;
+      try {
+        const parsed = JSON.parse(manifestFile.text);
+        manifest = asRecord(parsed) ?? {};
+      } catch {
+        return portFail('SOURCE_MANIFEST_INVALID', 'the repository package.json is not valid JSON');
+      }
+
+      const dsh = asRecord(manifest['dsh']);
+      const bundle = dsh === undefined ? undefined : asRecord(dsh['bundle']);
+      const declaresPatch = bundle !== undefined && bundle['patch'] !== undefined;
+      if (!declaresPatch) {
+        return portFail('NOT_A_PLUGIN', 'the repository does not declare dsh.bundle.patch');
+      }
+
+      const lockFile = await readFile('pnpm-lock.yaml');
+      if (lockFile.kind === 'failure') {
+        return lockFile.outcome;
+      }
+      const lockText = lockFile.kind === 'text' ? lockFile.text : null;
+
+      const scripts: BuildScriptEntry[] = [];
+      const manifestScripts = asRecord(manifest['scripts']) ?? {};
+      for (const name of INSTALL_SCRIPTS) {
+        if (typeof manifestScripts[name] === 'string') {
+          scripts.push({ packageName: asString(manifest['name']) ?? source.name, packageVersion: asString(manifest['version']) ?? '0.0.0', script: name, source: 'root' });
+        }
+      }
+      const dependencies = asRecord(manifest['dependencies']) ?? {};
+      const hasDependencies = Object.keys(dependencies).length > 0;
+
+      const scriptAssessment: ScriptAssessment =
+        scripts.length > 0 ? 'detected' : hasDependencies ? 'unknown' : 'none-detected';
+      const riskItems =
+        scripts.length > 0
+          ? [SCRIPT_RISK]
+          : scriptAssessment === 'unknown'
+            ? [UNKNOWN_RISK]
+            : [NO_SCRIPTS_RISK];
+
+      const manifestSha256 = createHash('sha256').update(manifestFile.text, 'utf8').digest('hex');
+      const closureLockSha256 = lockText === null ? null : createHash('sha256').update(lockText, 'utf8').digest('hex');
+      const executor = options.executor ?? null;
+
+      const sourceLock: PluginSourceLock = {
+        sourceKind: 'github',
+        repository: { owner: source.owner, name: source.name },
+        commitSha,
+        ref: source.ref ?? null,
+        packageName: asString(manifest['name']) ?? source.name,
+        packageVersion: asString(manifest['version']) ?? '0.0.0',
+        manifestSha256,
+        closureLockSha256,
+        isBuiltin: false,
+        buildAuthorization: null,
+        executor,
+      };
+      const planInputsDigest = createHash('sha256')
+        .update(
+          JSON.stringify({
+            commitSha,
+            manifestSha256,
+            closureLockSha256,
+            scripts,
+            executor,
+          }),
+          'utf8',
+        )
+        .digest('hex');
+
+      return portOk({
+        sourceLock,
+        scripts,
+        scriptAssessment,
+        requiresBuildAuthorization: scriptAssessment !== 'none-detected',
+        riskItems,
+        executor,
+        planInputsDigest,
       });
     },
 

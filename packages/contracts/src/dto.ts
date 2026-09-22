@@ -426,7 +426,8 @@ export const pluginSourceLockSchema = sObject({
   packageName: sString({ minLength: 1, maxLength: 214 }),
   packageVersion: sString({ minLength: 1, maxLength: 128 }),
   manifestSha256: sha256Schema,
-  closureLockSha256: sha256Schema,
+  /** `null` when no fully-pinned lockfile was available (risk is then unknown). */
+  closureLockSha256: sNullable(sha256Schema),
   isBuiltin: sBoolean,
   buildAuthorization: sNullable(buildAuthorizationSchema),
   executor: sNullable(executorIdentitySchema),

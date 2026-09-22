@@ -1089,6 +1089,33 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     request: request('generations.list', {}),
     expected: 'INVALID_INPUT',
   },
+  // changes.preview (environment-scoped, cancellable)
+  {
+    id: 'changes-preview-legal',
+    method: 'changes.preview',
+    kind: 'legal',
+    description: 'plans an install from a GitHub source at the environment revision',
+    request: request('changes.preview', {
+      requestId: 'req-preview-legal',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      action: { kind: 'install', source: { owner: 'octo', name: 'dsh-plugin-demo', ref: 'main' } },
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'changes-preview-invalid-action',
+    method: 'changes.preview',
+    kind: 'illegal',
+    description: 'an install action without a source is rejected',
+    request: request('changes.preview', {
+      requestId: 'req-preview-bad',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      action: { kind: 'install' },
+    }),
+    expected: 'INVALID_INPUT',
+  },
 
 ];
 

@@ -16,6 +16,7 @@ import type {
   IdempotencyRecord,
   OperationCommand,
   PluginInspectCommand,
+  PreviewChangeCommand,
   PluginSearchCommand,
   PortOutcome,
   RevisionCommand,
@@ -261,6 +262,52 @@ export class ReferenceContractPort implements ContractPort {
     return portOk({ operationId: operation.id });
   }
 
+  previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    if (command.action.kind !== 'install') {
+      return portFail('INTERNAL_ERROR', 'remove preview is not implemented in this slice');
+    }
+    const plan = {
+      planId: 'plan-0000000000000001',
+      environmentId: command.environmentId,
+      baseRevision: command.expectedRevision,
+      action: command.action,
+      createdAt: '2026-09-20T00:00:00.000Z',
+      expiresAt: '2026-09-20T00:15:00.000Z',
+      sourceLock: {
+        sourceKind: 'github' as const,
+        repository: { owner: command.action.source.owner, name: command.action.source.name },
+        commitSha: 'a'.repeat(40),
+        ref: command.action.source.ref ?? null,
+        packageName: command.action.source.name,
+        packageVersion: '1.0.0',
+        manifestSha256: 'b'.repeat(64),
+        closureLockSha256: null,
+        isBuiltin: false,
+        buildAuthorization: null,
+        executor: null,
+      },
+      scriptAssessment: 'none-detected' as const,
+      scripts: [],
+      requiresBuildAuthorization: false,
+      riskItems: ['no install-time scripts detected in the parsed manifest'],
+      removals: [],
+      retention: [],
+      blockingReferences: [],
+      executor: null,
+      planInputsDigest: 'c'.repeat(64),
+    };
+    const operation = this.#recordPluginOperation('preview', { status: 'succeeded', output: plan });
+    this.effects.push(`previewChange:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef> {
     const config = this.#pluginInspection;
     if (config?.failure !== undefined) {
@@ -305,7 +352,7 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect',
+    kind: 'search' | 'inspect' | 'preview',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;

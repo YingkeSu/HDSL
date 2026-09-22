@@ -19,6 +19,7 @@ import {
   type OperationCommand,
   type OperationRef,
   type OperationSnapshot,
+  type PreviewChangeCommand,
   type PortOutcome,
   type RevisionCommand,
   type RuntimeCombination,
@@ -30,6 +31,7 @@ import type {
 import type { DiagnosticsExporter } from './ports.js';
 import type { EnvironmentService } from './creation-service.js';
 import type { PluginDiscoveryService } from './plugin-discovery-service.js';
+import type { ChangePreviewService } from './plugin-preview.js';
 
 export interface EnvironmentContractPortOptions {
   readonly service: EnvironmentService;
@@ -41,6 +43,8 @@ export interface EnvironmentContractPortOptions {
    * tests keep a narrow surface; `main` always wires it.
    */
   readonly pluginDiscovery?: PluginDiscoveryService;
+  /** Environment-scoped plugin change preview (ADR 0005 D6). */
+  readonly changePreview?: ChangePreviewService;
 }
 
 const NOT_IMPLEMENTED = 'this capability is owned by the managed-process slice (T005/T006)';
@@ -51,6 +55,7 @@ export const createEnvironmentContractPort = (
   const { service } = options;
   const exporter = options.exportDiagnostics;
   const pluginDiscovery = options.pluginDiscovery;
+  const changePreview = options.changePreview;
 
   return {
     host: options.host ?? service.host,
@@ -67,13 +72,19 @@ export const createEnvironmentContractPort = (
       return service.listGenerations(environmentId);
     },
 
+    previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
+      return changePreview === undefined
+        ? portFail('INTERNAL_ERROR', 'the change preview adapter is not wired')
+        : changePreview.previewChange(command);
+    },
+
     findEnvironment(environmentId: string): PortOutcome<EnvironmentSummary> {
       return service.findEnvironment(environmentId);
     },
 
     findOperation(operationId: string): PortOutcome<OperationSnapshot> {
       const plugin = pluginDiscovery?.findOperation(operationId);
-      return plugin ?? service.findOperation(operationId);
+      return plugin ?? changePreview?.findOperation(operationId) ?? service.findOperation(operationId);
     },
 
     findCombination(combinationId: string): PortOutcome<RuntimeCombination> {
@@ -98,7 +109,7 @@ export const createEnvironmentContractPort = (
 
     cancelOperation(command: OperationCommand): PortOutcome<OperationSnapshot> {
       const plugin = pluginDiscovery?.cancelOperation(command.operationId);
-      return plugin ?? service.cancelOperation(command.operationId);
+      return plugin ?? changePreview?.cancelOperation(command.operationId) ?? service.cancelOperation(command.operationId);
     },
 
     searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef> {

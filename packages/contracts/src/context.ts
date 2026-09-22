@@ -15,6 +15,7 @@ import type { ContractError, ErrorCode } from './errors.js';
 import type { ContractMethod } from './methods.js';
 import type { HostPlatform } from './platform.js';
 import type {
+  ChangePlanAction,
   EnvironmentSummary,
   ExportResult,
   GenerationSummary,
@@ -131,6 +132,13 @@ export type IdempotencyRecord =
       readonly outcome: StoredOutcome;
     };
 
+export interface PreviewChangeCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly action: ChangePlanAction;
+}
+
 export interface ContractPort {
   readonly host: HostPlatform;
 
@@ -157,6 +165,12 @@ export interface ContractPort {
   searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef>;
   /** Starts a cancellable, global GitHub read-only repository inspection. */
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable `changes.preview` for one environment. The terminal
+   * `ChangePlan` is read only from `OperationSnapshot.output` (ADR 0005 D5).
+   */
+  previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef>;
 
   /**
    * Read-only generation summaries for an environment (ADR 0005 D4). Returns

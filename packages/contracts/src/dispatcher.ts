@@ -41,6 +41,7 @@ import { formatHostPlatform, isHostPlatformSupported, type HostPlatform } from '
 import { API_VERSION, isWellFormedApiVersion } from './version.js';
 import type { ContractPort, StoredOutcome } from './context.js';
 import {
+  changePlanSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
   exportResultSchema,
@@ -152,6 +153,7 @@ const validatePortValue = <T>(schema: Schema<T>, value: unknown, label: string):
 const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> = {
   search: pluginSearchResultSchema,
   inspect: pluginInspectionSchema,
+  preview: changePlanSchema,
 };
 
 /**
@@ -270,6 +272,20 @@ const execute = (
             executed: true,
           }
         : executedFailure(outcome);
+    }
+    case 'changes.preview': {
+      const typed = input as MethodInputs['changes.preview'];
+      const outcome = runtime.port.previewChange({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        action: typed.action,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      publishIfKnown(runtime, outcome.value.operationId);
+      return { response: contractOk(API_VERSION, outcome.value), executed: true };
     }
     case 'generations.list': {
       const outcome = runtime.port.listGenerations(

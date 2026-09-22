@@ -28,6 +28,8 @@ import {
   EnvironmentService,
   OperationStore,
   PluginDiscoveryService,
+  ChangePreviewService,
+  type PluginPreviewPort,
   type CloseReport,
   type DataRootLockSnapshot,
   type DiagnosticsExporter,
@@ -95,6 +97,8 @@ export interface DesktopCompositionOptions {
   readonly runtime?: ManagedRuntimePort;
   /** Test seam: replaces the real GitHub read adapter (no fixture hits the network). */
   readonly pluginSource?: PluginSourcePort;
+  /** Controlled change-preview adapter; defaults to the GitHub adapter. */
+  readonly pluginPreview?: PluginPreviewPort;
   /** Test seam: replaces the real process manager (still decorated + attached). */
   readonly process?: ManagedProcessPort;
   /** Test seam: a runtime manager used for observability in diagnostics. */
@@ -321,10 +325,27 @@ export const createDesktopComposition = async (
   // Global, read-only plugin discovery. The GitHub adapter is unauthenticated
   // and network-only; it never touches an environment composition (ADR 0005
   // D16/D17). Tests inject a controlled source here.
+  const defaultGitHubSource = createGitHubPluginSource({ fetch: globalThis.fetch });
   const pluginDiscovery = new PluginDiscoveryService({
     layout: service.layout,
-    source: options.pluginSource ?? createGitHubPluginSource({ fetch: globalThis.fetch }),
+    source: options.pluginSource ?? defaultGitHubSource,
   });
+  // Environment-scoped change preview. The default adapter is the same GitHub
+  // source; tests inject a controlled preview port instead.
+  const previewPort =
+    options.pluginPreview ??
+    (options.pluginSource === undefined ? (defaultGitHubSource as unknown as PluginPreviewPort) : undefined);
+  const changePreview =
+    previewPort === undefined
+      ? undefined
+      : new ChangePreviewService({
+          layout: service.layout,
+          port: previewPort,
+          findEnvironment: (environmentId) => {
+            const outcome = service.findEnvironment(environmentId);
+            return outcome.ok ? outcome.value : undefined;
+          },
+        });
 
   const port = createEnvironmentContractPort({
     service,
@@ -332,6 +353,7 @@ export const createDesktopComposition = async (
     ...(options.host === undefined ? {} : { host: options.host }),
     exportDiagnostics: exporter,
     pluginDiscovery,
+    ...(changePreview === undefined ? {} : { changePreview }),
   });
 
   const recovery = await service.recover();
