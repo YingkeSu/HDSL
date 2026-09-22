@@ -14,6 +14,7 @@ export * from './ids.js';
 export * from './layout.js';
 export * from './home-migration.js';
 export * from './generation-profile.js';
+export * from './generation-runtime-reuse.js';
 export * from './change-plan-store.js';
 export * from './plugin-preview.js';
 export * from './plugin-apply.js';
