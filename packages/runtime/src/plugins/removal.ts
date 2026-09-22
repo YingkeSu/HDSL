@@ -124,6 +124,22 @@ export type PluginRemovalOutcome =
 const boundedScan = (text: string): string =>
   text.length > REFERENCE_SCAN_MAX ? text.slice(0, REFERENCE_SCAN_MAX) : text;
 
+/** Field bound shared with the frozen `ChangePlan.blockingReferences.detail`. */
+export const REFERENCE_DETAIL_MAX = 256;
+
+/**
+ * A safe reference-source label: bounded, never a LOCAL ABSOLUTE path (scoped
+ * package names like `@scope/name` and relative labels like
+ * `home/cordis.patch.yml` are safe identifiers, not local paths).
+ */
+export const isSafeDetail = (value: string): boolean =>
+  value.length > 0 &&
+  value.length <= REFERENCE_DETAIL_MAX &&
+  !value.startsWith('/') &&
+  !value.startsWith('~') &&
+  !value.includes('\\') &&
+  !/^[A-Za-z]:[\\/]/.test(value);
+
 /** True when `pluginId` appears as a whole token (not a substring of another id). */
 const referencesPlugin = (text: string, pluginId: string): boolean => {
   const haystack = boundedScan(text);
@@ -188,7 +204,12 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
       continue;
     }
     if (referencesPlugin(source.text, input.pluginId)) {
-      blockingReferences.push({ pluginId: input.pluginId, kind: source.kind, detail: source.detail });
+      // `detail` is operator-facing: bounded and never a local absolute path.
+      blockingReferences.push({
+        pluginId: input.pluginId,
+        kind: source.kind,
+        detail: isSafeDetail(source.detail) ? source.detail : `unresolvable ${source.kind} reference source`,
+      });
     }
   }
 

@@ -75,7 +75,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | `changes.apply` | 长时操作（事务） | `requestId`, `environmentId`, `expectedRevision`, `planId`, `buildAuthorization?` | `OperationRef` | 单环境 |
 | `generations.restore` | 长时操作 | `requestId`, `environmentId`, `expectedRevision`, `targetGenerationId` | `OperationRef` | 单环境 |
 | `generations.list` | 只读即时查询（无 `requestId`） | `environmentId` | `GenerationSummary[]` | 单环境 |
-| `plugins.installed` | 只读即时查询（无 `requestId`） | `environmentId` | `InstalledPluginsView`（活动代的组成插件 + 内置/启用/来源摘要 + revision/generationId 绑定） | 单环境 |
+| `plugins.installed` | 只读即时查询（无 `requestId`） | `environmentId` | `InstalledPluginsView`（活动代的组成插件 + 内置/启用/来源摘要 + revision/generationId 绑定；`plugins` 上界 128，超出为受控失败而非静默截断，见 D20） | 单环境 |
 
 - **返回风格规则**（解释语义一致性）：长时/网络/事务类 → `OperationRef` + 终态 `output`（D5）；只读即时查询 → 直接返回值。据此 `generations.list` 直接返回，而 `plugins.search`（网络 + 可取消）返回 `OperationRef`。
 - 预留名字 `changes.preview` / `changes.apply` / `generations.restore` 从"仅文档预留"提升为白名单成员；`pack.inspect` / `pack.import` / `pack.export` **继续预留**，不暴露（003 定义）。

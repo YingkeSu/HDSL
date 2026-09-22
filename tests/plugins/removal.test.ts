@@ -130,6 +130,24 @@ describe('resolvePluginRemoval', () => {
     expect(outcome.value.blockingReferences.every((reference) => reference.pluginId === 'demo-plugin')).toBe(true);
   });
 
+  it('keeps blocking-reference details bounded and path-free', () => {
+    const outcome = resolvePluginRemoval(input({
+      referenceSources: [
+        { kind: 'userPatch', detail: '/Users/operator/env/home/cordis.patch.yml', text: '- demo-plugin\n' },
+        { kind: 'bundle', detail: '@deepseek-ai/dsh-web-app', text: '- demo-plugin\n' },
+      ],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences[0]?.detail).toBe('unresolvable userPatch reference source');
+    expect(outcome.value.blockingReferences[1]?.detail).toBe('@deepseek-ai/dsh-web-app');
+    for (const reference of outcome.value.blockingReferences) {
+      // Safe identifiers may be scoped/relative; LOCAL ABSOLUTE paths may not.
+      expect(reference.detail.startsWith('/')).toBe(false);
+      expect(reference.detail.length).toBeLessThanOrEqual(256);
+    }
+  });
+
   it('matches the plugin id as a whole token only', () => {
     const outcome = resolvePluginRemoval(input({
       referenceSources: [{ kind: 'bundle', detail: 'other patch', text: '- demo-plugin-extended\n' }],

@@ -48,7 +48,7 @@
 | operations.subscribe | requestId, operationId? | SubscriptionRef | 建立 `operation.updated` 推送；省略 operationId 表示订阅该窗口全部操作，事件按 operationId 分组 |
 | operations.unsubscribe | requestId, subscriptionId | `null` | 退订后不再推送；未知 subscriptionId → NOT_FOUND |
 | diagnostics.export | requestId, environmentId | ExportResult | 由 main 原生选择路径并脱敏；幂等，失败返回 EXPORT_FAILED |
-| plugins.installed | environmentId | InstalledPluginsView | 1.1 追加（ADR 0005 D4/D15，S3，1.0 标签不动）；只读即时、无 requestId、running 不返回 BUSY；结果为活动代持久组成 + 当前受管 DSH 安装解析，字段最小有界（无磁盘路径/manifest 文本/凭据）；环境不存在 → NOT_FOUND，无活动代 → generationId=null 且空列表 |
+| plugins.installed | environmentId | InstalledPluginsView | 1.1 追加（ADR 0005 D4/D15，S3，1.0 标签不动）；只读即时、无 requestId、running 不返回 BUSY；结果为活动代持久组成 + 当前受管 DSH 安装解析，字段最小有界（无磁盘路径/manifest 文本/凭据），`plugins` 上界 128 且**不静默截断**（超出 → 受控 INTERNAL_ERROR，对齐 D20）；环境不存在 → NOT_FOUND，无活动代 → generationId=null 且空列表 |
 
 `OpenWebUIResult` 只返回 `{ loopbackOrigin }`；`loopbackOrigin` 为 `http(s)://127.0.0.1:<port>` 或 `[::1]` 形式，端口必须是 1–65535 的**规范十进制**（拒绝 `:0`、`:65536`、`:99999` 与前导零 `:00080`），**不含 token、cookie 或查询串**。成功即已原生打开，失败一律走错误码，不设 `opened: false` 这种第二套失败表示。main 必须在打开前核对 `LaunchRecord.endpoint` 属于该环境的当前受管进程，且地址为 loopback；否则返回 `WEBUI_UNAVAILABLE`。返回体在出站前按 `openWebUIResultSchema` 校验，额外字段（如 `tokenUrl`/`cookie`）会导致 `INTERNAL_ERROR`。
 
