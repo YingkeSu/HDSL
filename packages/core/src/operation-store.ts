@@ -132,6 +132,27 @@ export class OperationStore {
     if (isTerminalStatus(record.status)) {
       throw new Error(`operation ${record.id} already reached a terminal state`);
     }
+    return this.#writeTransition(record, update, now);
+  }
+
+  /**
+   * Authoritative reconciliation override for an operation whose recorded
+   * terminal status is contradicted by durable commit evidence (for example a
+   * `cancelled` operation whose generation pointer is already committed, left on
+   * disk by an older build). It replaces the terminal record with the committed
+   * fact and increments `sequence`.
+   *
+   * This is deliberately separate from {@link update}: normal callers can never
+   * revive a terminal operation, and only recovery code that holds commit
+   * evidence (journal phase / active-generation pointer) may call it. It never
+   * moves a `succeeded` or `failed` record backwards; the caller only ever
+   * resolves `cancelled` -> `succeeded`.
+   */
+  overrideTerminal(record: OperationRecord, update: OperationUpdate, now: string): OperationRecord {
+    return this.#writeTransition(record, update, now);
+  }
+
+  #writeTransition(record: OperationRecord, update: OperationUpdate, now: string): OperationRecord {
     const progress = update.progress ?? record.progress;
     const error = update.error ?? record.error;
     const output = update.output ?? record.output;
