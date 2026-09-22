@@ -452,4 +452,58 @@ describe('recover() migration gating (ADR 0006 requirement 4)', () => {
     expect(existsSync(join(profiles, managedProfileName(GENERATION_ID)))).toBe(true);
     await managed.close();
   });
+  it('start carries the generation-scoped profile name from the real core seam', async () => {
+    const { dataRoot, layout, paths } = buildEnvironment('stopped');
+    const managed = await openService(dataRoot, 'no-process');
+    await managed.recover();
+    const profileName = managedProfileName(GENERATION_ID);
+    mkdirSync(join(environmentPaths(layout, ENVIRONMENT_ID).profilesDirectory, profileName), {
+      recursive: true,
+    });
+    writeFileSync(
+      paths.generationRecordPath,
+      JSON.stringify({
+        id: GENERATION_ID,
+        environmentId: ENVIRONMENT_ID,
+        compositionDigest: 'a'.repeat(64),
+        createdAt: new Date().toISOString(),
+        profileName,
+        profileDigest: 'b'.repeat(64),
+      }),
+    );
+
+    let captured: { profileName?: string } | undefined;
+    managed.service.attachProcess({
+      start: async (request: { profileName?: string }) => {
+        captured = request;
+        return { ok: true as const, value: { pid: 7, loopbackOrigin: 'http://127.0.0.1:1' } };
+      },
+      stop: async () => ({ ok: true as const, value: { wasRunning: true } }),
+      openWebUI: () => ({ ok: false as const, code: 'INTERNAL_ERROR' as const, message: 'unused' }),
+      recover: async () => ({ entries: [] }),
+      close: async () => ({ ok: true as const, value: undefined }),
+    } as never);
+
+    const listed = managed.service.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined) {
+      return;
+    }
+    const start = managed.service.startEnvironment({
+      requestId: 'req-profile-name',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: environment.revision,
+    });
+    expect(start.ok).toBe(true);
+    if (start.ok) {
+      await managed.waitForOperation(start.value.operationId, { timeoutMs: 10_000 });
+    }
+    expect(captured?.profileName).toBe(profileName);
+    await managed.close();
+  });
 });

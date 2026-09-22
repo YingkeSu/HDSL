@@ -13,6 +13,7 @@ import {
   publishGenerationProfile,
   resolveLayout,
 } from '@hdsl/core';
+import { profileDeclarationDigest } from '@hdsl/runtime';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -71,6 +72,7 @@ describe('generation profile identity and publication', () => {
       layout,
       environmentId: ENVIRONMENT_ID,
       generationId: GENERATION_ID,
+      transactionId: 'txn-test',
       stagedDirectory: staged,
     });
     const target = join(env.profilesDirectory, managedProfileName(GENERATION_ID));
@@ -97,6 +99,7 @@ describe('generation profile identity and publication', () => {
         layout,
         environmentId: ENVIRONMENT_ID,
         generationId: GENERATION_ID,
+        transactionId: 'txn-test',
         stagedDirectory: staged,
       }),
     ).toThrow(/mismatching published profile/);
@@ -130,5 +133,36 @@ describe('generation profile identity and publication', () => {
     writeDeclaration(directory, ['@deepseek-ai/dsh-base']);
     mkdirSync(join(directory, 'pnpm-lock.yaml'), { recursive: true });
     expect(() => profileDeclarationFingerprint(directory)).toThrow(/not a regular file/);
+  });
+});
+
+describe('core/runtime declaration digest parity', () => {
+  it('agrees for full, partial, missing and illegal declaration sources', () => {
+    const { layout } = build();
+
+    const full = join(layout.tmp, 'parity-full');
+    writeDeclaration(full, ['@deepseek-ai/dsh-base']);
+    writeFileSync(join(full, 'pnpm-workspace.yaml'), 'packages:\n');
+    writeFileSync(join(full, 'pnpm-lock.yaml'), 'lockfileVersion: 9\n');
+    expect(profileDeclarationDigest(full)).toBe(profileDeclarationFingerprint(full));
+
+    const partial = join(layout.tmp, 'parity-partial');
+    writeDeclaration(partial, ['@deepseek-ai/dsh-base']);
+    expect(profileDeclarationDigest(partial)).toBe(profileDeclarationFingerprint(partial));
+
+    const bare = join(layout.tmp, 'parity-bare');
+    mkdirSync(bare, { recursive: true });
+    writeFileSync(join(bare, 'cordis.patch.yml'), '# patch\n');
+    expect(profileDeclarationDigest(bare)).toBeUndefined();
+    expect(profileDeclarationFingerprint(bare)).toBeUndefined();
+
+    const link = join(layout.tmp, 'parity-link');
+    writeDeclaration(link, ['@deepseek-ai/dsh-base']);
+    const real = join(layout.tmp, 'parity-real.json');
+    writeFileSync(real, '{"name":"elsewhere"}');
+    rmSync(join(link, 'package.json'));
+    symlinkSync(real, join(link, 'package.json'));
+    expect(() => profileDeclarationDigest(link)).toThrow();
+    expect(() => profileDeclarationFingerprint(link)).toThrow();
   });
 });

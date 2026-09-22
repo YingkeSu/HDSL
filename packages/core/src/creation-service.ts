@@ -40,7 +40,6 @@ import { join } from 'node:path';
 import {
   ensureDirectory,
   isSpaceError,
-  pathExists,
   readJsonFile,
   removePath,
   tryReadJsonFile,
@@ -57,6 +56,7 @@ import {
 import { migrateEnvironmentHome, HomeMigrationStore } from './home-migration.js';
 import {
   managedProfileName,
+  profileDeclarationFingerprint,
   publishGenerationProfile,
   readGenerationProfileName,
 } from './generation-profile.js';import {
@@ -100,6 +100,18 @@ export interface CreationFaults {
   readonly failBeforeCommit?: boolean;
   /** Leaves the journal `artifacts-installed` and the operation running. */
   readonly pauseBeforeCommit?: boolean;
+  /**
+   * Simulates a crash AFTER the active-generation pointer switch but BEFORE the
+   * journal is marked committed. Leaves the pointer authoritative and the
+   * journal uncommitted, so restart reconciliation must roll forward.
+   */
+  readonly pauseAfterPointerSwitch?: boolean;
+  /**
+   * Simulates a crash AFTER the generation profile is published but BEFORE the
+   * active-generation pointer switch. The published profile is an uncommitted
+   * orphan; reconciliation must roll back and leave it attributed.
+   */
+  readonly pauseAfterPublishBeforePointer?: boolean;
 }
 
 export interface EnvironmentServiceOptions {
@@ -1310,6 +1322,7 @@ tryReadInstallManifest(
         cacheDirectory: this.#layout.artifacts,
         scratchDirectory: this.#layout.tmp,
         npmCacheDirectory: this.#layout.npmCache,
+        profileName: managedProfileName(job.generationId),
         onProgress: (update) => {
           const current = this.#operations.read(job.operationId);
           if (current === undefined || isTerminalStatus(current.status)) {
@@ -1393,29 +1406,65 @@ tryReadInstallManifest(
     ensureDirectory(paths.dataDirectory);
     ensureDirectory(paths.homeDirectory);
     // Publish the generation's own managed profile BEFORE the pointer switch.
-    // A crash here leaves the old active generation untouched; the staged
-    // profile directory remains for the next attempt.
+    // A crash here leaves the old active generation untouched.
+    //
+    // The install manifest's optional `profile` field (absent on older records)
+    // is verified against the REAL staged declaration source by both name AND
+    // digest; a declared-only or staged-only state is an inconsistency and fails
+    // closed. A generation with neither has no managed profile and keeps the
+    // legacy `web` default.
     let profileName: string | undefined;
     let profileDigest: string | undefined;
     const stagedProfile = join(paths.generationDirectory, 'profile');
-    if (pathExists(stagedProfile)) {
-      try {
+    try {
+      const stagedDigest = profileDeclarationFingerprint(stagedProfile);
+      const declaredProfile = manifest.profile ?? null;
+      if (declaredProfile !== null) {
+        if (
+          declaredProfile.name !== managedProfileName(job.generationId) ||
+          stagedDigest === undefined ||
+          stagedDigest !== declaredProfile.digest
+        ) {
+          this.#fail(
+            job,
+            'INTERNAL_ERROR',
+            'the install manifest profile does not match the staged declaration source',
+          );
+          return;
+        }
+      } else if (stagedDigest !== undefined) {
+        this.#fail(
+          job,
+          'INTERNAL_ERROR',
+          'a staged profile exists but the install manifest does not declare one',
+        );
+        return;
+      }
+      if (stagedDigest !== undefined) {
         const published = publishGenerationProfile({
           layout: this.#layout,
           environmentId: job.environmentId,
           generationId: job.generationId,
+          transactionId: job.transactionId,
           stagedDirectory: stagedProfile,
         });
         profileName = managedProfileName(job.generationId);
         profileDigest = published.fingerprint;
-      } catch (error) {
-        this.#fail(
-          job,
-          'INTERNAL_ERROR',
-          error instanceof Error ? error.message : 'the generation profile could not be published',
-        );
-        return;
       }
+    } catch (error) {
+      this.#fail(
+        job,
+        'INTERNAL_ERROR',
+        error instanceof Error ? error.message : 'the generation profile could not be published',
+      );
+      return;
+    }
+
+    if (this.#faults.pauseAfterPublishBeforePointer === true) {
+      // Published (possibly orphaned) but the pointer is not switched: a restart
+      // must roll back and keep the published profile attributable, never delete
+      // it here.
+      return;
     }
     // A brand-new environment has no legacy home/data; record both migrations as
     // finalized so the migration never mistakes the commit-created environment
@@ -1456,6 +1505,11 @@ tryReadInstallManifest(
         compositionDigest: job.digest,
         updatedAt: this.#now(),
       });
+    }
+
+    if (this.#faults.pauseAfterPointerSwitch === true) {
+      // Pointer switched, journal still uncommitted: a restart must roll forward.
+      return;
     }
 
     const operation = this.#operations.read(job.operationId);
