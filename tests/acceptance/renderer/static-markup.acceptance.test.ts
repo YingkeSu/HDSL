@@ -32,6 +32,7 @@ const actions: RendererActions = {
   cancelPluginSearch: () => undefined,
     setInstallSource: () => undefined,
     previewPluginChange: () => undefined,
+  setBuildAuthorizationConfirmed: () => undefined,
     applyPluginChange: () => undefined,
     cancelInstallOperation: () => undefined,
     loadGenerations: () => undefined,

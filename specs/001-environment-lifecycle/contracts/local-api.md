@@ -119,6 +119,11 @@
 | diagnostics.export | export-legal | missing-request-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；failed → `EXPORT_FAILED` |
 | plugins.search | plugins-search-legal / plugins-search-truncated / plugins-search-rate-limited / plugins-search-network-failure | empty-query / unknown-field（含 token 字段） → `INVALID_INPUT` |
 | plugins.inspect | plugins-inspect-legal / plugins-inspect-not-found | local-path（`link:`/路径） / unknown-field → `INVALID_INPUT` |
+| plugins.installed | plugins-installed-legal | missing-environment → `INVALID_INPUT` |
+| generations.list | generations-list-legal | missing-environment → `INVALID_INPUT` |
+| changes.preview | changes-preview-legal | invalid-action（install 无 source） → `INVALID_INPUT` |
+| changes.apply | changes-apply-legal / changes-apply-legal-authorized（S4 精确授权） | missing-plan / invalid-authorization（commit 非 40 hex） → `INVALID_INPUT` |
+| generations.restore | generations-restore-legal | missing-target → `INVALID_INPUT` |
 | idempotency-conflict | — | 同 `requestId` 不同 `name` → `IDEMPOTENCY_CONFLICT` |
 | idempotency-guard-retry | 先 `NOT_FOUND` 再修正参数 | 修正后同 `requestId` → `ok`（守卫拒绝不锁死参数） |
 
@@ -132,4 +137,6 @@
 
 ## 后续接口预留
 
-`changes.preview` / `changes.apply` / `generations.restore` 与 `preview`/`apply`/`restore` operation kind 仍属 S2+，当前未实现，不暴露为可调用 API；设计见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md) 与 [002 规格](../../002-plugin-transactions/spec.md)。pack.inspect / pack.import / pack.export 在 003 规格中定义。Registry 与小程序接口须另设版本化规格。
+`pack.inspect` / `pack.import` / `pack.export` 在 003 规格中定义。Registry 与小程序接口须另设版本化规格。
+
+`changes.preview` / `changes.apply` / `generations.restore` / `plugins.installed` / `generations.list` 属 S2–S4，已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。

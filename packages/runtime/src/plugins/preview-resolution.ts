@@ -34,6 +34,13 @@ export interface PluginPreviewResolution {
   readonly scripts: readonly BuildScriptEntry[];
   readonly scriptAssessment: ScriptAssessment;
   readonly requiresBuildAuthorization: boolean;
+  /**
+   * True only when the enumerated install-time script set covers the WHOLE
+   * dependency closure. A source that declares any dependency is NOT fully
+   * enumerated by this pure resolver, so its scripts can never be authorized
+   * (S4). Runtime-internal; not a contract field.
+   */
+  readonly dependencyClosureEnumerated: boolean;
   readonly riskItems: readonly string[];
   readonly executor: ExecutorIdentity | null;
   readonly planInputsDigest: string;
@@ -147,6 +154,7 @@ export const buildPreviewResolution = (input: {
     scripts,
     scriptAssessment,
     requiresBuildAuthorization: scriptAssessment !== 'none-detected',
+    dependencyClosureEnumerated: !hasDependencies,
     riskItems,
     executor,
     planInputsDigest,

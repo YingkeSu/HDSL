@@ -165,3 +165,126 @@ describe('RendererController plugin operation terminal status (QA33 regression)'
     await controller.dispose();
   });
 });
+
+/**
+ * S4 (issue #78): the renderer must never send a build authorization that the
+ * user did not explicitly confirm, and when it does send one it is derived from
+ * the confirmed plan's exact commit and enumerated script set only.
+ */
+const BUILD_COMMIT = 'e'.repeat(40);
+const BUILD_SCRIPTS = [
+  { packageName: 's4-fixture-root', packageVersion: '0.0.1', script: 'preinstall', source: 'root' },
+  { packageName: 's4-fixture-gitdep', packageVersion: '0.0.1', script: 'prepare', source: 'dependency' },
+] as const;
+
+const detectedPlan = {
+  planId: 'plan-0000000000000002',
+  environmentId: 'env-1',
+  baseRevision: 3,
+  action: { kind: 'install', source: { owner: 'octo', name: 'dsh-plugin-demo' } },
+  createdAt: '2026-09-22T00:00:00.000Z',
+  expiresAt: '2026-09-22T00:15:00.000Z',
+  sourceLock: {
+    sourceKind: 'github',
+    repository: { owner: 'octo', name: 'dsh-plugin-demo' },
+    commitSha: BUILD_COMMIT,
+    ref: null,
+    packageName: 'dsh-plugin-demo',
+    packageVersion: '1.0.0',
+    manifestSha256: 'a'.repeat(64),
+    closureLockSha256: 'b'.repeat(64),
+    isBuiltin: false,
+    buildAuthorization: null,
+    executor: null,
+  },
+  scriptAssessment: 'detected',
+  scripts: [...BUILD_SCRIPTS],
+  requiresBuildAuthorization: true,
+  riskItems: [],
+  removals: [],
+  retention: [],
+  blockingReferences: [],
+  executor: null,
+  planInputsDigest: 'c'.repeat(64),
+};
+
+const detectedPlanClient = () =>
+  createStubRendererClient((method, input) => {
+    switch (method) {
+      case 'catalog.list':
+        return stubOk([]);
+      case 'environments.list':
+        return stubOk([PREVIEW_ENVIRONMENT]);
+      case 'changes.preview':
+        return stubOk({ operationId: 'op-preview-auth' });
+      case 'changes.apply':
+        return stubOk({ operationId: 'op-apply-auth' });
+      case 'operations.get': {
+        const id = (input as { operationId?: string }).operationId;
+        return stubOk({
+          id: id ?? 'op-preview-auth',
+          environmentId: 'env-1',
+          kind: 'preview',
+          phase: 'finished',
+          status: 'succeeded',
+          sequence: 2,
+          output: detectedPlan,
+        });
+      }
+      case 'operations.subscribe':
+        return stubOk({ subscriptionId: 'sub-auth' });
+      case 'operations.unsubscribe':
+        return stubOk(null);
+      default:
+        return stubFail('INTERNAL_ERROR');
+    }
+  });
+
+describe('RendererController S4 build authorization', () => {
+  const previewDetected = async (controller: RendererController): Promise<void> => {
+    controller.selectEnvironment('env-1');
+    controller.setInstallSource('owner', 'octo');
+    controller.setInstallSource('name', 'dsh-plugin-demo');
+    await controller.previewPluginChange();
+    await flush();
+  };
+
+  it('sends NO authorization unless the user explicitly confirmed, then sends the exact plan binding', async () => {
+    const { client, calls } = detectedPlanClient();
+    const controller = new RendererController({ client });
+    await controller.load();
+    await previewDetected(controller);
+    expect(controller.getState().changePlan?.requiresBuildAuthorization).toBe(true);
+    expect(controller.getState().buildAuthorizationConfirmed).toBe(false);
+
+    await controller.applyPluginChange();
+    await flush();
+    const unconfirmed = calls.filter((call) => call.method === 'changes.apply');
+    expect(unconfirmed).toHaveLength(1);
+    expect((unconfirmed[0]?.input as { buildAuthorization?: unknown }).buildAuthorization).toBeUndefined();
+
+    controller.setBuildAuthorizationConfirmed(true);
+    await controller.applyPluginChange();
+    await flush();
+    const confirmed = calls.filter((call) => call.method === 'changes.apply');
+    expect(confirmed).toHaveLength(2);
+    expect((confirmed[1]?.input as { buildAuthorization?: unknown }).buildAuthorization).toEqual({
+      commitSha: BUILD_COMMIT,
+      scripts: [...BUILD_SCRIPTS],
+    });
+    await controller.dispose();
+  });
+
+  it('resets the acknowledgement whenever the preview input changes', async () => {
+    const { client } = detectedPlanClient();
+    const controller = new RendererController({ client });
+    await controller.load();
+    await previewDetected(controller);
+    controller.setBuildAuthorizationConfirmed(true);
+    expect(controller.getState().buildAuthorizationConfirmed).toBe(true);
+    controller.setInstallSource('ref', 'v2');
+    expect(controller.getState().changePlan).toBeNull();
+    expect(controller.getState().buildAuthorizationConfirmed).toBe(false);
+    await controller.dispose();
+  });
+});

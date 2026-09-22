@@ -5,6 +5,7 @@
  * execution: this is the policy assertion; the executed-closure marker evidence
  * is the opt-in `scripts/research/a2-ac4-production-negative-control-probe.mjs`.
  */
+import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -25,6 +26,13 @@ afterEach(() => {
 });
 
 const COMMIT = 'e'.repeat(40);
+const LOCK_TEXT = "lockfileVersion: '9.0'\nimporters:\n  .: {}\n";
+const lockSha256 = createHash('sha256').update(LOCK_TEXT, 'utf8').digest('hex');
+const TARGET_PROFILE = {
+  lockText: LOCK_TEXT,
+  declarationText: JSON.stringify({ name: 'hdsl-profile', private: true, dependencies: {}, dsh: { profile: { bundles: [] } } }),
+  workspaceText: null,
+};
 const SOURCE: PluginSourceSelector = { owner: 'octo', name: 'dsh-plugin-demo', ref: 'main' };
 const EXECUTOR: ExecutorIdentity = {
   id: 'pnpm',
@@ -79,7 +87,7 @@ const stage = (harnessed: ReturnType<typeof harness>) =>
         action: { kind: 'install', source: SOURCE },
         createdAt: '2026-09-22T00:00:00.000Z',
         expiresAt: '2026-09-22T01:00:00.000Z',
-        sourceLock: harnessed.resolution.sourceLock,
+        sourceLock: { ...harnessed.resolution.sourceLock, closureLockSha256: lockSha256 },
         scriptAssessment: harnessed.resolution.scriptAssessment,
         scripts: [...harnessed.resolution.scripts],
         requiresBuildAuthorization: harnessed.resolution.requiresBuildAuthorization,
@@ -90,6 +98,7 @@ const stage = (harnessed: ReturnType<typeof harness>) =>
         executor: harnessed.resolution.executor,
         planInputsDigest: harnessed.resolution.planInputsDigest,
       },
+      targetProfile: TARGET_PROFILE,
       buildAuthorization: null,
     },
     new AbortController().signal,

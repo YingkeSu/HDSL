@@ -14,8 +14,8 @@ import { selectedEnvironment, type RendererActions, type RendererState } from '.
 
 const SCRIPT_LABEL: Record<ChangePlan['scriptAssessment'], string> = {
   'none-detected': '未在已解析的清单中发现安装期脚本（仅为解析结论，不构成安全保证）',
-  detected: '检测到安装期脚本',
-  unknown: '无法确定：依赖闭包未完全解析，可能仍存在安装期脚本',
+  detected: '已枚举到安装期脚本（安装时会在你的机器上执行）',
+  unknown: '无法确定：依赖闭包未完全枚举，可能仍存在安装期脚本',
 };
 
 const errorHint = (error: ContractError): string => {
@@ -37,7 +37,11 @@ const errorHint = (error: ContractError): string => {
     case 'ENVIRONMENT_BUSY':
       return '环境正在运行或有其他事务进行中。请停止环境或稍后重试。';
     case 'BUILD_NOT_AUTHORIZED':
-      return '该来源需要执行安装期构建脚本；本版本默认拒绝执行，需走独立的构建授权（S4）。';
+      return '该来源需要执行安装期构建脚本，而你未提供与本次预览精确绑定的授权（或脚本集合无法完整枚举）。安装未开始，环境组成不变。';
+    case 'AUTHORIZATION_MISMATCH':
+      return '授权未精确绑定本次预览的 commit 与脚本集合（源码/脚本/闭包/执行器可能已漂移）。请重新预览并重新确认。';
+    case 'UNAUTHORIZED_SCRIPT_EXECUTION':
+      return '安装期观测到未授权的脚本执行。事务在提交前失败，旧代际保持不变；但已在本机执行的代码副作用无法回滚。';
     case 'EXECUTOR_UNAVAILABLE':
       return '受管执行器不可用或身份不符。安装未开始，环境组成不变。';
     case 'RATE_LIMITED':
@@ -56,16 +60,18 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
   const applyRunning = tracked?.kind === 'apply' && tracked.status !== 'succeeded' && tracked.status !== 'failed' && tracked.status !== 'cancelled';
   const plan = state.changePlan !== null && state.changePlan.action.kind === 'install' ? state.changePlan : null;
   const blockedByBuild = plan !== null && plan.requiresBuildAuthorization;
+  const unknownScriptSet = plan !== null && plan.scriptAssessment === 'unknown';
 
   return (
     <section className="panel" aria-labelledby="plugin-install-heading">
-      <h2 id="plugin-install-heading">来源预览与安装（S2）</h2>
+      <h2 id="plugin-install-heading">来源预览与安装</h2>
       <p className="muted">
         直接输入公开 GitHub 仓库引用。预览会解析精确 commit、包 manifest、依赖闭包中的安装期脚本与风险，
         并生成带修订号与有效期的变更计划；确认后才执行安装。
       </p>
       <p className="muted" role="note">
-        安装与运行会在你的机器上加载该插件代码，且不受 HDSL 或 DSH 沙箱保护；发现不代表可安装或安全。
+        插件代码会在你的机器上加载与运行，不受 HDSL 或 DSH 沙箱保护；发现不代表可安装或安全。
+        若来源声明安装期脚本，安装时会在你的机器上执行该包代码，同样没有 HDSL/DSH 沙箱保护。
       </p>
 
       <fieldset disabled={state.commandPending}>
@@ -154,9 +160,49 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
             <li>执行器：{plan.executor === null ? '未知' : `${plan.executor.id}@${plan.executor.version}`}</li>
           </ul>
           {blockedByBuild ? (
-            <p role="alert">
-              该来源需要执行安装期构建脚本（{plan.scriptAssessment}）。本版本默认拒绝执行；请等待独立的构建授权（S4）。
-            </p>
+            plan.sourceLock === null || unknownScriptSet ? (
+              <p role="alert">
+                {unknownScriptSet
+                  ? '无法完整枚举依赖闭包中的安装期脚本，因此不能授权安装。请重新预览；若持续无法枚举，本来源当前不可安装。'
+                  : '该来源需要执行安装期构建脚本，但预览未绑定可用来源锁，不能授权安装。请重新预览。'}
+                安装未开始，环境组成不变。
+              </p>
+            ) : (
+              <div role="alert">
+                <p>
+                  <strong>安装期将在你的机器上执行下列包代码，且不受 DSH 或 HDSL 沙箱保护。</strong>
+                  该授权仅绑定本次预览的精确 commit <code>{plan.sourceLock.commitSha}</code> 与下列
+                  已枚举脚本集合（依据本次预览绑定的依赖闭包；若闭包未能与计划锁定的包集合核对，则为 unknown，不提供授权）。
+                  源码、脚本、闭包或执行器一旦变化，旧授权即失效，必须重新预览并重新确认。
+                  未授权时默认拒绝执行。
+                </p>
+                <ul>
+                  {plan.scripts.map((script) => (
+                    <li key={`auth:${script.packageName}:${script.script}:${script.source}`}>
+                      {script.packageName}@{script.packageVersion} — {script.script}（{script.source === 'root' ? '来源仓库' : '依赖闭包'}）
+                    </li>
+                  ))}
+                </ul>
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={state.buildAuthorizationConfirmed}
+                    disabled={state.commandPending}
+                    onChange={(event) => { actions.setBuildAuthorizationConfirmed(event.target.checked); }}
+                  />
+                  我已阅读并理解：安装会执行上述安装期脚本，且没有 HDSL/DSH 沙箱保护。
+                </label>
+                <p>
+                  <button
+                    type="button"
+                    onClick={() => { actions.applyPluginChange(); }}
+                    disabled={state.commandPending || !state.buildAuthorizationConfirmed}
+                  >
+                    确认并授权安装
+                  </button>
+                </p>
+              </div>
+            )
           ) : (
             <button type="button" onClick={() => { actions.applyPluginChange(); }} disabled={state.commandPending}>
               确认安装
