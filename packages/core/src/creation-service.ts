@@ -1002,6 +1002,23 @@ tryReadInstallManifest(
     if (isTerminalStatus(record.status)) {
       return portFail('CANNOT_CANCEL', 'operation already reached a final state');
     }
+    // Commit point = active-generation pointer switch (ADR 0005 D10). Once the
+    // pointer already names this transaction's generation (or the journal is
+    // committed), the creation is authoritative and must be rolled forward; a
+    // cancel must be rejected without changing anything.
+    const journal = this.#journals.list().find((entry) => entry.operationId === operationId);
+    if (journal !== undefined) {
+      const journalEnvironment = this.#environments.read(journal.environmentId);
+      if (
+        journal.phase === 'committed' ||
+        (journalEnvironment !== undefined && journalEnvironment.activeGenerationId === journal.generationId)
+      ) {
+        return portFail(
+          'CANNOT_CANCEL',
+          'the creation transaction has already been committed; the new generation is authoritative',
+        );
+      }
+    }
     // Aborting the controller is the cancel signal: the runtime kills its
     // owned process tree, and the install job aborts before commit.
     this.#controllers.get(operationId)?.abort();
@@ -1628,8 +1645,29 @@ tryReadInstallManifest(
   /** Reconciles a journal whose generation pointer is already live. */
   #finalizeCommitted(journal: CreateJournalRecord): void {
     const operation = this.#operations.read(journal.operationId);
-    if (operation !== undefined && !isTerminalStatus(operation.status)) {
-      this.#operations.update(operation, { status: 'succeeded', phase: 'finished' }, this.#now());
+    if (operation !== undefined && operation.status !== 'failed' && operation.status !== 'succeeded') {
+      // `running`, or a `cancelled` record whose commit window was already
+      // entered: the pointer switch is authoritative, so finalize the committed
+      // fact instead of leaving `cancelled` over a committed generation. A
+      // pre-existing `cancelled` record must not hit the terminal guard in
+      // `update`, so it is overridden with durable commit evidence.
+      const patch = { status: 'succeeded', phase: 'finished' } as const;
+      if (operation.status === 'cancelled') {
+        this.#operations.overrideTerminal(operation, patch, this.#now());
+      } else {
+        this.#operations.update(operation, patch, this.#now());
+      }
+    }
+    // Repair the ledger divergence too: the dispatcher may have left the
+    // request `in-progress` if the process crashed inside the commit window.
+    const ledger = this.#idempotency.read(journal.requestId);
+    if (ledger !== undefined && ledger.state === 'in-progress') {
+      this.#idempotency.write(journal.requestId, {
+        state: 'completed',
+        method: ledger.method,
+        fingerprint: ledger.fingerprint,
+        outcome: { ok: true, value: { operationId: journal.operationId } },
+      });
     }
     this.#journals.remove(journal.transactionId);
   }

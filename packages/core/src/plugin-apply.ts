@@ -920,6 +920,18 @@ export class ChangeApplyService {
     if (isTerminalStatus(record.status)) {
       return portFail('CANNOT_CANCEL', 'operation already reached a final state');
     }
+    // Cancellation is decided by the COMMIT POINT, not only by the operation
+    // status (ADR 0005 D10): the commit point is the active-generation pointer
+    // switch. Once this transaction's journal is committed, or the pointer
+    // already names its generation, the change is authoritative and must be
+    // rolled forward -- a cancel must be rejected and must NOT change the
+    // operation, the pointer, the plan or the ledger.
+    if (this.#isCommittedTransaction(operationId)) {
+      return portFail(
+        'CANNOT_CANCEL',
+        'the change transaction has already been committed; the new generation is authoritative (use generations.restore to go back)',
+      );
+    }
     this.#controllers.get(operationId)?.abort();
     const updated = this.#operations.update(
       record,
@@ -927,6 +939,24 @@ export class ChangeApplyService {
       this.#now().toISOString(),
     );
     return portOk(toOperationSnapshot(updated));
+  }
+
+  /**
+   * True once the transaction has passed its commit point: the journal phase is
+   * `committed`/`finalized`, or the active-generation pointer already names the
+   * transaction's generation. The pointer check also covers the tiny window
+   * between the pointer write and `writeJournal('committed')`.
+   */
+  #isCommittedTransaction(operationId: string): boolean {
+    const journal = this.#listJournals().find((entry) => entry.operationId === operationId);
+    if (journal === undefined) {
+      return false;
+    }
+    if (journal.phase === 'committed' || journal.phase === 'finalized') {
+      return true;
+    }
+    const environment = this.#environments.read(journal.environmentId);
+    return environment !== undefined && environment.activeGenerationId === journal.generationId;
   }
 
   #cancelJournal(ids: { readonly operationId: string; readonly generationId: string; readonly transactionId: string }): void {
@@ -1026,9 +1056,23 @@ export class ChangeApplyService {
     compositionDigest?: string,
   ): void {
     const record = this.#operations.read(operationId);
-    if (record === undefined || isTerminalStatus(record.status)) {
+    if (record === undefined) {
       return;
     }
+    if (record.status === 'succeeded') {
+      // Idempotent re-entry (e.g. a second recover): still reconcile the ledger.
+      this.#reconcileLedger(requestId, operationId);
+      return;
+    }
+    if (record.status === 'failed') {
+      // A failed record is only reachable when the transaction was rolled back,
+      // which removes the journal; a committed roll-forward never lands here.
+      return;
+    }
+    // `running`, or a `cancelled` record whose commit window was entered before
+    // the cancel landed: the pointer switch is authoritative (D10), so finalize
+    // the committed fact and repair the operation/ledger divergence instead of
+    // leaving a `cancelled` operation over a committed generation.
     const environment = this.#environments.read(record.environmentId ?? '');
     const output: ChangeApplication = {
       planId,
@@ -1038,11 +1082,16 @@ export class ChangeApplyService {
       sourceLock,
       committedAt: this.#now().toISOString(),
     };
-    this.#operations.update(
-      record,
-      { status: 'succeeded', phase: 'finished', output },
-      this.#now().toISOString(),
-    );
+    const patch = { status: 'succeeded', phase: 'finished', output } as const;
+    if (record.status === 'cancelled') {
+      // A pre-existing `cancelled` record (for example left by an older build)
+      // MUST NOT go through the terminal guard in `update`; this recovery path
+      // holds durable commit evidence (committed journal / pointer), so it
+      // overrides the terminal record with the committed fact.
+      this.#operations.overrideTerminal(record, patch, this.#now().toISOString());
+    } else {
+      this.#operations.update(record, patch, this.#now().toISOString());
+    }
     this.#reconcileLedger(requestId, operationId);
   }
 
