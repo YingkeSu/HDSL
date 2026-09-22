@@ -4,7 +4,7 @@
  * dependency closure, so a source WITH dependencies is authorizable. No script is
  * executed and no fixture runs.
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -59,10 +59,17 @@ const harness = (options: { failMaterialize?: boolean } = {}) => {
     join(declarationDirectory, 'package.json'),
     JSON.stringify({ name: 'hdsl-profile', private: true, dependencies: {}, dsh: { profile: { bundles: [] } } }),
   );
+  // A HISTORICAL build-permission config must never be inherited into the
+  // default-deny materialisation.
+  writeFileSync(
+    join(declarationDirectory, 'pnpm-workspace.yaml'),
+    'allowBuilds:\n  historical@1.0.0: true\nonlyBuiltDependencies:\n  - historical\n',
+  );
   const nodeExecutable = join(dataRoot, 'node');
   writeFileSync(nodeExecutable, '#!/bin/sh\n');
 
   const calls: { args: readonly string[] }[] = [];
+  let materializeWorkspace: string | null = null;
   const provider: GitProvider = {
     resolveManifest: async () => ({ ok: true, value: { commitSha: COMMIT, manifestText: MANIFEST, lockText: null } }),
   };
@@ -82,6 +89,8 @@ const harness = (options: { failMaterialize?: boolean } = {}) => {
         join(request.cwd, 'node_modules', 'shared-dep', 'package.json'),
         JSON.stringify({ name: 'shared-dep', version: '1.2.3', scripts: { postinstall: 'node dep.js' } }),
       );
+      const workspacePath = join(request.cwd, 'pnpm-workspace.yaml');
+      materializeWorkspace = existsSync(workspacePath) ? readFileSync(workspacePath, 'utf8') : null;
       // The default-deny materialisation must never create an allowBuilds config.
       expect(request.args).toEqual(['install', '--frozen-lockfile', '--ignore-scripts']);
       return { ok: true, value: { executor: EXECUTOR, exitCode: 0, stdout: '', stderr: '', executedInstallScripts: [] } };
@@ -93,7 +102,7 @@ const harness = (options: { failMaterialize?: boolean } = {}) => {
     stagingDirectory: join(dataRoot, 'staging'),
     nodeExecutable,
   };
-  return { port, context, calls };
+  return { port, context, calls, materializeWorkspace: () => materializeWorkspace };
 };
 
 describe('S4 preview closure enumeration', () => {
@@ -118,6 +127,10 @@ describe('S4 preview closure enumeration', () => {
     ]);
     // The isolated materialisation staging is cleaned.
     expect(existsSync(`${h.context.stagingDirectory}-materialize`)).toBe(false);
+    // No historical build-permission config was inherited into the materialisation.
+    const workspace = h.materializeWorkspace();
+    expect(workspace === null || !workspace.includes('allowBuilds')).toBe(true);
+    expect(workspace === null || !workspace.includes('onlyBuiltDependencies')).toBe(true);
   });
 
   it('keeps a source with an un-enumerable closure as unknown (never authorizable)', async () => {

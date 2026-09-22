@@ -290,6 +290,56 @@ export const decideBuildAuthorization = (input: BuildAuthorizationInput): BuildA
   return { ok: true, mode: 'allow', depPaths: bound.depPaths };
 };
 
+/** Build-permission config keys that must never be inherited into a materialisation. */
+export const BUILD_PERMISSION_CONFIG_KEYS = [
+  'allowBuilds',
+  'onlyBuiltDependencies',
+  'dangerouslyAllowAllBuilds',
+  'neverBuiltDependencies',
+  'ignoredBuiltDependencies',
+] as const;
+
+/**
+ * Removes every build-permission key from a workspace config so a historical
+ * `allowBuilds`/`onlyBuiltDependencies`/`dangerouslyAllowAllBuilds` can never be
+ * inherited into the default-deny materialisation. Unparsable YAML is a refusal
+ * (the caller keeps the source `unknown`) rather than a silent pass-through.
+ */
+export const stripBuildPermissionConfig = (
+  workspaceText: string | null,
+): { readonly ok: true; readonly text: string | null } | { readonly ok: false } => {
+  if (workspaceText === null) {
+    return { ok: true, text: null };
+  }
+  let parsed: unknown;
+  try {
+    parsed = parse(workspaceText, { uniqueKeys: true, logLevel: 'silent' });
+  } catch {
+    return { ok: false };
+  }
+  const record = asRecord(parsed);
+  if (record === undefined) {
+    return { ok: false };
+  }
+  let changed = false;
+  for (const key of BUILD_PERMISSION_CONFIG_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(record, key)) {
+      delete record[key];
+      changed = true;
+    }
+  }
+  const pnpm = asRecord(record['pnpm']);
+  if (pnpm !== undefined) {
+    for (const key of ['allowBuilds', 'onlyBuiltDependencies', 'dangerouslyAllowAllBuilds'] as const) {
+      if (Object.prototype.hasOwnProperty.call(pnpm, key)) {
+        delete pnpm[key];
+        changed = true;
+      }
+    }
+  }
+  return { ok: true, text: changed ? stringify(record) : workspaceText };
+};
+
 /**
  * Merges an exact `allowBuilds` map into the workspace config for ONE install.
  * Refuses to combine with any pre-existing broad policy

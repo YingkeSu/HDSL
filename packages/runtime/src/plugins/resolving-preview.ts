@@ -14,7 +14,7 @@ import { buildPreviewResolution, type GitProvider } from './preview-resolution.j
 import type { PluginPreviewResolution } from './preview-resolution.js';
 import type { PluginExecutorPort } from './executor.js';
 import { resolveTargetProfileLock } from './target-profile.js';
-import { buildScriptKey, enumerateInstallScriptsFromInstalledTree } from './build-authorization.js';
+import { buildScriptKey, enumerateInstallScriptsFromInstalledTree, stripBuildPermissionConfig } from './build-authorization.js';
 
 /** Bounded timeout for the default-deny materialisation used to enumerate scripts. */
 const MATERIALIZE_TIMEOUT_MS = 180_000;
@@ -154,8 +154,15 @@ const enumerateClosureScripts = async (
     mkdirSync(staging, { recursive: true });
     writeFileSync(join(staging, 'package.json'), input.declarationText, 'utf8');
     writeFileSync(join(staging, 'pnpm-lock.yaml'), input.lockText, 'utf8');
-    if (input.workspaceText !== null) {
-      writeFileSync(join(staging, 'pnpm-workspace.yaml'), input.workspaceText, 'utf8');
+    // Never inherit a historical build-permission config into the default-deny
+    // materialisation. Unparsable YAML refuses enumeration (the source stays
+    // `unknown`, never authorizable).
+    const sanitizedWorkspace = stripBuildPermissionConfig(input.workspaceText);
+    if (!sanitizedWorkspace.ok) {
+      return undefined;
+    }
+    if (sanitizedWorkspace.text !== null) {
+      writeFileSync(join(staging, 'pnpm-workspace.yaml'), sanitizedWorkspace.text, 'utf8');
     }
     const run = await options.executor.run(
       {
