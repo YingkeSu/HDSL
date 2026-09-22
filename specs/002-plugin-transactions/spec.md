@@ -34,7 +34,7 @@
 | 精确查询可复制 | `PluginSearchResult.query` 是实际发出的查询字符串，逐字符一致；默认 `topic:dsh-plugin fork:false archived:false` |
 | 结果计数语义 | 展示 `totalCount`、`incompleteResults`、`hasMore`；`hasMore` 已考虑 GitHub 检索只返回前 1000 条（`GITHUB_SEARCH_RESULT_LIMIT`），超限时界面说明被截断 |
 | 非安全信号 | star/topic 标注为“仅展示，不作为安全或可安装性依据”；界面显示“发现不代表可安装或安全” |
-| 详情 | `plugins.inspect` 返回公开仓库元数据；来源预览入口在界面预留，预览本体属 S2 |
+| 详情 | `plugins.inspect` 返回公开仓库元数据；详情面板展示检索命中元数据，并提供按钮按 `plugins.inspect` 重新获取权威仓库详情；来源预览入口在界面预留，预览本体属 S2 |
 | 限流 | 403/429 → `RATE_LIMITED`（`retryable`，携带可机读 `retryAfterSeconds`） |
 | 网络失败 | 连接建立前失败 → `NETWORK_UNAVAILABLE`；建立后传输/解析失败 → `DOWNLOAD_FAILED` |
 | 取消 | 取消为终态 `cancelled`，无环境或组成副作用；已终态取消 → `CANNOT_CANCEL` |
@@ -49,13 +49,15 @@
   取消为终态、失败映射为受控错误码；不联网、不起子进程。
 - `runtime`：`createGitHubPluginSource` 只读适配器（可注入 `fetch`/时钟/超时），错误映射见 D11。
 - `main`：组合根注入适配器；preload 白名单自动包含新方法；无通用 `invoke`。
-- `renderer`：`发现插件` 页完成查询、结果、计数、详情与 S2 预览占位。
+- `renderer`：`发现插件` 页完成查询、结果、计数、详情与 S2 预览占位；选中命中后可按 `plugins.inspect` 重新获取详情，并对展示文本做转义（无 `dangerouslySetInnerHTML`）。
 
 ### 测试 seam（ADR 0005 D19）
 
 - 默认 CI：契约 fixture + 受控 `fetch` 替身；不访问真实网络。
 - 真实 GitHub 只读探针：显式有界、opt-in，不进默认 CI；本规格不新增仓库/CI gate 名。
 - 真实 desktop：浏览器模拟层与 Electron 层分栏记录；本地 fixture 不构成真实 GitHub 链路证据。
+  E2E harness（`tests/e2e/support/desktop-ui.ts` 与 `sender-frame-*.html` fixtures）使用共享
+  `API_VERSION`（fixtures 通过版本占位符注入），避免版本硬编码漂移。
 
 ## 未决与依赖
 

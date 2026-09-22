@@ -5,6 +5,26 @@
 - 平台：macOS 26.3（Apple Silicon，arm64）；Node `24.21.0`（`.nvmrc`）；pnpm `11.7.0`。
 - 范围：S1 插件发现与详情（GitHub 只读检索闭环）。S2 预览/变更/恢复未实现。
 
+## rev 2（独立复审 CHANGES_REQUESTED 后的修复）
+
+- **必修 1**：1.0→1.1 的 E2E harness 迁移由本片承接：`tests/e2e/support/desktop-ui.ts` 的
+  `CONTRACT_API_VERSION` 改为引用共享 `API_VERSION`；`sender-frame-parent/child.html` 改用
+  `__HDSL_API_VERSION__` 占位符，由 `desktop.sender-frame.real.test.ts` 生成临时页时注入。
+  始终运行的 fixture sanity 用例断言占位符存在且不再有硬编码 `1.0`。
+- **CR 建议 1（同时修）**：GitHub 适配器把 `response.json()` 纳入同一 15s deadline 与调用方 abort；新增
+  「响应头已到、body 停住」的超时与取消测试。
+- **建议 2**：自由文本 `description` 带省略号裁剪到 512；`license` 超出则置空；结构性标识/URL 不裁剪，
+  超界/非法时只丢弃该条命中并以 `incompleteResults=true` 暴露，补超界/坏命中回归测试。
+- **建议 3**：新增标记级转义负控（`description`/`topics`/`license` 含 `<script>`/`<img onerror>` → 实际 HTML 不含原始标签）。
+- **建议 4**：详情面板接入 `plugins.inspect`（选中命中后可重新获取权威详情），并同步 002 规格口径。
+- **建议 5**：新增契约层组合路由用例：`operations.cancel` 命中插件操作且不回落环境服务；未知 id 仍回落为 `NOT_FOUND`。
+
+### rev 2 有界真实 Electron 抽查
+
+- 同一一次性 CDP 探针从真实窗口调用 `catalog.list`（使用共享 `API_VERSION` 构造信封）：`ok=true`、返回 2 个已核验组合；证明迁移后的 harness 版本与 1.1 主进程匹配。
+- 重跑一次有界真实 GitHub 只读探针（未认证，一次 search + 一次 inspect，`per_page=10`）：search succeeded（`totalCount=15659`、`hasMore=true`、最长 description 345 字符），inspect succeeded（`deepseek-ai/deepseek-harness`），确认 body deadline/裁剪重构未破坏真实链路。
+
+
 ## 自动化检查（默认 CI 口径）
 
 | 命令 | 结果 |

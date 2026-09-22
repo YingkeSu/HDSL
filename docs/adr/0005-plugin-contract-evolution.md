@@ -306,7 +306,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | `specs/001-environment-lifecycle/contracts/local-api.md:97`（fixture 表） | `2.0` / `1.1` | **改**：按 §5.4 分支同步 |
 | `specs/001-environment-lifecycle/plan.md:19` | `"1.0"` | **留作历史 + 指针**：001 实施计划为历史记录，不改写；在该行追加指向本 ADR 与当前契约文件的指针 |
 | `docs/development/desktop-integration.md:186` | 示例 `apiVersion:'1.0'` | **改**：示例必须与当前 wire 版本一致（否则误导读者的可复制示例） |
-| `tests/**` | 使用 `API_VERSION` 常量 | **不改**：无需逐处改字面量 |
+| `tests/**` | 大多数测试使用 `API_VERSION` 常量；但 `tests/e2e/support/desktop-ui.ts` 与 `tests/e2e/support/fixtures/sender-frame-*.html` 曾硬编码 `'1.0'` | **改**（rev 3 修正）：`desktop-ui.ts` 改为引用共享 `API_VERSION`；两个 HTML fixture 改为 `__HDSL_API_VERSION__` 占位符，由 E2E 宿主在生成临时页时注入 `API_VERSION`，避免再次漂移 |
 
 历史保留清单：所有既有标签对象、001 spec/plan/research/tasks 的历史文本、旧 fixture 行的旧期望——通过标签 `contracts-v1.0.0` 与 Git 历史保留，不回填、不删除。
 
@@ -440,4 +440,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 - 未验证：§3 全部插件契约提案（spec change）、§8 全部待实证项（E1–E10）。
 - 本 ADR 状态 `accepted`：独立复审（`5770298091`）与编排确认已完成，实现切片据此在未打标签的 `1.1` 内落地。
 - **实现进度（rev 3）**：#75 实现 **S1 子集**——`plugins.search`/`plugins.inspect`、`OperationSnapshot.output`（`search`/`inspect`）、D11 错误码与 `retryAfterSeconds`；`changes.preview`/`changes.apply`/`generations.restore`、`preview`/`apply`/`restore` kind、manifest/脚本解析与安装期授权仍属 S2+，本片**不**声明已实现，也不打 `contracts-v1.1.0` 标签。
+  - rev 3 同时修正 §4.4 的 `tests/**` 行：`tests/e2e/support/desktop-ui.ts` 改为引用共享 `API_VERSION`，`sender-frame-*.html` 改为版本占位符并在 E2E 宿主注入（本片承接，避免留已知损坏的 opt-in harness）。
+  - 网络硬超时（D12）覆盖 body 读取：GitHub 适配器把 `response.json()` 纳入同一 deadline 与调用方 abort，已补「响应头已到、body 停住」的超时与取消测试。
+  - 未受信外部字段按 DTO 上界防护：自由文本 `description` 带省略号裁剪；结构性标识/URL 不裁剪，超界/非法时只丢弃该条命中并以 `incompleteResults` 暴露，不静默丢失、不改义。
 - **本 P0 合入不宣称 D18 的运行数据/旧代可用保证已实现**：该保证为条件性承诺，#76 硬门禁与 E10 见 D18/§9.7。

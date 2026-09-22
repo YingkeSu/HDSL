@@ -37,6 +37,9 @@
   - `envelope-minor-mismatch` fixture `'1.1'` → `'1.2'`（只改 minor 行）。
   - `local-api.md` 的 wire 版本字面量与 fixture 表；`desktop-integration.md` 示例。
   - `tests/contracts/consumer-parity.test.ts` 的版本与方法表。
+  - `tests/e2e/support/desktop-ui.ts` 的 `CONTRACT_API_VERSION` 改为引用共享 `API_VERSION`；
+    `tests/e2e/support/fixtures/sender-frame-{parent,child}.html` 改用 `__HDSL_API_VERSION__`
+    占位符，由 E2E 宿主在生成临时页时注入共享版本（当前无 QA owner 修改这些文件，本片承接）。
 - 新 surface 只包含 S1 已实现的部分：`plugins.search`、`plugins.inspect`、
   `operationKind` 的 `search`/`inspect`、`OperationSnapshot.output?`、
   `ContractError.retryAfterSeconds?`、D11 的 15 个新错误码。
