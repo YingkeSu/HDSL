@@ -51,7 +51,8 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 
 ## 已知机制限制（受控、不绕过）
 
-- **git 插件含 git 子依赖不受支持**：受管 pnpm 11.7.0 默认 `blockExoticSubdeps` 会在“插件本身以 git 依赖安装、且它又依赖另一个 git 包”时以 `ERR_PNPM_EXOTIC_SUBDEP` 受控拒绝。产品裁决为**保留该默认策略**，不为测试关闭或改全局设置；此类来源的预览/失败文案须说明“该来源包含受控不支持的 git 子依赖”，不得说成 S4 授权问题或静默绕过。注册表子依赖不受影响。
+- **git 插件含 git 子依赖不受支持**：受管 pnpm 11.7.0 默认 `blockExoticSubdeps` 会在“插件本身以 git 依赖安装、且它又依赖另一个 git 包”时以 `ERR_PNPM_EXOTIC_SUBDEP` 受控拒绝（受控实测原文：`Exotic dependency "<pkg>" (resolved via git-repository) is not allowed in subdependencies when blockExoticSubdeps is enabled`）。产品裁决为**保留该默认策略**，不为测试关闭或改全局设置；此类来源的预览/失败文案须说明“该来源包含受控不支持的 git 子依赖”，不得说成 S4 授权问题或静默绕过。注册表子依赖不受影响。
+- **预览侧闭包枚举**：生产预览端口在解析 target lock 后，以受管 executor 运行 `install --frozen-lockfile --ignore-scripts`（默认拒执行）物化到隔离 staging，再只读枚举 `node_modules` 中的 lifecycle 脚本（排除源包自身），合并为 root + dependency 完整集合；staging 清理、不写 `allowBuilds`、不执行任何脚本。枚举失败则保持 `unknown`、不可授权。
 - **`github:` shorthand 的 allowBuilds 键未实测**：`git+` 形态已逐字节验证；`github:` shorthand 的 pinned-lock key（codeload tarball URL）是否等于 pnpm build depPath 需真实受控 GitHub fixture 实证（见 [最小发布方案](plugin-build-authorization-github-fixture-proposal.md)），不等时 fail closed（不得改用裸包名/全局放行）。
 
 ## 与其它轴的正交性
