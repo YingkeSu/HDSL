@@ -79,6 +79,7 @@
 - **提交边界**：复用 S2 事务守卫/cache/journal/ledger/recover。提交前失败或取消 ⇒ 旧代不变、stage 清理、计划不消费；提交后 ⇒ pointer 权威前滚、`CANNOT_CANCEL`、可 `generations.restore`。**失败不提交 ≠ 副作用可回滚**：已执行的安装期脚本不在代数回滚范围内。
 - **UI/日志**：展示精确 commit + 完整脚本清单（含 `root`/`dependency` 来源）与“安装期在你的机器上执行该包代码，不受 DSH 或 HDSL 沙箱保护”；授权需显式勾选确认，未确认不发送授权；`unknown` 不提供授权入口。
 - **与 S3 服务核验正交**：构建授权只影响“是否允许执行安装期脚本”这一轴，**不**构成对 `hdsl.services.provides` 的核验，也不得把 S3 的 `unknown` 服务轴变为 `known`/confirmed。通过构建授权安装的新来源，其卸载仍按 S3 三态（无核验记录 ⇒ unknown 阻塞，UI 仍呈现“无法验证服务依赖，暂不能卸载”）。
+- **限制（受控、不绕过）**：受管 pnpm 11.7.0 的 `blockExoticSubdeps` 默认保留，git 插件含 git 子依赖的闭包受控不支持（`ERR_PNPM_EXOTIC_SUBDEP`），预览/失败文案须写清；`github:` shorthand 的 `allowBuilds` 键待真实受控 GitHub fixture 实证，不等则 fail closed。详见[验证边界](../../docs/development/plugin-build-authorization-validation.md)。
 - **证据分层与未跑项**见 [plugin-build-authorization-validation.md](../../docs/development/plugin-build-authorization-validation.md)：默认 CI（契约/core/renderer + runtime 受控 executor seam 假执行器）已实现；opt-in 真实受控 node 链与真实 desktop **未跑**；**生产 GitHub 全链未跑**，不得声称端到端验收。`UNAUTHORIZED_SCRIPT_EXECUTION` 尚无可靠执行期观测信号，当前为构造性保证（默认拒执行 + 仅写精确 `allowBuilds`）。
 
 ## 未决与依赖

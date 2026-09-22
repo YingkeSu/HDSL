@@ -49,6 +49,11 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 - 未确认时点击安装不会发送 `buildAuthorization`；确认后发送的授权**只从该计划自身的 commit 与脚本集合派生**，UI 不能放宽。
 - 不使用“一次授权永久放行”之类措辞；每次预览重置确认状态。
 
+## 已知机制限制（受控、不绕过）
+
+- **git 插件含 git 子依赖不受支持**：受管 pnpm 11.7.0 默认 `blockExoticSubdeps` 会在“插件本身以 git 依赖安装、且它又依赖另一个 git 包”时以 `ERR_PNPM_EXOTIC_SUBDEP` 受控拒绝。产品裁决为**保留该默认策略**，不为测试关闭或改全局设置；此类来源的预览/失败文案须说明“该来源包含受控不支持的 git 子依赖”，不得说成 S4 授权问题或静默绕过。注册表子依赖不受影响。
+- **`github:` shorthand 的 allowBuilds 键未实测**：`git+` 形态已逐字节验证；`github:` shorthand 的 pinned-lock key（codeload tarball URL）是否等于 pnpm build depPath 需真实受控 GitHub fixture 实证（见 [最小发布方案](plugin-build-authorization-github-fixture-proposal.md)），不等时 fail closed（不得改用裸包名/全局放行）。
+
 ## 与其它轴的正交性
 
 - **S3 服务核验（ADR 0005 D21）**：构建授权与 `hdsl.services.provides` 核验是**正交轴**。授权只在“是否允许执行安装期脚本”上生效，不得被当作对服务轴的可信声明，也不得把未知服务轴变为已核验/已确认。通过构建授权安装的新来源，卸载时仍按 unknown 阻塞并保留“无法验证服务依赖，暂不能卸载”的 UI 提示。
@@ -61,7 +66,7 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 | 契约 fixture / core 守卫 | authorize/deny/commit 漂移/集合不等/`unknown`/none-detected 夹带授权的单测；假执行器不执行任何脚本 | 本片默认 CI |
 | renderer | 勾选前不发送授权、勾选后发送精确绑定、输入变化重置确认、`unknown` 不提供按钮 | 本片默认 CI |
 | runtime 执行复核 | 受控 executor seam 断言两阶段流程（默认拒执行物化 → 只读枚举 → 单次精确 `allowBuilds` + `--ignore-scripts=false`）、发布前清除 `allowBuilds`、拒绝路径不执行 | 本片默认 CI（`tests/plugins/*` 与 `tests/core/change-apply-authorized.test.ts`，假执行器，不执行任何脚本） |
-| opt-in 真实受控 node 链 | 复用/扩展 S2 sentinel（外部 marker）证明 deny=0 marker；精确授权下**恰好**授权集合产生 marker；漂移/`unknown` 拒绝 | 受控 fixture v2 已通过独立静态审（30 APPROVED，归档 `7f206792…`）；真实正负控由 runtime 子任务在 opt-in probe 复跑，**未在本集成时点复跑** |
+| opt-in 真实受控 node 链 | 复用/扩展 S2 sentinel（外部 marker）证明 deny=0 marker；精确授权下**恰好**授权集合产生 marker；漂移/子集拒绝 | 受控 fixture v2 已通过独立静态审（30 APPROVED，归档 `7f206792…`）；runtime 子任务在冻结受管 pnpm 11.7.0 上跑 `scripts/research/a4-build-authorization-probe.mjs` 16/16（deny=0 marker；离线枚举 root 4 + dep 4；allow 8 hook 实际触发；子集/漂移拒绝；仅精确 `allowBuilds`）。本整合分支未复跑该 probe |
 | opt-in 真实 desktop | 本地受控 git+file:// 传输（仅测试 adapter）走完整预览→授权→apply→重启 | **未跑** |
 | 生产 GitHub 全链 | 受控公开 GitHub 脚本 fixture 的真实 HTTPS 全链 | **未跑**，需先给最小发布方案与精确审查内容 |
 

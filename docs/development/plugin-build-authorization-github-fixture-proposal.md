@@ -14,19 +14,45 @@
 
 ## 拟发布内容（逐文件，全部无网络/无凭据/无子进程）
 
-建议新公开仓库：`YingkeSu/hdsl-s4-gh-fixture`（或项目确认的受控命名空间；**不覆盖**任何现有仓库）。
+建议新公开仓库：`YingkeSu/hdsl-s4-gh-fixture`（或项目确认的受控命名空间；**不覆盖**任何现有仓库）。除下列明写内容外，其余文件逐字节复用受审 v2 fixture：
 
-| 文件 | 内容 |
-| --- | --- |
-| `package.json` | `name: hdsl-s4-gh-fixture-root`、`version: 0.0.1`、`dsh.bundle.patch: "cordis.patch.yml"`、`scripts: { preinstall, install, postinstall, prepare }` 各调用 `node scripts/mark.mjs <name>` |
-| `scripts/mark.mjs` | 与受审 v2 fixture 相同的 fail-closed 脚本（`62dd040f…`）：只 `node:fs`/`node:path`；缺 `S4_MARKER_DIR` 或参数 ⇒ `exit 3`；否则只写 `<S4_MARKER_DIR>/<name>.marker`；无删除、无越界写、无 `child_process` |
-| `cordis.patch.yml` | 仅一条 `- insert: [{ id, name: hdsl-s4-gh-fixture-root, ... }]` 的最小合法 patch（与 v2 同形状） |
-| `lib/index.mjs` | 启动期 no-op 插件（与 v2 同形状） |
-| `README.md` | 明示“HDSL S4 测试 fixture；脚本只在本机写 marker；无网络/凭据/个人数据；不得用于生产” |
+- `scripts/mark.mjs` = v2 的 `62dd040f0e2ca3f354ee42ad302d5c8a581b1cbe089608b0abbce1f46c8ec16c`（逐字节相同）。
+- `cordis.patch.yml` = v2 的 `b07f09c9…`（仅把 `name` 改为 `hdsl-s4-gh-fixture-root`；无其它改动）。
+- `lib/index.mjs` = v2 的 `579cb266…`（no-op 插件，逐字节相同）。
 
-- commit 1（`base`）：上述内容；`scripts/mark.mjs` 与 v2 逐字节相同。
-- commit 2（`drift`）：仅改 `package.json` 里 `postinstall` 命令文本（或 marker 名加 `-v2`），用于漂移失效对照。
-- 不建分支保护/不放 GitHub Actions（避免任何自动执行）。仓库本身不触发任何 workflow。
+`package.json`（逐字内容）：
+
+```json
+{
+  "name": "hdsl-s4-gh-fixture-root",
+  "version": "0.0.1",
+  "dsh": { "bundle": { "patch": "./cordis.patch.yml" } },
+  "scripts": {
+    "preinstall": "node scripts/mark.mjs root-preinstall",
+    "install": "node scripts/mark.mjs root-install",
+    "postinstall": "node scripts/mark.mjs root-postinstall",
+    "prepare": "node scripts/mark.mjs root-prepare"
+  }
+}
+```
+
+`README.md`（逐字内容）：
+
+```markdown
+# hdsl-s4-gh-fixture-root
+
+HDSL issue #78 (S4) 的受控测试 fixture。仅用于验证“显式构建授权”在真实 GitHub
+`github:` shorthand 下的预览枚举、精确 `allowBuilds` 与安装期脚本执行。
+
+- 四个 lifecycle 脚本只写 `<S4_MARKER_DIR>/<name>.marker`；缺 `S4_MARKER_DIR` 时以
+  exit 3 失败（fail closed）。脚本无网络、无子进程、无凭据、无越界写。
+- 启动期 `lib/index.mjs` 为 no-op。
+- 不得作为生产插件使用；不得在其中放入任何秘密或个人数据。
+```
+
+- commit 1（`base`）：上述内容。
+- commit 2（`drift`）：**仅**把 `postinstall` 命令文本改为 `node scripts/mark.mjs root-postinstall-v2`（同 hook、同版本，用于验证 manifest 摘要变化 ⇒ 旧授权失效）。
+- 不建分支保护、不放 GitHub Actions（避免任何自动执行）。仓库本身不触发任何 workflow。
 
 ## 精确身份记录（发布后写入验证文档）
 
