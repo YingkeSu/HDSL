@@ -280,9 +280,13 @@ describe('environment creation', () => {
     const manifestB = harness.managed.service.readInstallManifest(beta.id);
     expect(manifestB.installMode).toBe('artifacts-only');
 
-    // No environment-specific content may leak into the other generation.
-    expect(existsSync(join(pathsA.generationDirectory, 'home'))).toBe(true);
-    expect(existsSync(join(pathsB.generationDirectory, 'home'))).toBe(true);
+    // Per ADR 0006 the home is environment-scoped: generation directories must
+    // not grow their own `home`, and each environment's shared home is distinct.
+    expect(existsSync(pathsA.legacyHomeDirectory)).toBe(false);
+    expect(existsSync(pathsB.legacyHomeDirectory)).toBe(false);
+    expect(existsSync(pathsA.homeDirectory)).toBe(true);
+    expect(existsSync(pathsB.homeDirectory)).toBe(true);
+    expect(pathsA.homeDirectory).not.toBe(pathsB.homeDirectory);
 
     // The host default DSH home is untouched (FR-001).
     expect(homeSnapshot()).toEqual(homeBefore);

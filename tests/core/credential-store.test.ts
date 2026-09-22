@@ -124,7 +124,7 @@ describe('environment credential reference store', () => {
     const request = await harness.managed.service.launchCredentialRequest(harness.environmentId);
     expect(request.bindings).toEqual([binding()]);
     expect(request.baseEnv['DSH_HOME']).toContain(
-      join('environments', harness.environmentId, 'generations'),
+      join('environments', harness.environmentId, 'home'),
     );
     expect(request.baseEnv['HOME']).toBe(request.baseEnv['DSH_HOME']);
     expect(request.baseEnv['DSH_AGENTS_HOME']).toBe(`${request.baseEnv['HOME']}/agents`);

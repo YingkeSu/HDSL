@@ -53,6 +53,7 @@ import {
   type AppDataLayout,
   type GenerationPaths,
 } from './layout.js';
+import { migrateEnvironmentHome } from './home-migration.js';
 import {
   CredentialStore,
   type CredentialBinding,
@@ -383,6 +384,45 @@ export class EnvironmentService {
   }
 
   /**
+   * Runs (or resumes) the ADR 0006 home migration for one environment before any
+   * runtime-affecting operation. Idempotent; refuses while the environment is
+   * running or changing so the shared home is never mutated under a live process.
+   * A new/empty environment finalizes immediately without touching anything.
+   */
+  ensureHomeMigrated(environmentId: string): PortOutcome<void> {
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    if (
+      environment.state === 'starting' ||
+      environment.state === 'running' ||
+      environment.state === 'stopping'
+    ) {
+      return portFail('ENVIRONMENT_BUSY', 'the environment is running or changing');
+    }
+    try {
+      const result = migrateEnvironmentHome({
+        layout: this.#layout,
+        environmentId,
+        activeGenerationId: environment.activeGenerationId,
+        clock: this.#clock,
+      });
+      return result.state === 'interrupted'
+        ? portFail('INTERNAL_ERROR', 'home migration was interrupted')
+        : portOk(undefined);
+    } catch (error) {
+      return portFail(
+        errorCodeFrom(error) ?? 'INTERNAL_ERROR',
+        error instanceof Error ? error.message : 'home migration failed',
+      );
+    }
+  }
+
+  /**
    * Reads the install manifest of an environment's active generation.
    *
    * Returns the manifest directly (the shape QA/T006 observe); use
@@ -696,6 +736,14 @@ tryReadInstallManifest(
     if (generation === undefined) {
       return notFound('no installed generation is available for this environment');
     }
+    // Migration mutates the shared home, so it is only run before a `start`
+    // (never while running/stopping). `stop` must stay available at all times.
+    if (kind === 'start') {
+      const migration = this.ensureHomeMigrated(environment.id);
+      if (!migration.ok) {
+        return portFail(migration.code, migration.message);
+      }
+    }
     const operation = this.#operations.create({
       id: newOperationId(),
       kind,
@@ -906,6 +954,21 @@ tryReadInstallManifest(
     }
     ensureLayout(this.#layout);
     const details: RecoveryDetail[] = [];
+    // ADR 0006: bring every environment's shared home up to date before any
+    // runtime-affecting operation. A failed migration is left for the next
+    // start/recover to resume; it must not abort the whole reconciliation.
+    for (const environment of this.#environments.list()) {
+      try {
+        migrateEnvironmentHome({
+          layout: this.#layout,
+          environmentId: environment.id,
+          activeGenerationId: environment.activeGenerationId,
+          clock: this.#clock,
+        });
+      } catch {
+        // Retried on the next start/recover; the environment stays refused.
+      }
+    }
     const processEntries = await this.#recoverProcesses(details);
     const journals = this.#journals.list();
     const journalOperations = new Set(journals.map((journal) => journal.operationId));

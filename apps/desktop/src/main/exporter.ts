@@ -139,7 +139,7 @@ export const collectDiagnosticsInput = (
       ...(paths === null
         ? []
         : [
-            { from: paths.homeDirectory, to: '<generation-home>' },
+            { from: paths.homeDirectory, to: '<environment-home>' },
             { from: paths.generationDirectory, to: '<generation>' },
           ]),
       { from: options.layout.root, to: '<data-root>' },
