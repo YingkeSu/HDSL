@@ -30,6 +30,10 @@ const actions: RendererActions = {
   inspectSelectedPlugin: () => undefined,
   selectPlugin: () => undefined,
   cancelPluginSearch: () => undefined,
+    setInstallSource: () => undefined,
+    previewPluginChange: () => undefined,
+    applyPluginChange: () => undefined,
+    cancelInstallOperation: () => undefined,
 };
 
 const state = (patch: Partial<RendererState>): RendererState => ({ ...INITIAL_STATE, ...patch });

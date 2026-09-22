@@ -7,6 +7,7 @@ import { EnvironmentList } from './components/EnvironmentList.js';
 import { DemoBanner, Notices } from './components/Notices.js';
 import { OperationPanel } from './components/OperationPanel.js';
 import { PluginDiscovery } from './components/PluginDiscovery.js';
+import { PluginInstall } from './components/PluginInstall.js';
 import { LaunchBar } from './components/LaunchBar.js';
 import { Icon } from './components/Icon.js';
 import { ENVIRONMENT_STATE_LABELS } from './format.js';
@@ -244,7 +245,12 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
             </div>
           </>
         )}
-        {page === 'discover' && <PluginDiscovery state={state} actions={actions} />}
+        {page === 'discover' && (
+          <>
+            <PluginDiscovery state={state} actions={actions} />
+            <PluginInstall state={state} actions={actions} />
+          </>
+        )}
         {(page === 'home' || page === 'tasks') && (
           <OperationPanel state={state} actions={actions} />
         )}
