@@ -11,5 +11,6 @@ export * from './removal.js';
 export * from './patch-references.js';
 export * from './service-verifications.js';
 export * from './removal-port.js';
+export * from './pnpm-failure.js';
 export * from './lock-closure.js';
 export * from './build-authorization.js';

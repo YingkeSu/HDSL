@@ -10,7 +10,7 @@
  * probe.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -175,7 +175,7 @@ const fakeExecutor = (runCalls: { args: readonly string[]; workspace: string | n
   },
 });
 
-const build = (withAuthorization: BuildAuthorization | null) => {
+const build = (withAuthorization: BuildAuthorization | null, executorOverride?: PluginExecutorPort) => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'hdsl-s4-e2e-'));
   roots.push(dataRoot);
   const layout = resolveLayout(dataRoot);
@@ -233,13 +233,13 @@ const build = (withAuthorization: BuildAuthorization | null) => {
     environments,
     operations,
     compositionDigest: (lock) => JSON.stringify(lock.plugins),
-    port: createPluginApplyPort({ gitProvider: provider, executor: fakeExecutor(runCalls) }),
+    port: createPluginApplyPort({ gitProvider: provider, executor: executorOverride ?? fakeExecutor(runCalls) }),
     verifyGenerationRuntime: () => true,
     now: () => new Date(now),
   });
-  const command = () =>
+  const command = (requestId = 'req-apply') =>
     service.applyChange({
-      requestId: 'req-apply',
+      requestId,
       environmentId: ENVIRONMENT_ID,
       expectedRevision: 3,
       planId: PLAN_ID,
@@ -340,5 +340,64 @@ describe('S4 authorized install through the real runtime apply port (core transa
     expect(snapshot.error?.code).toBe('AUTHORIZATION_MISMATCH');
     expect(harnessed.runCalls).toHaveLength(0);
     expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+  });
+
+  it('classifies a retryable install failure, keeps the old generation/stage clean and retries under a new requestId', async () => {
+    let failNextAuthorizedInstall = true;
+    const flaky: PluginExecutorPort = {
+      identity: async () => ({ ok: true, value: EXECUTOR }),
+      run: async (request) => {
+        if (request.args.includes('--ignore-scripts=false') && failNextAuthorizedInstall) {
+          failNextAuthorizedInstall = false;
+          return {
+            ok: true,
+            value: {
+              executor: EXECUTOR,
+              exitCode: 1,
+              stdout: '',
+              stderr: 'npm ERR! getaddrinfo ENOTFOUND registry.npmjs.org',
+              executedInstallScripts: [],
+            },
+          };
+        }
+        if (!request.args.includes('--ignore-scripts=false')) {
+          mkdirSync(join(request.cwd, 'node_modules', 'shared-dep'), { recursive: true });
+          writeFileSync(
+            join(request.cwd, 'node_modules', 'shared-dep', 'package.json'),
+            JSON.stringify({ name: 'shared-dep', version: '1.2.3', scripts: { postinstall: 'node dep.js' } }),
+          );
+          mkdirSync(join(request.cwd, 'node_modules', 'hdsl-plugin-demo'), { recursive: true });
+          writeFileSync(
+            join(request.cwd, 'node_modules', 'hdsl-plugin-demo', 'package.json'),
+            JSON.stringify({ name: 'hdsl-plugin-demo', version: '1.0.0', scripts: JSON.parse(MANIFEST).scripts }),
+          );
+        }
+        return { ok: true, value: { executor: EXECUTOR, exitCode: 0, stdout: '', stderr: '', executedInstallScripts: [] } };
+      },
+    };
+    const probe = build(null);
+    const authorization = authorizationFor(probe.plan, [DEPENDENCY_SCRIPT]);
+    const harnessed = build(authorization, flaky);
+
+    const first = harnessed.command('req-first');
+    if (!first.ok) return;
+    const firstSnapshot = await waitTerminal(harnessed.operations, first.value.operationId);
+    expect(firstSnapshot.status).toBe('failed');
+    expect(firstSnapshot.error?.code).toBe('NETWORK_UNAVAILABLE');
+    // Pre-commit failure: old generation, revision and plan are untouched and the
+    // staged generation directory is removed (no orphan generation left behind).
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBeNull();
+    const generationsDirectory = join(harnessed.layout.environments, ENVIRONMENT_ID, 'generations');
+    const remaining = existsSync(generationsDirectory) ? readdirSync(generationsDirectory) : [];
+    expect(remaining).toEqual([OLD_GENERATION]);
+
+    // The plan is unconsumed and the failure was retryable: a NEW requestId retries.
+    const second = harnessed.command('req-second');
+    if (!second.ok) return;
+    const secondSnapshot = await waitTerminal(harnessed.operations, second.value.operationId);
+    expect(secondSnapshot.status).toBe('succeeded');
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
   });
 });
