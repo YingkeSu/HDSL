@@ -34,7 +34,14 @@ import { newOperationId, newPlanId } from './ids.js';
 import { generationPaths } from './layout.js';
 import { writeTargetProfileCache } from './target-profile-cache.js';
 import { ChangePlanStore } from './change-plan-store.js';
+import {
+  deriveRemovalContext,
+  readRemovalRuntimeIdentity,
+  type PluginRemovalPort,
+  type RemovalInstalledLock,
+} from './plugin-removal.js';
 import { isTerminalStatus, OperationStore, toOperationSnapshot } from './operation-store.js';
+import { tryReadJsonFile } from './fsx.js';
 import type { AppDataLayout } from './layout.js';
 
 /** Read-only resolution of one plugin source into plan inputs. */
@@ -93,6 +100,8 @@ export interface PreviewChangeCommand {
 export interface ChangePreviewServiceOptions {
   readonly layout: AppDataLayout;
   readonly port: PluginPreviewPort;
+  /** Removal adapter (S3): required for `action.kind === 'remove'` previews. */
+  readonly removalPort?: PluginRemovalPort;
   readonly findEnvironment: (environmentId: string) => EnvironmentSummary | undefined;
   readonly now?: () => Date;
   /** Plan validity window; default 15 minutes. */
@@ -106,6 +115,7 @@ export class ChangePreviewService {
   readonly #plans: ChangePlanStore;
   readonly #operations: OperationStore;
   readonly #port: PluginPreviewPort;
+  readonly #removalPort: PluginRemovalPort | undefined;
   readonly #findEnvironment: (environmentId: string) => EnvironmentSummary | undefined;
   readonly #now: () => Date;
   readonly #ttlMs: number;
@@ -116,6 +126,7 @@ export class ChangePreviewService {
     this.#plans = new ChangePlanStore(options.layout);
     this.#operations = new OperationStore(options.layout);
     this.#port = options.port;
+    this.#removalPort = options.removalPort;
     this.#findEnvironment = options.findEnvironment;
     this.#now = options.now ?? (() => new Date());
     this.#ttlMs = options.ttlMs ?? CHANGE_PLAN_DEFAULT_TTL_MS;
@@ -228,7 +239,8 @@ export class ChangePreviewService {
     command: PreviewChangeCommand,
     signal: AbortSignal,
   ): Promise<void> {
-    if (command.action.kind !== 'install') {
+    if (command.action.kind === 'remove') {
+      await this.#runRemoval(operationId, command, signal);
       return;
     }
     // The target profile is resolved from the CURRENT generation's immutable
@@ -309,5 +321,162 @@ export class ChangePreviewService {
         : { retryAfterSeconds: outcome.retryAfterSeconds },
     );
     this.#operations.update(record, { status: 'failed', phase: 'failed', error }, now.toISOString());
+  }
+
+  /**
+   * S3 remove preview: resolves removals/retention/blockers from the ACTIVE
+   * generation (ADR 0005 D15/D21) and binds the pruned target profile to the plan
+   * through the target-profile cache. Builtin targets fail closed; a blocked
+   * resolution still produces a plan so the UI can explain it, but nothing is
+   * cached and the plan is never applyable.
+   */
+  async #runRemoval(
+    operationId: string,
+    command: PreviewChangeCommand,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const fail = (code: Parameters<typeof contractErrorForCode>[0]): void => {
+      const record = this.#operations.read(operationId);
+      if (record !== undefined && !isTerminalStatus(record.status)) {
+        this.#operations.update(record, { status: 'failed', phase: 'failed', error: contractErrorForCode(code, {}) }, this.#now().toISOString());
+      }
+      this.#controllers.delete(operationId);
+    };
+    if (command.action.kind !== 'remove') {
+      return;
+    }
+    if (this.#removalPort === undefined) {
+      fail('INTERNAL_ERROR');
+      return;
+    }
+    const environment = this.#findEnvironment(command.environmentId);
+    const context = deriveRemovalContext({
+      layout: this.#layout,
+      environment: environment === undefined ? undefined : { id: environment.id, activeGenerationId: environment.activeGenerationId },
+      stagingKey: operationId,
+    });
+    if (!context.ok) {
+      fail(context.code);
+      return;
+    }
+    const paths = generationPaths(this.#layout, command.environmentId, context.value.generationId);
+    const readJson = (path: string): unknown => tryReadJsonFile<unknown>(path);
+    const lock = readJson(paths.lockPath);
+    const lockRecord = typeof lock === 'object' && lock !== null ? (lock as Record<string, unknown>) : undefined;
+    const rawPlugins = lockRecord?.['plugins'];
+    const installed: RemovalInstalledLock[] = Array.isArray(rawPlugins)
+      ? rawPlugins.flatMap((entry) => {
+          const record = typeof entry === 'object' && entry !== null ? (entry as Record<string, unknown>) : undefined;
+          const id = record?.['id'];
+          const version = record?.['version'];
+          const sha256 = record?.['sha256'];
+          return typeof id === 'string' && typeof version === 'string' && typeof sha256 === 'string'
+            ? [{ id, version, sha256 }]
+            : [];
+        })
+      : [];
+    if (installed.length === 0) {
+      fail('NOT_FOUND');
+      return;
+    }
+    const declaration = readJson(join(context.value.declarationDirectory, 'package.json'));
+    const declarationRecord = typeof declaration === 'object' && declaration !== null ? (declaration as Record<string, unknown>) : undefined;
+    const dsh = declarationRecord !== undefined && typeof declarationRecord['dsh'] === 'object' && declarationRecord['dsh'] !== null
+      ? (declarationRecord['dsh'] as Record<string, unknown>)
+      : undefined;
+    const profile = dsh !== undefined && typeof dsh['profile'] === 'object' && dsh['profile'] !== null
+      ? (dsh['profile'] as Record<string, unknown>)
+      : undefined;
+    const enabledBundles = profile !== undefined && Array.isArray(profile['bundles'])
+      ? profile['bundles'].filter((entry): entry is string => typeof entry === 'string')
+      : [];
+    const identity = readRemovalRuntimeIdentity({
+      installManifestPath: paths.manifestPath,
+      dshDirectory: context.value.dshDirectory,
+      readJson,
+    });
+    if (!identity.ok) {
+      fail(identity.code);
+      return;
+    }
+    const sources = lockRecord !== undefined && typeof lockRecord['pluginSources'] === 'object' && lockRecord['pluginSources'] !== null
+      ? (lockRecord['pluginSources'] as Record<string, unknown>)
+      : undefined;
+    const sourceEntry = sources === undefined ? undefined : sources[command.action.pluginId];
+    const sourceRecord = typeof sourceEntry === 'object' && sourceEntry !== null ? (sourceEntry as Record<string, unknown>) : undefined;
+    const commitSha = sourceRecord !== undefined && typeof sourceRecord['commitSha'] === 'string' ? sourceRecord['commitSha'] : null;
+
+    let outcome;
+    try {
+      outcome = await this.#removalPort.resolveRemoval(
+        {
+          pluginId: command.action.pluginId,
+          expectedCommitSha: commitSha,
+          expectedManifestSha256: null,
+          declarationDirectory: context.value.declarationDirectory,
+          publishedProfileDirectory: context.value.publishedProfileDirectory,
+          homeDirectory: context.value.homeDirectory,
+          dshDirectory: context.value.dshDirectory,
+          nodeExecutable: context.value.nodeExecutable,
+          stagingDirectory: context.value.stagingDirectory,
+          installed,
+          enabledBundles,
+          runtime: identity.value,
+        },
+        signal,
+      );
+    } catch {
+      outcome = portFail('INTERNAL_ERROR', 'the removal resolution threw');
+    }
+    this.#controllers.delete(operationId);
+    const record = this.#operations.read(operationId);
+    if (record === undefined || isTerminalStatus(record.status)) {
+      return;
+    }
+    const now = this.#now();
+    if (!outcome.ok) {
+      this.#operations.update(record, { status: 'failed', phase: 'failed', error: contractErrorForCode(outcome.code, {}) }, now.toISOString());
+      return;
+    }
+    const resolution = outcome.value;
+    if (resolution.blockingReferences.some((reference) => reference.detail.includes('in-box bundle'))) {
+      this.#operations.update(
+        record,
+        { status: 'failed', phase: 'failed', error: contractErrorForCode('BUILTIN_BUNDLE_PROTECTED', {}) },
+        now.toISOString(),
+      );
+      return;
+    }
+    const plan: ChangePlan = {
+      planId: newPlanId(),
+      environmentId: command.environmentId,
+      baseRevision: command.expectedRevision,
+      action: command.action,
+      createdAt: now.toISOString(),
+      expiresAt: new Date(now.getTime() + this.#ttlMs).toISOString(),
+      sourceLock: null,
+      scriptAssessment: 'none-detected',
+      scripts: [],
+      requiresBuildAuthorization: false,
+      riskItems: [...resolution.riskItems],
+      removals: [...resolution.removals],
+      retention: [...resolution.retention],
+      blockingReferences: [...resolution.blockingReferences],
+      executor: null,
+      planInputsDigest: resolution.targetDeclarationSha256,
+    };
+    if (resolution.blockingReferences.length === 0) {
+      const cached = writeTargetProfileCache(this.#layout, plan.planId, {
+        lockText: resolution.targetLockText,
+        declarationText: resolution.targetDeclarationText,
+        workspaceText: resolution.targetWorkspaceText,
+      });
+      if (!cached.ok) {
+        this.#operations.update(record, { status: 'failed', phase: 'failed', error: contractErrorForCode(cached.code, {}) }, now.toISOString());
+        return;
+      }
+    }
+    this.#plans.write({ schemaVersion: '1', plan, consumedBy: null });
+    this.#operations.update(record, { status: 'succeeded', phase: 'finished', output: plan }, now.toISOString());
   }
 }
