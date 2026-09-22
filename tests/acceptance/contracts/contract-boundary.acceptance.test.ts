@@ -82,6 +82,7 @@ const harness = (
     listGenerations: base.listGenerations.bind(base),
     previewChange: base.previewChange.bind(base),
     applyChange: base.applyChange.bind(base),
+    restoreGeneration: base.restoreGeneration.bind(base),
     findEnvironment: base.findEnvironment.bind(base),
     findOperation: base.findOperation.bind(base),
     findCombination: base.findCombination.bind(base),

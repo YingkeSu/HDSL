@@ -34,6 +34,8 @@ const actions: RendererActions = {
     previewPluginChange: () => undefined,
     applyPluginChange: () => undefined,
     cancelInstallOperation: () => undefined,
+    loadGenerations: () => undefined,
+    restoreGeneration: () => undefined,
 };
 
 const state = (patch: Partial<RendererState>): RendererState => ({ ...INITIAL_STATE, ...patch });

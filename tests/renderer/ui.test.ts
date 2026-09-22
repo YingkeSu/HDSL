@@ -39,6 +39,8 @@ const noopActions: RendererActions = {
     previewPluginChange: () => undefined,
     applyPluginChange: () => undefined,
     cancelInstallOperation: () => undefined,
+    loadGenerations: () => undefined,
+    restoreGeneration: () => undefined,
 };
 
 const environment = (

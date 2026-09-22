@@ -35,6 +35,7 @@ import {
   type PortOutcome,
 } from '@hdsl/contracts';
 import { join } from 'node:path';
+import type { RestoreGenerationCommand } from '@hdsl/contracts';
 import { ChangePlanStore } from './change-plan-store.js';
 import { EnvironmentStore, type EnvironmentRecord } from './environment-store.js';
 import { OperationStore, isTerminalStatus, toOperationSnapshot } from './operation-store.js';
@@ -242,6 +243,105 @@ export class ChangeApplyService {
     const controller = new AbortController();
     this.#controllers.set(operationId, controller);
     void this.#run(command, guarded.value, { operationId, generationId, transactionId }, controller.signal);
+    return portOk({ operationId });
+  }
+
+  /**
+   * Restores a previous generation as the active one (ADR 0005 D4/D10).
+   *
+   * Pointer-only: the target generation's recorded composition identity is
+   * authoritative, the shared environment home/data are untouched, no retained
+   * generation is deleted, and no live profile identity is rebuilt. The target
+   * runtime identity is verified and its managed profile is (re)published from
+   * the immutable declaration source BEFORE the pointer switch; any failure is
+   * controlled and leaves the current generation active.
+   */
+  restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.read(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    if (
+      environment.state === 'starting' ||
+      environment.state === 'running' ||
+      environment.state === 'stopping'
+    ) {
+      return portFail('ENVIRONMENT_BUSY', 'the environment is running or changing');
+    }
+    const paths = generationPaths(this.#layout, command.environmentId, command.targetGenerationId);
+    const record = tryReadJsonFile<{ id?: string; compositionDigest?: string; profileName?: string; createdAt?: string }>(
+      paths.generationRecordPath,
+    );
+    if (record === undefined || typeof record.compositionDigest !== 'string') {
+      return portFail('NOT_FOUND', 'the target generation was not found');
+    }
+    if (tryReadJsonFile(paths.manifestPath) === undefined) {
+      return portFail('NOT_FOUND', 'the target generation has no install manifest');
+    }
+    if (
+      this.#verifyGenerationRuntime !== undefined &&
+      !this.#verifyGenerationRuntime({
+        manifestPath: paths.manifestPath,
+        nodeDirectory: paths.nodeDirectory,
+        dshDirectory: paths.dshDirectory,
+      })
+    ) {
+      return portFail('INTERNAL_ERROR', 'the target generation runtime did not match its recorded identity');
+    }
+    // Re-publish the managed profile from the IMMUTABLE declaration source; never
+    // from the live profile. A missing/mismatching source fails closed.
+    try {
+      publishGenerationProfile({
+        layout: this.#layout,
+        environmentId: command.environmentId,
+        generationId: command.targetGenerationId,
+        transactionId: `restore-${command.requestId}`,
+        stagedDirectory: join(paths.generationDirectory, 'profile'),
+      });
+    } catch (error) {
+      return portFail(
+        'INTERNAL_ERROR',
+        error instanceof Error ? error.message : 'the target generation profile could not be published',
+      );
+    }
+    const operationId = newOperationId();
+    this.#operations.create({
+      id: operationId,
+      kind: 'restore',
+      environmentId: command.environmentId,
+      phase: 'switching',
+      status: 'running',
+      createdAt: this.#now().toISOString(),
+    });
+    this.#environments.write({
+      ...environment,
+      activeGenerationId: command.targetGenerationId,
+      revision: environment.revision + 1,
+      compositionDigest: record.compositionDigest,
+      updatedAt: this.#now().toISOString(),
+    });
+    const created = this.#operations.read(operationId);
+    if (created !== undefined) {
+      this.#operations.update(
+        created,
+        {
+          status: 'succeeded',
+          phase: 'finished',
+          output: {
+            generationId: command.targetGenerationId,
+            environmentId: command.environmentId,
+            compositionDigest: record.compositionDigest,
+            profileName: typeof record.profileName === 'string' ? record.profileName : managedProfileName(command.targetGenerationId),
+            active: true,
+            createdAt: record.createdAt ?? this.#now().toISOString(),
+          },
+        },
+        this.#now().toISOString(),
+      );
+    }
     return portOk({ operationId });
   }
 

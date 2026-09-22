@@ -171,6 +171,39 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
           重启环境后生效。
         </p>
       )}
+      <div className="plugin-generations">
+        <h3>代际</h3>
+        <button type="button" onClick={() => { actions.loadGenerations(); }} disabled={environment === null || state.commandPending}>
+          加载代际列表
+        </button>
+        {state.generations.length === 0 ? (
+          <p className="muted">尚无代际列表数据。</p>
+        ) : (
+          <ul>
+            {state.generations.map((generation) => (
+              <li key={generation.generationId}>
+                代际 {generation.generationId}
+                {generation.active ? '（活动）' : ''}
+                {' '}
+                <code>{generation.compositionDigest.slice(0, 12)}…</code>
+                {!generation.active && (
+                  <button
+                    type="button"
+                    onClick={() => { actions.restoreGeneration(generation.generationId); }}
+                    disabled={state.commandPending}
+                  >
+                    恢复此代际
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+        <p className="muted">
+          恢复只切换活动代际指针：共享的 home/data（会话、存储、凭据产物）与其它代际目录不会被删除或回滚；运行中的环境拒绝恢复。
+        </p>
+      </div>
+
       {state.actionError !== null && (
         <p role="alert">{errorHint(state.actionError)}（{state.actionError.code}）</p>
       )}

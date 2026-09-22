@@ -15,6 +15,7 @@ import {
   DEFAULT_PLUGIN_QUERY,
   type ChangeApplication,
   type ChangePlan,
+  type GenerationSummary,
   type ContractError,
   type EnvironmentSummary,
   type ExportResult,
@@ -102,6 +103,8 @@ export interface RendererState {
   readonly changePlan: ChangePlan | null;
   /** Terminal `changes.apply` result, or null. */
   readonly changeApplication: ChangeApplication | null;
+  /** Read-only `generations.list` result for the selected environment. */
+  readonly generations: readonly GenerationSummary[];
 }
 
 /**
@@ -135,8 +138,12 @@ export interface RendererActions {
   previewPluginChange(): void;
   /** Starts `changes.apply` for the current plan. */
   applyPluginChange(): void;
-  /** Cancels an in-flight preview/apply; terminal operations are untouched. */
+  /** Cancels an in-flight preview/apply/restore; terminal operations are untouched. */
   cancelInstallOperation(): void;
+  /** Loads `generations.list` for the selected environment. */
+  loadGenerations(): void;
+  /** Restores a previous generation as active (`generations.restore`). */
+  restoreGeneration(generationId: string): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -165,6 +172,7 @@ export const INITIAL_STATE: RendererState = {
   installSource: { owner: '', name: '', ref: '' },
   changePlan: null,
   changeApplication: null,
+  generations: [],
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */

@@ -45,6 +45,7 @@ import {
   changeApplicationSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
+  generationSummarySchema,
   exportResultSchema,
   openWebUIResultSchema,
   operationRefSchema,
@@ -156,6 +157,7 @@ const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> 
   inspect: pluginInspectionSchema,
   preview: changePlanSchema,
   apply: changeApplicationSchema,
+  restore: generationSummarySchema,
 };
 
 /**
@@ -297,6 +299,20 @@ const execute = (
         expectedRevision: typed.expectedRevision,
         planId: typed.planId,
         buildAuthorization: typed.buildAuthorization ?? null,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      publishIfKnown(runtime, outcome.value.operationId);
+      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+    }
+    case 'generations.restore': {
+      const typed = input as MethodInputs['generations.restore'];
+      const outcome = runtime.port.restoreGeneration({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        targetGenerationId: typed.targetGenerationId,
       });
       if (!outcome.ok) {
         return executedFailure(outcome);

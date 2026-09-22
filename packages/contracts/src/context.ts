@@ -148,6 +148,13 @@ export interface ApplyChangeCommand {
   readonly buildAuthorization: BuildAuthorization | null;
 }
 
+export interface RestoreGenerationCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly targetGenerationId: string;
+}
+
 export interface ContractPort {
   readonly host: HostPlatform;
 
@@ -194,6 +201,14 @@ export interface ContractPort {
    * live profile (ADR 0006).
    */
   listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]>;
+
+  /**
+   * Restores a previous generation as the active one (ADR 0005 D4/D10). This
+   * switches the pointer only: the generation's composition identity and the
+   * shared environment home/data are preserved and no retained generation is
+   * deleted.
+   */
+  restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef>;
 
   /** Subscription bookkeeping the contract delegates to the session registry. */
   readIdempotency(requestId: string): IdempotencyRecord | undefined;

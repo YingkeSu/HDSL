@@ -21,6 +21,7 @@ import {
   type OperationSnapshot,
   type PreviewChangeCommand,
   type ApplyChangeCommand,
+  type RestoreGenerationCommand,
   type PortOutcome,
   type RevisionCommand,
   type RuntimeCombination,
@@ -87,6 +88,12 @@ export const createEnvironmentContractPort = (
       return changeApply === undefined
         ? portFail('INTERNAL_ERROR', 'the change apply transaction is not wired')
         : changeApply.applyChange(command);
+    },
+
+    restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef> {
+      return changeApply === undefined
+        ? portFail('INTERNAL_ERROR', 'the generation restore transaction is not wired')
+        : changeApply.restoreGeneration(command);
     },
 
     findEnvironment(environmentId: string): PortOutcome<EnvironmentSummary> {

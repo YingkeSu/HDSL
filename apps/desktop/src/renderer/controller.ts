@@ -51,6 +51,8 @@ import {
   pluginInspectionSchema,
   changePlanSchema,
   changeApplicationSchema,
+  generationSummaryListSchema,
+  generationSummarySchema,
   pluginSearchResultSchema,
   REQUEST_ID_PATTERN,
   runtimeCombinationListSchema,
@@ -505,6 +507,39 @@ export class RendererController implements RendererActions {
     });
   }
 
+  /** Loads the generation list for the selected environment (read-only). */
+  async loadGenerations(): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      const result = await this.#call('generations.list', { environmentId: environment.id }, generationSummaryListSchema);
+      if (this.#disposed) return;
+      if (!result.ok) { this.#update({ actionError: result.error }); return; }
+      this.#update({ actionError: null, generations: result.value });
+    });
+  }
+
+  /** Restores a previous generation (pointer-only transaction). */
+  async restoreGeneration(generationId: string): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) { this.#update({ actionError: contractErrorForCode('INVALID_INPUT') }); return; }
+      this.#update({ actionError: null, notice: null });
+      const result = await this.#call('generations.restore', {
+        requestId: this.#newRequestId(),
+        environmentId: environment.id,
+        expectedRevision: environment.revision,
+        targetGenerationId: generationId,
+      }, operationRefSchema);
+      if (this.#disposed) return;
+      if (!result.ok) { this.#update({ actionError: result.error }); return; }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
   /** Cancels an in-flight preview/apply only; terminal operations are unchanged. */
   async cancelInstallOperation(): Promise<void> {
     const tracked = this.#state.trackedOperation;
@@ -854,6 +889,16 @@ export class RendererController implements RendererActions {
         return;
       }
       this.#update({ changePlan: parsed });
+      return;
+    }
+    if (tracked.kind === 'restore') {
+      const issues: ValidationIssue[] = [];
+      const parsed = generationSummarySchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ notice: `已恢复到代际 ${parsed.generationId}；重启环境后生效。` });
       return;
     }
     if (tracked.kind === 'apply') {

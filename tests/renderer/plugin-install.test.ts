@@ -55,3 +55,29 @@ describe('RendererController plugin install', () => {
     await controller.dispose();
   });
 });
+
+describe('RendererController generation restore', () => {
+  it('loads the generation list and issues a pointer-only restore for a non-active generation', async () => {
+    const { client, calls } = createTestRendererClient();
+    const controller = new RendererController({ client });
+    await controller.load();
+    const stopped = controller.getState().environments.find((environment) => environment.state === 'stopped');
+    if (stopped === undefined) {
+      return;
+    }
+    controller.selectEnvironment(stopped.id);
+    await controller.loadGenerations();
+    await flush();
+    const listCall = calls.find((call) => call.method === 'generations.list');
+    expect(listCall?.input).toMatchObject({ environmentId: stopped.id });
+
+    await controller.restoreGeneration('gen-0000000000000002');
+    await flush();
+    const restoreCall = calls.find((call) => call.method === 'generations.restore');
+    expect(restoreCall?.input).toMatchObject({
+      environmentId: stopped.id,
+      targetGenerationId: 'gen-0000000000000002',
+    });
+    await controller.dispose();
+  });
+});

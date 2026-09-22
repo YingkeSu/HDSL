@@ -9,6 +9,7 @@
 import {
   catalogCombinationIdSchema,
   environmentIdSchema,
+  generationIdSchema,
   nameSchema,
   operationIdSchema,
   planIdSchema,
@@ -45,6 +46,7 @@ export const CONTRACT_METHODS = [
   'changes.apply',
   // 1.1 read-only generation read (ADR 0005 D4).
   'generations.list',
+  'generations.restore',
 ] as const;
 
 export type ContractMethod = (typeof CONTRACT_METHODS)[number];
@@ -119,6 +121,12 @@ export const methodInputSchemas = {
   'generations.list': sObject({
     environmentId: environmentIdSchema,
   }),
+  'generations.restore': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    targetGenerationId: generationIdSchema,
+  }),
 } satisfies Record<ContractMethod, Schema<unknown>>;
 
 export type MethodInputs = {
@@ -164,6 +172,7 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'changes.preview': define('changes.preview', { readOnly: false, idempotent: true }),
   'changes.apply': define('changes.apply', { readOnly: false, idempotent: true }),
   'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
+  'generations.restore': define('generations.restore', { readOnly: false, idempotent: true }),
 };
 
 export const validateMethodInput = <M extends ContractMethod>(

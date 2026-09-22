@@ -1142,6 +1142,32 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     }),
     expected: 'INVALID_INPUT',
   },
+  // generations.restore (environment-scoped pointer transaction)
+  {
+    id: 'generations-restore-legal',
+    method: 'generations.restore',
+    kind: 'legal',
+    description: 'restores a previous generation at the environment revision',
+    request: request('generations.restore', {
+      requestId: 'req-restore-legal',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      targetGenerationId: 'gen-0000000000000001',
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'generations-restore-missing-target',
+    method: 'generations.restore',
+    kind: 'illegal',
+    description: 'a restore without a target generation is rejected',
+    request: request('generations.restore', {
+      requestId: 'req-restore-bad',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+    }),
+    expected: 'INVALID_INPUT',
+  },
 
 ];
 

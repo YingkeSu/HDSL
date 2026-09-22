@@ -114,7 +114,23 @@ try {
     for (let i = 0; i < 50 && !existsSync(marker); i += 1) await new Promise((r) => setTimeout(r, 200));
     log(`apply marker exists=${String(existsSync(marker))}`);
     if (!existsSync(marker)) { log('RESULT: FAIL at marker'); }
-    else { log('RESULT: PASS — real apply committed and the controlled fixture marker appeared on start'); }
+    else {
+      log('RESULT: PASS — real apply committed and the controlled fixture marker appeared on start');
+      // E9-side observation (NOT an equivalence proof): compare the offline
+      // dump-config composition with the runtime marker. The marker proves the
+      // plugin was LOADED at runtime; dump-config is a separate config path and
+      // its equality with the full runtime loaded set remains OPEN (E9).
+      const { spawnSync } = await import('node:child_process');
+      const genPaths = generationPaths(layout, environment.id, newGen);
+      const dump = spawnSync(
+        join(genPaths.generationDirectory, 'node', 'bin', 'node'),
+        [join(genPaths.generationDirectory, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '--profile', `hdsl-${newGen}`, '--dump-config'],
+        { cwd: genPaths.generationDirectory, env: { HOME: environmentPaths(layout, environment.id).homeDirectory, DSH_HOME: environmentPaths(layout, environment.id).homeDirectory, TMPDIR: join(environmentPaths(layout, environment.id).homeDirectory, '.tmp'), PATH: '/usr/bin:/bin' }, encoding: 'utf8', maxBuffer: 32 * 1024 * 1024 },
+      );
+      const dumpMentionsFixture = typeof dump.stdout === 'string' && dump.stdout.includes('hdsl-plugin-e2e-fixture');
+      log(`E9 observation: runtime apply marker=true; offline dump-config exit=${String(dump.status)} mentionsFixtureBundle=${String(dumpMentionsFixture)}`);
+      log('E9 note: dump-config path is separate from the runtime loaded set; equivalence remains OPEN (not claimed).');
+    }
   }
 } catch (error) {
   console.error(`RESULT: FAIL — ${error instanceof Error ? error.message : String(error)}`);

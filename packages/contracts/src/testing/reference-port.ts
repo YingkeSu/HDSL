@@ -18,6 +18,7 @@ import type {
   ApplyChangeCommand,
   PluginInspectCommand,
   PreviewChangeCommand,
+  RestoreGenerationCommand,
   PluginSearchCommand,
   PortOutcome,
   RevisionCommand,
@@ -116,6 +117,29 @@ export class ReferenceContractPort implements ContractPort {
 
   listGenerations(_environmentId: string): PortOutcome<readonly GenerationSummary[]> {
     return portOk([]);
+  }
+
+  restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    const operation = this.#recordPluginOperation('restore', {
+      status: 'succeeded',
+      output: {
+        generationId: command.targetGenerationId,
+        environmentId: command.environmentId,
+        compositionDigest: 'a'.repeat(64),
+        profileName: null,
+        active: true,
+        createdAt: '2026-09-20T00:00:00.000Z',
+      },
+    });
+    this.effects.push(`restoreGeneration:${operation.id}`);
+    return portOk({ operationId: operation.id });
   }
 
   findEnvironment(environmentId: string): PortOutcome<EnvironmentSummary> {
@@ -374,7 +398,7 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect' | 'preview' | 'apply',
+    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;

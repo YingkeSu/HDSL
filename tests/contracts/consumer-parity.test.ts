@@ -42,6 +42,7 @@ describe('renderer/main/preload consume the same contract', () => {
       'changes.preview',
       'changes.apply',
       'generations.list',
+      'generations.restore',
     ]);
   });
 

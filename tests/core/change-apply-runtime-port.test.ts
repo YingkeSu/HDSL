@@ -333,3 +333,17 @@ describe('changes.apply through the runtime apply port', () => {
     expect(unverified.runCalls).toHaveLength(0);
   });
 });
+
+describe('default-deny install boundary (AC4)', () => {
+  it('always passes --ignore-scripts and never an allow/authorization switch', async () => {
+    const { operations, service, runCalls } = build({ verify: () => true });
+    const started = service.applyChange(command());
+    if (!started.ok) return;
+    await waitTerminal(operations, started.value.operationId);
+    expect(runCalls[0]?.args).toContain('--ignore-scripts');
+    // No global build allowlist / authorization switch is ever generated.
+    expect(runCalls[0]?.args).not.toContain('--allow-build');
+    expect(runCalls[0]?.args).not.toContain('allowBuilds');
+    expect(runCalls[0]?.args.join(' ')).not.toContain('--config.ignore-scripts=false');
+  });
+});
