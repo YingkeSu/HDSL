@@ -47,6 +47,25 @@ RESULT: PASS — real npm-ci install -> profile publish -> managed --profile sta
 
 **不能证明 / 边界**：同环境双代变更与 `restore`（依赖 `changes.apply`）；E10b 生产接线/双代端到端；E9（`--dump-config` 静态性——本探针只在 profileInit 初始化时使用它，不声称零 bundle 执行）；E1；真实桌面/Windows；S2 预览/下载/UI、S3/S4。
 
+## AC4 默认拒执行：生产边界外部负控（opt-in）
+
+固定版本：受管 pnpm `11.7.0`（`PNPM_EXECUTOR_SPEC`：url `https://registry.npmjs.org/pnpm/-/pnpm-11.7.0.tgz`、sha512 `sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、sha256 `deafa7ec…`、entry/tree 摘要随 spec）；受管 node 22.19.0（sha256 `c59006db…`）。观察量是**外部 marker 文件**，不是执行器自报的 `executedInstallScripts`。
+
+```sh
+HDSL_AC4_NEGATIVE=1 HDSL_AC4_NODE=<managed node>/bin/node HDSL_AC4_PNPM_EXTRACT=<frozen pnpm extract> HDSL_AC4_PNPM_TGZ=<pnpm-11.7.0.tgz> node scripts/research/a2-ac4-production-negative-control-probe.mjs
+```
+
+| 栏 | 生产边界 | 断言（失败即非零退出） |
+| --- | --- | --- |
+| A 根脚本 | `createPluginApplyPort().stage` | `BUILD_NOT_AUTHORIZED`、marker=0、未进入 executor |
+| E 闭包未枚举 | `createPluginApplyPort().stage` | `BUILD_NOT_AUTHORIZED`、marker=0、未安装 |
+| B 传递依赖闭包 | `createManagedPnpmExecutor().run`（`install --ignore-scripts`） | exit=0、marker=0、传递依赖确实存在 |
+| C0 target-profile 锁解析 | 同上 | exit=0、marker=0、依赖存在 |
+| C apply 边界 | `createPluginApplyPort().stage`（`--frozen-lockfile --ignore-scripts`） | `OK`、marker=0、依赖存在 |
+| D 隔离正控（仅 test） | 同上 executor + `--ignore-scripts=false` + 精确 `allowBuilds` | marker≥4（证明哨兵非空） |
+
+边界说明：D 是**测试隔离**的显式 allow，**不是** S4 授权，生产路径从不生成；本验证**不**声称对任意第三方代码的通用运行期监控，也不以目录一致性替代。默认 CI 侧只断言拒绝策略（`tests/plugins/apply-port-refusal.test.ts`），执行级 marker 证据由本 opt-in 入口提供。
+
 ## provenance 与摘要
 
 - 发布时把 `{generationId, profileName, digest, transactionId}` 原子写入临时 profile 的 `.hdsl-profile.json`，rename 后校验；仅供未来 journal 键控 GC 归属，**不授权任何删除**，也不是安全证明。

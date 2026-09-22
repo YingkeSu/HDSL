@@ -327,16 +327,9 @@ export class ChangeApplyService {
     const transactionId = newTransactionId();
     const operationId = newOperationId();
     const createdAt = this.#now().toISOString();
-    this.#operations.create({
-      id: operationId,
-      kind: 'restore',
-      environmentId: command.environmentId,
-      phase: 'switching',
-      status: 'running',
-      createdAt,
-    });
-    // Durable journal BEFORE the pointer switch: a crash after the switch is
-    // reconciled as finalize (pointer authoritative); a crash before it leaves
+    // Durable journal FIRST (before the operation record and the pointer write):
+    // any crash after this point is reconciled by recover(); a crash after the
+    // switch is finalize (pointer authoritative), before it is a discard with
     // nothing to roll back (restore has no staging).
     writeJsonAtomic(applyJournalRecordPath(this.#layout, transactionId), {
       schemaVersion: '1',
@@ -352,6 +345,14 @@ export class ChangeApplyService {
       createdAt,
       updatedAt: createdAt,
     } satisfies ApplyJournalRecord);
+    this.#operations.create({
+      id: operationId,
+      kind: 'restore',
+      environmentId: command.environmentId,
+      phase: 'switching',
+      status: 'running',
+      createdAt,
+    });
     this.#environments.write({
       ...environment,
       activeGenerationId: command.targetGenerationId,
@@ -427,6 +428,23 @@ export class ChangeApplyService {
         continue;
       }
       this.#rollback(journal, 'INTERNAL_ERROR', 'apply was interrupted before the generation was committed');
+      rolledBack += 1;
+    }
+    // Orphan reconciliation: a `restore` operation left non-terminal with no
+    // journal (crash between the operation record and the journal, or a partial
+    // write) would otherwise keep the same requestId stuck in progress forever.
+    // The pointer is a single atomic write and stays self-consistent, so the
+    // only safe action is to fail the orphaned operation controllably.
+    const journalOperationIds = new Set(this.#listJournals().map((journal) => journal.operationId));
+    for (const record of this.#operations.list()) {
+      if (record.kind !== 'restore' || isTerminalStatus(record.status) || journalOperationIds.has(record.id)) {
+        continue;
+      }
+      this.#operations.update(
+        record,
+        { status: 'failed', phase: 'failed', error: contractError('INTERNAL_ERROR', 'the restore was interrupted before it could be committed', { operationId: record.id }) },
+        this.#now().toISOString(),
+      );
       rolledBack += 1;
     }
     return { finalized, rolledBack };
@@ -567,18 +585,28 @@ export class ChangeApplyService {
         profileDigest: published.fingerprint,
       });
 
+      // COMMIT POINT re-validation: staging is asynchronous, so another
+      // transaction (e.g. a restore) may have moved the pointer meanwhile.
+      // Last-writer-wins would silently discard it; instead refuse before the
+      // pointer switch and keep the previous generation active.
       const current = this.#environments.read(command.environmentId);
-      if (current !== undefined) {
-        this.#environments.write({
-          ...current,
-          state: 'stopped',
-          stateVersion: current.stateVersion + 1,
-          revision: current.revision + 1,
-          activeGenerationId: ids.generationId,
-          compositionDigest: digest,
-          updatedAt: this.#now().toISOString(),
-        });
+      if (current === undefined) {
+        this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the environment disappeared while the change was being staged');
+        return;
       }
+      if (current.revision !== command.expectedRevision) {
+        this.#rollbackJournal(ids, 'REVISION_CONFLICT', 'the environment revision changed while the change was being staged');
+        return;
+      }
+      this.#environments.write({
+        ...current,
+        state: 'stopped',
+        stateVersion: current.stateVersion + 1,
+        revision: current.revision + 1,
+        activeGenerationId: ids.generationId,
+        compositionDigest: digest,
+        updatedAt: this.#now().toISOString(),
+      });
       writeJournal('committed', staged.value.sourceLock);
       if (this.#fault(ids.operationId, 'committed')) {
         return;

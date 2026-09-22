@@ -61,8 +61,9 @@ const plan = (overrides: Partial<ChangePlan> = {}): ChangePlan => ({
   ...overrides,
 });
 
-const stagedPort = (): PluginApplyPort => ({
+const stagedPort = (onStage?: () => void): PluginApplyPort => ({
   stage: async (command) => {
+    onStage?.();
     const profile = join(command.generationDirectory, 'profile');
     mkdirSync(profile, { recursive: true });
     writeFileSync(join(profile, 'package.json'), JSON.stringify({ name: 'dsh-profile-demo', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }));
@@ -90,7 +91,7 @@ const stagedPort = (): PluginApplyPort => ({
   },
 });
 
-const build = (options: { state?: EnvironmentRecord['state']; faults?: ChangeFaults; plan?: ChangePlan } = {}) => {
+const build = (options: { state?: EnvironmentRecord['state']; faults?: ChangeFaults; plan?: ChangePlan; port?: PluginApplyPort } = {}) => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'hdsl-apply-txn-'));
   roots.push(dataRoot);
   const layout = resolveLayout(dataRoot);
@@ -134,7 +135,7 @@ const build = (options: { state?: EnvironmentRecord['state']; faults?: ChangeFau
     environments,
     operations,
     compositionDigest: computeCompositionDigest,
-    port: stagedPort(),
+    port: options.port ?? stagedPort(),
     verifyGenerationRuntime: () => true,
     now: () => new Date('2026-09-22T00:05:00.000Z'),
     ...(options.faults === undefined ? {} : { faults: options.faults }),
@@ -157,6 +158,28 @@ const waitTerminal = async (operations: OperationStore, operationId: string) => 
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
 };
+
+describe('changes.apply commit-point revision re-validation', () => {
+  it('refuses to overwrite a concurrent pointer move and keeps the concurrent generation', async () => {
+    let store: EnvironmentStore | undefined;
+    // The port simulates a concurrent transaction (e.g. a restore) that moves the
+    // pointer and bumps the revision WHILE staging is in flight.
+    const port = stagedPort(() => {
+      const current = store!.read(ENVIRONMENT_ID)!;
+      store!.write({ ...current, revision: current.revision + 1, activeGenerationId: 'gen-0000000000000009', compositionDigest: '9'.repeat(64) });
+    });
+    const { environments, operations, service } = build({ port });
+    store = environments;
+    const started = service.applyChange(command());
+    if (!started.ok) return;
+    const snapshot = await waitTerminal(operations, started.value.operationId);
+    expect(snapshot.status).toBe('failed');
+    expect(snapshot.error?.code).toBe('REVISION_CONFLICT');
+    // The concurrent move survives: last-writer-wins is NOT applied.
+    expect(environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe('gen-0000000000000009');
+    expect(environments.read(ENVIRONMENT_ID)?.revision).toBe(4);
+  });
+});
 
 describe('changes.apply guards + transaction', () => {
   it('rejects unknown environments, revision conflicts, expired/consumed plans, busy and build-required', () => {

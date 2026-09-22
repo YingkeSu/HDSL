@@ -213,3 +213,23 @@ describe('generations.restore: mutual exclusion with apply and start', () => {
     if (!outcome.ok) expect(outcome.code).toBe('ENVIRONMENT_BUSY');
   });
 });
+
+describe('generations.restore: orphan reconciliation', () => {
+  it('fails an orphaned running restore operation so a replay is not stuck busy', () => {
+    const { operations, service } = build();
+    operations.create({
+      id: 'op-00000000000000ee',
+      kind: 'restore',
+      environmentId: ENVIRONMENT_ID,
+      phase: 'switching',
+      status: 'running',
+      createdAt: '2026-09-22T00:05:00.000Z',
+    });
+    const report = service.recover();
+    expect(report.rolledBack).toBeGreaterThanOrEqual(1);
+    expect(operations.read('op-00000000000000ee')?.status).toBe('failed');
+    // The requestId is no longer stuck: a fresh restore succeeds.
+    const outcome = service.restoreGeneration(command());
+    expect(outcome.ok).toBe(true);
+  });
+});

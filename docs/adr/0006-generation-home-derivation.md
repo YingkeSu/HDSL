@@ -90,7 +90,7 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 - 组成身份 = **staged 的声明源**（`package.json`、`pnpm-lock.yaml`、生成的 `cordis.patch.yml`）。
 - 一切 **live 派生状态**（boot 重写的 `cordis.yml`、`node_modules`、`$DSH_HOME/profiles/node_modules` 的安装回退 symlink）**不得**参与身份计算。
 - **组成锁/摘要绝不得从 live profile 重建**（否则每次 boot 摘要漂移，D13 的来源锁与旧代绑定失效）；复核只读 staged/不可变源。
-- `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile（覆盖 live 派生状态）；仅当 live 声明源与身份逐字节一致时才可复用现有 profile。
+- `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile；与实现一致的精确定义为——(1) live `hdsl-<gen>` **不存在**：从不可变声明源复制后原子发布；(2) live 存在且**声明源摘要逐字节一致**：视为已发布（幂等 no-op，不重写）；(3) live 存在但声明源**漂移**：**fail-closed 拒绝覆盖**（不破坏既有 profile，需按记录身份重建），而不是按 live 派生状态静默覆盖。组成锁/摘要始终取自不可变源，绝不从 live profile 重建。
 
 证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture；负控仅“整窗存活 + 无 marker”，**不排除存活但已加载**，空日志不是 boot 证据）；崩溃/杀进程与 E10b-4 为**原型/`raw`**（自有副本；相位为模型化、仅信号真实；E10b-4 仅限同版本不同安装路径），均非生产。
 
