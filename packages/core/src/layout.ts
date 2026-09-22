@@ -122,6 +122,8 @@ export interface EnvironmentPaths {
   /** Shared runtime data/home root for the environment (ADR 0006). */
   readonly homeDirectory: string;
   readonly dataDirectory: string;
+  /** DSH profile root shared by the environment's generations. */
+  readonly profilesDirectory: string;
   readonly migrationDirectory: string;
   readonly migrationPath: string;
 }
@@ -131,11 +133,13 @@ export const environmentPaths = (
   environmentId: string,
 ): EnvironmentPaths => {
   const environmentDirectoryPath = environmentDirectory(layout, environmentId);
+  const homeDirectory = join(environmentDirectoryPath, 'home');
   return {
     environmentId,
     environmentDirectory: environmentDirectoryPath,
-    homeDirectory: join(environmentDirectoryPath, 'home'),
+    homeDirectory,
     dataDirectory: join(environmentDirectoryPath, 'data'),
+    profilesDirectory: join(homeDirectory, 'profiles'),
     migrationDirectory: join(environmentDirectoryPath, 'migration'),
     migrationPath: join(environmentDirectoryPath, 'migration', 'home-v2.json'),
   };
