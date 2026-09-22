@@ -89,9 +89,35 @@ export interface RemovalResolution extends PluginRemovalResolution {
   readonly serviceVerification: ServiceVerificationLookup;
 }
 
+export interface RemovalApplyInput {
+  readonly pluginId: string;
+  /** Pruned declaration + lock bound by the plan (read from the plan's cache). */
+  readonly declarationText: string;
+  readonly lockText: string;
+  readonly workspaceText: string | null;
+  /** Generation directory whose `<gen>/profile` receives the pruned profile. */
+  readonly generationDirectory: string;
+  readonly homeDirectory: string;
+  readonly nodeExecutable: string;
+  /** Installed plugins WITHOUT the removed one (the retained composition). */
+  readonly retainedPlugins: readonly { readonly id: string; readonly version: string; readonly sha256: string }[];
+}
+
+export interface RemovalApplyResult {
+  readonly installed: readonly { readonly id: string; readonly version: string; readonly sha256: string }[];
+  readonly lockSha256: string;
+  readonly declarationSha256: string;
+}
+
 export interface PluginRemovalPort {
   listInstalled(input: RemovalListInput, signal: AbortSignal): Promise<PortOutcome<readonly RemovalListEntry[]>>;
   resolveRemoval(input: RemovalResolveInput, signal: AbortSignal): Promise<PortOutcome<RemovalResolution>>;
+  /**
+   * Applies the pruned profile with `--frozen-lockfile --ignore-scripts` under the
+   * managed Node, then returns the retained composition. The caller (core) owns
+   * the pointer switch, journal, revision re-validation and ledger.
+   */
+  applyRemoval(input: RemovalApplyInput, signal: AbortSignal): Promise<PortOutcome<RemovalApplyResult>>;
 }
 
 const readOptional = (path: string): string | null => {
@@ -127,6 +153,46 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
         source: input.sources?.[plugin.id] ?? null,
       })),
     );
+  },
+
+  async applyRemoval(input, signal) {
+    const profileDirectory = join(input.generationDirectory, 'profile');
+    try {
+      mkdirSync(profileDirectory, { recursive: true });
+      writeFileSync(join(profileDirectory, 'package.json'), input.declarationText, 'utf8');
+      writeFileSync(join(profileDirectory, 'pnpm-lock.yaml'), input.lockText, 'utf8');
+      if (input.workspaceText !== null) {
+        writeFileSync(join(profileDirectory, 'pnpm-workspace.yaml'), input.workspaceText, 'utf8');
+      }
+      const run = await options.executor.run(
+        {
+          cwd: profileDirectory,
+          homeDirectory: input.homeDirectory,
+          nodeExecutable: input.nodeExecutable,
+          args: ['install', '--frozen-lockfile', '--ignore-scripts'],
+          timeoutMs: REMOVAL_LOCK_TIMEOUT_MS,
+        },
+        signal,
+      );
+      if (!run.ok) {
+        return run;
+      }
+      if (run.value.exitCode !== 0) {
+        return portFail('INTERNAL_ERROR', 'the pruned profile install failed');
+      }
+      const lockAfter = readFileSync(join(profileDirectory, 'pnpm-lock.yaml'), 'utf8');
+      if (lockAfter !== input.lockText) {
+        // The install must not silently rewrite the pruned lock the plan bound.
+        return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the pruned profile lock was rewritten during install');
+      }
+      return portOk({
+        installed: input.retainedPlugins,
+        lockSha256: sha256Of(lockAfter),
+        declarationSha256: sha256Of(input.declarationText),
+      });
+    } catch {
+      return portFail('INTERNAL_ERROR', 'the pruned profile could not be installed');
+    }
   },
 
   async resolveRemoval(input, signal) {
@@ -206,10 +272,20 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
       });
     }
 
+    // The verified-install manifest digest: the installed package's own
+    // `package.json` under the (identity-checked) published profile. This avoids
+    // adding contract fields while keeping the verification binding strict.
+    let installedManifestSha256: string | null = input.expectedManifestSha256;
+    if (installedManifestSha256 === null && publishedMatches) {
+      const installedManifest = readOptional(
+        join(input.publishedProfileDirectory, 'node_modules', input.pluginId, 'package.json'),
+      );
+      installedManifestSha256 = installedManifest === null ? null : sha256Of(installedManifest);
+    }
     const serviceVerification = lookupServiceVerification({
       pluginId: input.pluginId,
       commitSha: input.expectedCommitSha,
-      manifestSha256: input.expectedManifestSha256,
+      manifestSha256: installedManifestSha256,
       runtime: input.runtime,
     });
 
