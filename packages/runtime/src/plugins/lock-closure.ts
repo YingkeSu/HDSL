@@ -111,6 +111,19 @@ export const resolveLockClosure = (lockText: string): LockClosureOutcome => {
     }
   }
 
+  const isLocalEdge = (value: string): boolean =>
+    value.includes('link:') || value.includes('workspace:') || value.includes('file:');
+
+  // A reachable local edge cannot be silently skipped: the target could be
+  // referenced through it, so the closure would be incomplete. Only verifiable
+  // semantics (resolving the edge to an importer we can keep traversing) would be
+  // supported; that is out of scope here, so it fails closed.
+  for (const seed of seeds) {
+    if (isLocalEdge(seed)) {
+      return { status: 'unsupported', reason: 'the root importer has a local dependency edge that cannot be resolved' };
+    }
+  }
+
   const reachable = new Set<string>();
   const queue = [...seeds];
   while (queue.length > 0) {
@@ -126,9 +139,9 @@ export const resolveLockClosure = (lockText: string): LockClosureOutcome => {
       return { status: 'unsupported', reason: 'the lock closure exceeds the bounded size' };
     }
     for (const edge of edges.get(identity) ?? []) {
-      // `link:`/`file:`/`workspace:` local edges are not registry instances.
-      if (edge.includes('link:') || edge.includes('workspace:') || edge.includes('file:')) {
-        continue;
+      if (isLocalEdge(edge)) {
+        // Reachable local edge: fail closed rather than report a complete closure.
+        return { status: 'unsupported', reason: 'a reachable local dependency edge cannot be resolved in this lock shape' };
       }
       queue.push(edge);
     }

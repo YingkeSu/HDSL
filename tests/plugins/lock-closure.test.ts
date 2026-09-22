@@ -69,6 +69,72 @@ describe('resolveLockClosure', () => {
     expect(closure.reachable).not.toContain('unrelated@1.0.0');
   });
 
+  it('fails closed on REACHABLE local edges and ignores unreachable ones', () => {
+    const reachableLocal = [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      b:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  b@1.0.0:',
+      '    resolution: {integrity: sha512-b}',
+      '  a@1.0.0:',
+      '    resolution: {integrity: sha512-a}',
+      'snapshots:',
+      '  b@1.0.0:',
+      '    dependencies:',
+      '      a: link:../a',
+      '  a@1.0.0: {}',
+    ].join('\n');
+    // A could be referenced through the reachable local edge => unsupported, and
+    // never a silent retained:false.
+    expect(resolveLockClosure(reachableLocal).status).toBe('unsupported');
+    expect(targetRetentionInLock(reachableLocal, 'a@1.0.0')).toMatchObject({ status: 'unsupported' });
+
+    const localSeed = [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      b:',
+      '        specifier: link:../b',
+      '        version: link:../b',
+      'packages:',
+      '  b@1.0.0: {}',
+      'snapshots:',
+      '  b@1.0.0: {}',
+    ].join('\n');
+    expect(resolveLockClosure(localSeed).status).toBe('unsupported');
+
+    // An UNREACHABLE record containing a local edge must not block.
+    const unreachableLocal = [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      b:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  b@1.0.0:',
+      '    resolution: {integrity: sha512-b}',
+      '  orphan@1.0.0:',
+      '    resolution: {integrity: sha512-o}',
+      'snapshots:',
+      '  b@1.0.0: {}',
+      '  orphan@1.0.0:',
+      '    dependencies:',
+      '      a: link:../a',
+    ].join('\n');
+    const closure = resolveLockClosure(unreachableLocal);
+    expect(closure.status).toBe('ok');
+    if (closure.status !== 'ok') return;
+    expect(closure.reachable).toEqual(['b@1.0.0']);
+  });
+
   it('fails closed on unsupported shapes instead of claiming completion', () => {
     expect(resolveLockClosure('lockfileVersion: 9.0\n').status).toBe('unsupported');
     expect(resolveLockClosure('importers:\n  .:\n    dependencies:\n      a:\n        specifier: 1\n').status).toBe('unsupported');
