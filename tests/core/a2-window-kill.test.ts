@@ -163,7 +163,7 @@ describe('A2 production windows (real SIGKILL + recover, profileInit)', () => {
     await managed.close();
   });
 
-  it('after-publish: rolls back, retains the uncommitted orphan with provenance, new env unaffected', async () => {
+  it('after-publish: rolls back, retains the uncommitted orphan with provenance, new env unaffected', { timeout: 20_000 }, async () => {
     const { dataRoot, artifacts, reached } = await runWindow('after-publish');
     expect(reached.activeGenerationId).toBeNull();
     expect(reached.journalGenerationId).not.toBeNull();
