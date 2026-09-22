@@ -119,9 +119,9 @@ describe('resolvePluginRemoval', () => {
   it('blocks a user patch / other bundle / config reference with its source', () => {
     const outcome = resolvePluginRemoval(input({
       referenceSources: [
-        { kind: 'userPatch', detail: 'home/cordis.patch.yml', text: 'plugins:\n  demo-plugin: { enabled: true }\n' },
-        { kind: 'bundle', detail: '@deepseek-ai/dsh-web-app cordis.patch.yml', text: '- demo-plugin\n' },
-        { kind: 'config', detail: 'profile pnpm-workspace.yaml', text: 'onlyBuiltDependencies:\n  - demo-plugin\n' },
+        { kind: 'userPatch', detail: 'home/cordis.patch.yml', references: ['demo-plugin'], unresolved: false },
+        { kind: 'bundle', detail: '@deepseek-ai/dsh-web-app', references: ['demo-plugin'], unresolved: false },
+        { kind: 'config', detail: 'profile patch', references: ['demo-plugin'], unresolved: false },
       ],
     }));
     expect(outcome.ok).toBe(true);
@@ -133,8 +133,8 @@ describe('resolvePluginRemoval', () => {
   it('keeps blocking-reference details bounded and path-free', () => {
     const outcome = resolvePluginRemoval(input({
       referenceSources: [
-        { kind: 'userPatch', detail: '/Users/operator/env/home/cordis.patch.yml', text: '- demo-plugin\n' },
-        { kind: 'bundle', detail: '@deepseek-ai/dsh-web-app', text: '- demo-plugin\n' },
+        { kind: 'userPatch', detail: '/Users/operator/env/home/cordis.patch.yml', references: ['demo-plugin'], unresolved: false },
+        { kind: 'bundle', detail: '@deepseek-ai/dsh-web-app', references: ['demo-plugin'], unresolved: false },
       ],
     }));
     expect(outcome.ok).toBe(true);
@@ -148,9 +148,19 @@ describe('resolvePluginRemoval', () => {
     }
   });
 
+  it('blocks conservatively when a reference source could not be resolved', () => {
+    const outcome = resolvePluginRemoval(input({
+      referenceSources: [{ kind: 'userPatch', detail: 'home/cordis.patch.yml', references: [], unresolved: true }],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences[0]?.kind).toBe('userPatch');
+    expect(outcome.value.blockingReferences[0]?.detail).toContain('cannot be resolved');
+  });
+
   it('matches the plugin id as a whole token only', () => {
     const outcome = resolvePluginRemoval(input({
-      referenceSources: [{ kind: 'bundle', detail: 'other patch', text: '- demo-plugin-extended\n' }],
+      referenceSources: [{ kind: 'bundle', detail: 'other patch', references: ['demo-plugin-extended'], unresolved: false }],
     }));
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;

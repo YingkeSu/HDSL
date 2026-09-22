@@ -21,8 +21,22 @@ import { isPlainRecord } from '@hdsl/contracts';
 const IN_BOX_SCAN_MAX = 1_000;
 /** Maximum reference sources scanned for the removed plugin id. */
 const REFERENCE_SOURCES_MAX = 64;
-/** Maximum characters scanned per reference source (bounded, no full-file regex). */
-const REFERENCE_SCAN_MAX = 256 * 1024;
+
+/** Field bound shared with the frozen `ChangePlan.blockingReferences.detail`. */
+export const REFERENCE_DETAIL_MAX = 256;
+
+/**
+ * A safe reference-source label: bounded, never a LOCAL ABSOLUTE path (scoped
+ * package names like `@scope/name` and relative labels like
+ * `home/cordis.patch.yml` are safe identifiers, not local paths).
+ */
+export const isSafeDetail = (value: string): boolean =>
+  value.length > 0 &&
+  value.length <= REFERENCE_DETAIL_MAX &&
+  !value.startsWith('/') &&
+  !value.startsWith('~') &&
+  !value.includes('\\') &&
+  !/^[A-Za-z]:[\\/]/.test(value);
 
 /** Structural mirror of the frozen `ChangePlan.blockingReferences` entry. */
 export interface ChangeBlockingReference {
@@ -87,12 +101,19 @@ export const resolveInBoxBundles = (dshDirectory: string): readonly InBoxBundle[
   return bundles.length === 0 ? undefined : bundles;
 };
 
+/**
+ * A scanned reference source. `references`/`unresolved` come from the structural
+ * scanner (`scanPatchReferences`); token matching against raw text is NOT used as
+ * semantic proof, so an unparsable construct can only ever be *more* blocking.
+ */
 export interface PluginReferenceSource {
   readonly kind: 'bundle' | 'config' | 'userPatch';
   /** Bounded, non-absolute description shown to the operator. */
   readonly detail: string;
-  /** File text scanned for the plugin id (already bounded by the caller). */
-  readonly text: string;
+  /** Plugin ids this source references at rc.2 reference positions. */
+  readonly references: readonly string[];
+  /** True when the scanner could not classify the source (must fail closed). */
+  readonly unresolved: boolean;
 }
 
 export interface PluginRemovalInput {
@@ -120,42 +141,6 @@ export interface PluginRemovalResolution {
 export type PluginRemovalOutcome =
   | { readonly ok: true; readonly value: PluginRemovalResolution }
   | { readonly ok: false; readonly code: 'NOT_FOUND' | 'BUILTIN_BUNDLE_PROTECTED' | 'REFERENCED_BY_OTHER' | 'INTERNAL_ERROR'; readonly message: string };
-
-const boundedScan = (text: string): string =>
-  text.length > REFERENCE_SCAN_MAX ? text.slice(0, REFERENCE_SCAN_MAX) : text;
-
-/** Field bound shared with the frozen `ChangePlan.blockingReferences.detail`. */
-export const REFERENCE_DETAIL_MAX = 256;
-
-/**
- * A safe reference-source label: bounded, never a LOCAL ABSOLUTE path (scoped
- * package names like `@scope/name` and relative labels like
- * `home/cordis.patch.yml` are safe identifiers, not local paths).
- */
-export const isSafeDetail = (value: string): boolean =>
-  value.length > 0 &&
-  value.length <= REFERENCE_DETAIL_MAX &&
-  !value.startsWith('/') &&
-  !value.startsWith('~') &&
-  !value.includes('\\') &&
-  !/^[A-Za-z]:[\\/]/.test(value);
-
-/** True when `pluginId` appears as a whole token (not a substring of another id). */
-const referencesPlugin = (text: string, pluginId: string): boolean => {
-  const haystack = boundedScan(text);
-  let index = haystack.indexOf(pluginId);
-  while (index !== -1) {
-    const before = index === 0 ? '' : (haystack[index - 1] ?? '');
-    const afterIndex = index + pluginId.length;
-    const after = afterIndex >= haystack.length ? '' : (haystack[afterIndex] ?? '');
-    const boundary = /[A-Za-z0-9._@/-]/;
-    if (!boundary.test(before) && !boundary.test(after)) {
-      return true;
-    }
-    index = haystack.indexOf(pluginId, index + 1);
-  }
-  return false;
-};
 
 /**
  * Pure resolution of a remove preview. Never touches the filesystem: the caller
@@ -203,12 +188,17 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
       // The removed plugin's own patch is not a reference from elsewhere.
       continue;
     }
-    if (referencesPlugin(source.text, input.pluginId)) {
-      // `detail` is operator-facing: bounded and never a local absolute path.
+    const detail = isSafeDetail(source.detail) ? source.detail : `unresolvable ${source.kind} reference source`;
+    if (source.references.includes(input.pluginId)) {
+      blockingReferences.push({ pluginId: input.pluginId, kind: source.kind, detail });
+      continue;
+    }
+    if (source.unresolved) {
+      // Fail closed: an unclassified construct may be a dynamic/alias reference.
       blockingReferences.push({
         pluginId: input.pluginId,
         kind: source.kind,
-        detail: isSafeDetail(source.detail) ? source.detail : `unresolvable ${source.kind} reference source`,
+        detail: `${detail} contains a construct that cannot be resolved`,
       });
     }
   }
