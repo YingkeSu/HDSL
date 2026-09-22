@@ -18,7 +18,7 @@
         });
         try {
           window.__mainEnvelope = await window.hdsl.call({
-            apiVersion: '1.0',
+            apiVersion: '__HDSL_API_VERSION__',
             method: 'catalog.list',
             input: {},
           });

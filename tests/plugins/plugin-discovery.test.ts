@@ -10,12 +10,21 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
-import { portFail, portOk, type OperationSnapshot, type PortOutcome } from '@hdsl/contracts';
 import {
+  API_VERSION,
+  createContractRuntime,
+  portFail,
+  portOk,
+  type OperationSnapshot,
+  type PortOutcome,
+} from '@hdsl/contracts';
+import {
+  createEnvironmentContractPort,
   ensureLayout,
   isTerminalStatus,
   PluginDiscoveryService,
   resolveLayout,
+  type EnvironmentService,
   type PluginSourcePort,
 } from '@hdsl/core';
 
@@ -143,5 +152,83 @@ describe('PluginDiscoveryService', () => {
     expect(service.owns('op-not-plugin')).toBe(false);
     expect(service.findOperation('op-not-plugin')).toBeUndefined();
     expect(service.cancelOperation('op-not-plugin')).toBeUndefined();
+  });
+});
+
+describe('composite port routes plugin cancellation (ADR 0005 D17)', () => {
+  const makeComposite = (source: PluginSourcePort) => {
+    const root = mkdtempSync(join(tmpdir(), 'hdsl-composite-'));
+    roots.push(root);
+    const layout = resolveLayout(root);
+    ensureLayout(layout);
+    const discovery = new PluginDiscoveryService({ layout, source });
+    let serviceCancelCalls = 0;
+    const service = {
+      host: { platform: 'darwin', arch: 'arm64' },
+      layout,
+      listEnvironments: () => portOk([]),
+      findEnvironment: () => portFail('NOT_FOUND', 'environment was not found'),
+      findOperation: () => portFail('NOT_FOUND', 'operation was not found'),
+      findCombination: () => portFail('NOT_FOUND', 'combination was not found'),
+      createEnvironment: () => portFail('INTERNAL_ERROR', 'environment-only stub'),
+      startEnvironment: () => portFail('INTERNAL_ERROR', 'environment-only stub'),
+      stopEnvironment: () => portFail('INTERNAL_ERROR', 'environment-only stub'),
+      openWebUI: () => portFail('INTERNAL_ERROR', 'environment-only stub'),
+      cancelOperation: () => {
+        serviceCancelCalls += 1;
+        return portFail('INTERNAL_ERROR', 'environment-only stub');
+      },
+      exportDiagnostics: () => portFail('INTERNAL_ERROR', 'environment-only stub'),
+      readIdempotency: () => undefined,
+      writeIdempotency: () => undefined,
+    };
+    const port = createEnvironmentContractPort({
+      service: service as unknown as EnvironmentService,
+      catalog: [],
+      pluginDiscovery: discovery,
+    });
+    return { runtime: createContractRuntime({ port }), cancelCalls: () => serviceCancelCalls };
+  };
+
+  it('operations.cancel hits the plugin operation without falling through to the environment service', () => {
+    let resolveSearch: ((value: PortOutcome<typeof result>) => void) | undefined;
+    const source: PluginSourcePort = {
+      search: () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        }),
+      inspect: () => Promise.resolve(portFail('INTERNAL_ERROR', 'unused')),
+    };
+    const { runtime, cancelCalls } = makeComposite(source);
+    const started = runtime.dispatch({
+      apiVersion: API_VERSION,
+      method: 'plugins.search',
+      input: { requestId: 'req-composite', query: 'topic:x' },
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const operationId = (started.value as { operationId: string }).operationId;
+
+    const cancelled = runtime.dispatch({
+      apiVersion: API_VERSION,
+      method: 'operations.cancel',
+      input: { requestId: 'req-cancel', operationId },
+    });
+    expect(cancelled.ok).toBe(true);
+    if (!cancelled.ok) return;
+    expect((cancelled.value as OperationSnapshot).status).toBe('cancelled');
+    expect(cancelCalls()).toBe(0);
+
+    // Unknown ids still fall through to the environment service (NOT_FOUND).
+    const missing = runtime.dispatch({
+      apiVersion: API_VERSION,
+      method: 'operations.get',
+      input: { operationId: 'op-unknown' },
+    });
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.error.code).toBe('NOT_FOUND');
+    }
+    resolveSearch?.(portOk(result));
   });
 });
