@@ -1,5 +1,8 @@
-/** Runtime reuse for a new plugin generation: hardlinks, source untouched. */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, statSync, writeFileSync } from 'node:fs';
+/**
+ * Runtime reuse: independent physical copy (no hardlink inode sharing), source
+ * untouched, symlink-escape rejection, and injectable identity verification.
+ */
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -24,14 +27,17 @@ const build = () => {
   const paths = generationPaths(layout, ENVIRONMENT_ID, FROM);
   mkdirSync(join(paths.nodeDirectory, 'bin'), { recursive: true });
   mkdirSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
-  writeFileSync(join(paths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\n');
+  writeFileSync(join(paths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\necho node\n');
   writeFileSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'bin.js'), '// dsh\n');
-  writeFileSync(paths.manifestPath, JSON.stringify({ installMode: 'npm-ci' }));
-  return { layout, paths };
+  writeFileSync(
+    paths.manifestPath,
+    JSON.stringify({ schemaVersion: '1', installMode: 'npm-ci', node: { version: '22.19.0' }, dsh: { version: '0.1.5-rc.2' } }),
+  );
+  return { layout, paths, dataRoot };
 };
 
 describe('generation runtime reuse', () => {
-  it('reuses node/dsh/manifest via hardlinks without modifying the source generation', () => {
+  it('copies the runtime into an independent new generation and never mutates the source', () => {
     const { layout, paths } = build();
     const outcome = reuseGenerationRuntime({
       layout,
@@ -44,21 +50,18 @@ describe('generation runtime reuse', () => {
       return;
     }
     const target = generationPaths(layout, ENVIRONMENT_ID, TO);
-    expect(existsSync(join(target.nodeDirectory, 'bin', 'node'))).toBe(true);
-    expect(existsSync(join(target.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'bin.js'))).toBe(true);
-    expect(existsSync(target.manifestPath)).toBe(true);
-    // Hardlink proof: the reused file shares an inode with the source.
-    expect(statSync(join(target.nodeDirectory, 'bin', 'node')).ino).toBe(
-      statSync(join(paths.nodeDirectory, 'bin', 'node')).ino,
-    );
-    // The source generation is untouched.
-    expect(existsSync(join(paths.nodeDirectory, 'bin', 'node'))).toBe(true);
-    expect(existsSync(paths.manifestPath)).toBe(true);
+    expect(readFileSync(join(target.nodeDirectory, 'bin', 'node'), 'utf8')).toBe('#!/bin/sh\necho node\n');
+
+    // Independence: modifying the new generation must not touch the source.
+    writeFileSync(join(target.nodeDirectory, 'bin', 'node'), '#!/bin/sh\necho tampered\n');
+    expect(readFileSync(join(paths.nodeDirectory, 'bin', 'node'), 'utf8')).toBe('#!/bin/sh\necho node\n');
+    // Structural copy only: no verifier => identityVerified false (not complete).
+    expect(outcome.value.identityVerified).toBe(false);
   });
 
-  it('fails closed when the source generation has no managed install manifest', () => {
-    const { layout, paths } = build();
-    rmSync(paths.manifestPath);
+  it('rejects a source tree whose symlink escapes the generation root', () => {
+    const { layout, paths, dataRoot } = build();
+    symlinkSync(dataRoot, join(paths.dshDirectory, 'escape'));
     const outcome = reuseGenerationRuntime({
       layout,
       environmentId: ENVIRONMENT_ID,
@@ -68,6 +71,33 @@ describe('generation runtime reuse', () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) {
       expect(outcome.code).toBe('INTERNAL_ERROR');
+    }
+  });
+
+  it('fails closed when the injected identity verifier rejects the copy', () => {
+    const { layout } = build();
+    const rejected = reuseGenerationRuntime({
+      layout,
+      environmentId: ENVIRONMENT_ID,
+      fromGenerationId: FROM,
+      toGenerationId: TO,
+      verify: () => false,
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) {
+      expect(rejected.code).toBe('INTERNAL_ERROR');
+    }
+
+    const accepted = reuseGenerationRuntime({
+      layout,
+      environmentId: ENVIRONMENT_ID,
+      fromGenerationId: FROM,
+      toGenerationId: 'gen-0000000000000003',
+      verify: () => true,
+    });
+    expect(accepted.ok).toBe(true);
+    if (accepted.ok) {
+      expect(accepted.value.identityVerified).toBe(true);
     }
   });
 });
