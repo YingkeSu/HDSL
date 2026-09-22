@@ -23,6 +23,7 @@ import {
   buildPreviewResolution,
   type GitProvider,
   type PluginPreviewResolution,
+  type ResolvedSourceManifest,
 } from './preview-resolution.js';
 export type { GitProvider, PluginPreviewResolution, ResolvedSourceManifest } from './preview-resolution.js';
 import {
@@ -69,7 +70,7 @@ export interface GitHubPluginSourceOptions {
   readonly gitProvider?: GitProvider;
 }
 
-export interface GitHubPluginSource {
+export interface GitHubPluginSource extends GitProvider {
   search(query: string, signal: AbortSignal): Promise<PortOutcome<PluginSearchResult>>;
   inspect(
     source: PluginSourceSelector,
@@ -313,6 +314,80 @@ export const createGitHubPluginSource = (
     return portFail('DOWNLOAD_FAILED', `GitHub returned HTTP ${String(status)}`);
   };
 
+  const resolveManifestViaHttp = async (
+    source: PluginSourceSelector,
+    signal: AbortSignal,
+  ): Promise<PortOutcome<ResolvedSourceManifest>> => {
+      const owner = encodeURIComponent(source.owner);
+      const name = encodeURIComponent(source.name);
+      const commitsUrl =
+        source.ref === undefined
+          ? `${apiBase}/repos/${owner}/${name}/commits?per_page=1`
+          : `${apiBase}/repos/${owner}/${name}/commits/${encodeURIComponent(source.ref)}`;
+      const commitAttempt = await attempt(commitsUrl, signal);
+      if (commitAttempt.kind === 'unreachable') {
+        return portFail('NETWORK_UNAVAILABLE', 'the GitHub commit request could not connect');
+      }
+      if (commitAttempt.kind === 'response') {
+        return failureForStatus(commitAttempt.response);
+      }
+      if (commitAttempt.kind === 'unparseable') {
+        return portFail('DOWNLOAD_FAILED', 'the GitHub commit response was not JSON');
+      }
+      const commitRecord = Array.isArray(commitAttempt.body)
+        ? asRecord(commitAttempt.body[0])
+        : asRecord(commitAttempt.body);
+      const commitSha = asString(commitRecord?.['sha']);
+      if (commitSha === undefined || !/^[0-9a-f]{40}$/.test(commitSha)) {
+        return portFail('SOURCE_NOT_FOUND', 'GitHub did not return an exact 40-character commit SHA');
+      }
+
+      const readFile = async (
+        path: string,
+      ): Promise<{ readonly kind: 'text'; readonly text: string } | { readonly kind: 'missing' } | { readonly kind: 'failure'; readonly outcome: PortOutcome<never> }> => {
+        const url = `${apiBase}/repos/${owner}/${name}/contents/${path}?ref=${commitSha}`;
+        const outcome = await attempt(url, signal);
+        if (outcome.kind === 'unreachable') {
+          return { kind: 'failure', outcome: portFail('NETWORK_UNAVAILABLE', 'the GitHub contents request could not connect') };
+        }
+        if (outcome.kind === 'response') {
+          return outcome.response.status === 404
+            ? { kind: 'missing' }
+            : { kind: 'failure', outcome: failureForStatus(outcome.response) };
+        }
+        if (outcome.kind === 'unparseable') {
+          return { kind: 'failure', outcome: portFail('DOWNLOAD_FAILED', 'the GitHub contents response was not JSON') };
+        }
+        const record = asRecord(outcome.body);
+        const content = asString(record?.['content']);
+        if (content === undefined) {
+          return { kind: 'failure', outcome: portFail('SOURCE_MANIFEST_INVALID', 'the GitHub contents response had no content') };
+        }
+        const text =
+          asString(record?.['encoding']) === 'base64'
+            ? Buffer.from(content.replace(/\n/g, ''), 'base64').toString('utf8')
+            : content;
+        return { kind: 'text', text };
+      };
+
+      const manifestFile = await readFile('package.json');
+      if (manifestFile.kind === 'failure') {
+        return manifestFile.outcome;
+      }
+      if (manifestFile.kind === 'missing') {
+        return portFail('SOURCE_MANIFEST_INVALID', 'the repository has no package.json at the resolved commit');
+      }
+      const lockFile = await readFile('pnpm-lock.yaml');
+      if (lockFile.kind === 'failure') {
+        return lockFile.outcome;
+      }
+      return portOk({
+        commitSha,
+        manifestText: manifestFile.text,
+        lockText: lockFile.kind === 'text' ? lockFile.text : null,
+      });
+  };
+
   return {
     async search(query, signal) {
       const url = `${apiBase}/search/repositories?q=${encodeURIComponent(query)}&per_page=${String(pageSize)}&page=1`;
@@ -388,79 +463,14 @@ export const createGitHubPluginSource = (
           ? buildPreviewResolution({ source, resolved: resolved.value, executor: options.executor ?? null })
           : resolved;
       }
-      const owner = encodeURIComponent(source.owner);
-      const name = encodeURIComponent(source.name);
-      const commitsUrl =
-        source.ref === undefined
-          ? `${apiBase}/repos/${owner}/${name}/commits?per_page=1`
-          : `${apiBase}/repos/${owner}/${name}/commits/${encodeURIComponent(source.ref)}`;
-      const commitAttempt = await attempt(commitsUrl, signal);
-      if (commitAttempt.kind === 'unreachable') {
-        return portFail('NETWORK_UNAVAILABLE', 'the GitHub commit request could not connect');
+      const resolved = await resolveManifestViaHttp(source, signal);
+      if (!resolved.ok) {
+        return resolved;
       }
-      if (commitAttempt.kind === 'response') {
-        return failureForStatus(commitAttempt.response);
-      }
-      if (commitAttempt.kind === 'unparseable') {
-        return portFail('DOWNLOAD_FAILED', 'the GitHub commit response was not JSON');
-      }
-      const commitRecord = Array.isArray(commitAttempt.body)
-        ? asRecord(commitAttempt.body[0])
-        : asRecord(commitAttempt.body);
-      const commitSha = asString(commitRecord?.['sha']);
-      if (commitSha === undefined || !/^[0-9a-f]{40}$/.test(commitSha)) {
-        return portFail('SOURCE_NOT_FOUND', 'GitHub did not return an exact 40-character commit SHA');
-      }
-
-      const readFile = async (
-        path: string,
-      ): Promise<{ readonly kind: 'text'; readonly text: string } | { readonly kind: 'missing' } | { readonly kind: 'failure'; readonly outcome: PortOutcome<never> }> => {
-        const url = `${apiBase}/repos/${owner}/${name}/contents/${path}?ref=${commitSha}`;
-        const outcome = await attempt(url, signal);
-        if (outcome.kind === 'unreachable') {
-          return { kind: 'failure', outcome: portFail('NETWORK_UNAVAILABLE', 'the GitHub contents request could not connect') };
-        }
-        if (outcome.kind === 'response') {
-          return outcome.response.status === 404
-            ? { kind: 'missing' }
-            : { kind: 'failure', outcome: failureForStatus(outcome.response) };
-        }
-        if (outcome.kind === 'unparseable') {
-          return { kind: 'failure', outcome: portFail('DOWNLOAD_FAILED', 'the GitHub contents response was not JSON') };
-        }
-        const record = asRecord(outcome.body);
-        const content = asString(record?.['content']);
-        if (content === undefined) {
-          return { kind: 'failure', outcome: portFail('SOURCE_MANIFEST_INVALID', 'the GitHub contents response had no content') };
-        }
-        const text =
-          asString(record?.['encoding']) === 'base64'
-            ? Buffer.from(content.replace(/\n/g, ''), 'base64').toString('utf8')
-            : content;
-        return { kind: 'text', text };
-      };
-
-      const manifestFile = await readFile('package.json');
-      if (manifestFile.kind === 'failure') {
-        return manifestFile.outcome;
-      }
-      if (manifestFile.kind === 'missing') {
-        return portFail('SOURCE_MANIFEST_INVALID', 'the repository has no package.json at the resolved commit');
-      }
-      const lockFile = await readFile('pnpm-lock.yaml');
-      if (lockFile.kind === 'failure') {
-        return lockFile.outcome;
-      }
-      return buildPreviewResolution({
-        source,
-        resolved: {
-          commitSha,
-          manifestText: manifestFile.text,
-          lockText: lockFile.kind === 'text' ? lockFile.text : null,
-        },
-        executor: options.executor ?? null,
-      });
+      return buildPreviewResolution({ source, resolved: resolved.value, executor: options.executor ?? null });
     },
+
+    resolveManifest: resolveManifestViaHttp,
 
     lastRequestUrl: () => lastRequestUrl,
   };

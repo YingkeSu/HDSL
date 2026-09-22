@@ -23,12 +23,16 @@ import {
   type PortOutcome,
   type RuntimeCombination,
 } from '@hdsl/contracts';
+import { join } from 'node:path';
 import {
   createEnvironmentContractPort,
   EnvironmentService,
   OperationStore,
   PluginDiscoveryService,
   ChangePreviewService,
+  ChangeApplyService,
+  ChangePlanStore,
+  EnvironmentStore,
   type PluginPreviewPort,
   type CloseReport,
   type DataRootLockSnapshot,
@@ -40,6 +44,11 @@ import {
 } from '@hdsl/core';
 import {
   createGitHubPluginSource,
+  createPluginApplyPort,
+  createManagedPnpmExecutor,
+  createGenerationRuntimeVerifier,
+  computeCompositionDigest,
+  PNPM_EXECUTOR_SPEC,
   createLaunchCredentialPort,
   createProcessManager,
   createRuntimePort,
@@ -347,6 +356,27 @@ export const createDesktopComposition = async (
           },
         });
 
+  // Environment-scoped apply transaction: the GitHub source is the production
+  // GitProvider and the frozen managed pnpm artifact is the executor. The reused
+  // runtime is verified with the managed-install tree digest before any commit.
+  const applyPort = createPluginApplyPort({
+    gitProvider: defaultGitHubSource,
+    executor: createManagedPnpmExecutor({
+      spec: PNPM_EXECUTOR_SPEC,
+      cacheDirectory: join(service.layout.root, 'pnpm-cache'),
+      fetch: globalThis.fetch,
+    }),
+  });
+  const changeApply = new ChangeApplyService({
+    layout: service.layout,
+    plans: new ChangePlanStore(service.layout),
+    environments: new EnvironmentStore(service.layout),
+    operations: new OperationStore(service.layout),
+    compositionDigest: computeCompositionDigest,
+    port: applyPort,
+    verifyGenerationRuntime: createGenerationRuntimeVerifier(),
+  });
+
   const port = createEnvironmentContractPort({
     service,
     catalog,
@@ -354,6 +384,7 @@ export const createDesktopComposition = async (
     exportDiagnostics: exporter,
     pluginDiscovery,
     ...(changePreview === undefined ? {} : { changePreview }),
+    changeApply,
   });
 
   const recovery = await service.recover();
