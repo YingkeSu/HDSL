@@ -1082,11 +1082,16 @@ export class ChangeApplyService {
       sourceLock,
       committedAt: this.#now().toISOString(),
     };
-    this.#operations.update(
-      record,
-      { status: 'succeeded', phase: 'finished', output },
-      this.#now().toISOString(),
-    );
+    const patch = { status: 'succeeded', phase: 'finished', output } as const;
+    if (record.status === 'cancelled') {
+      // A pre-existing `cancelled` record (for example left by an older build)
+      // MUST NOT go through the terminal guard in `update`; this recovery path
+      // holds durable commit evidence (committed journal / pointer), so it
+      // overrides the terminal record with the committed fact.
+      this.#operations.overrideTerminal(record, patch, this.#now().toISOString());
+    } else {
+      this.#operations.update(record, patch, this.#now().toISOString());
+    }
     this.#reconcileLedger(requestId, operationId);
   }
 

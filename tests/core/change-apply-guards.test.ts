@@ -456,6 +456,40 @@ describe('changes.apply cancellation at the commit point (D1 regression)', () =>
     expect(harnessed.ledger.read('req-apply')?.state).toBe('completed');
   });
 
+  it('repairs a pre-existing cancelled operation over a committed journal (upgrade path)', async () => {
+    const harnessed = build({ faults: { pauseAt: 'committed' } });
+    harnessed.ledger.write('req-apply', { state: 'in-progress', method: 'changes.apply', fingerprint: 'fp' });
+    const started = harnessed.service.applyChange(command());
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const operationId = started.value.operationId;
+    await waitForSwitch(harnessed.environments);
+
+    // Simulate the residue an older build could leave on disk: the transaction
+    // is committed (pointer switched + journal `committed`) but the operation
+    // was already stored as `cancelled`.
+    const cancelled = harnessed.operations.read(operationId)!;
+    harnessed.operations.write({
+      ...cancelled,
+      status: 'cancelled',
+      phase: 'cancelled',
+      sequence: cancelled.sequence + 1,
+      updatedAt: '2026-09-22T00:05:00.000Z',
+    });
+
+    // `recover()` must reconcile the committed fact through the override path
+    // (not the terminal guard in `update`, which would throw) in all four places.
+    const recovery = harnessed.service.recover();
+    expect(recovery.finalized).toBe(1);
+    const operation = harnessed.operations.read(operationId);
+    expect(operation?.status).toBe('succeeded');
+    expect(operation?.output).toBeDefined();
+    expect(operation!.sequence).toBeGreaterThan(cancelled.sequence + 1);
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBe('req-apply');
+    expect(harnessed.ledger.read('req-apply')?.state).toBe('completed');
+  });
+
   it('still cancels before the commit point and leaves the old generation, plan and ledger consistent', async () => {
     const harnessed = build({ faults: { pauseAt: 'verified' } });
     const started = harnessed.service.applyChange(command());

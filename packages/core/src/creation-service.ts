@@ -1648,8 +1648,15 @@ tryReadInstallManifest(
     if (operation !== undefined && operation.status !== 'failed' && operation.status !== 'succeeded') {
       // `running`, or a `cancelled` record whose commit window was already
       // entered: the pointer switch is authoritative, so finalize the committed
-      // fact instead of leaving `cancelled` over a committed generation.
-      this.#operations.update(operation, { status: 'succeeded', phase: 'finished' }, this.#now());
+      // fact instead of leaving `cancelled` over a committed generation. A
+      // pre-existing `cancelled` record must not hit the terminal guard in
+      // `update`, so it is overridden with durable commit evidence.
+      const patch = { status: 'succeeded', phase: 'finished' } as const;
+      if (operation.status === 'cancelled') {
+        this.#operations.overrideTerminal(operation, patch, this.#now());
+      } else {
+        this.#operations.update(operation, patch, this.#now());
+      }
     }
     // Repair the ledger divergence too: the dispatcher may have left the
     // request `in-progress` if the process crashed inside the commit window.

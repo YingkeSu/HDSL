@@ -22,6 +22,7 @@ import {
 import {
   EnvironmentStore,
   IdempotencyStore,
+  OperationStore,
   createManagedInstall,
   environmentPaths,
   generationPaths,
@@ -655,6 +656,51 @@ describe('production pointer/journal recovery window (A2)', () => {
     expect(new IdempotencyStore(layout).read('req-pointer-cancel')?.state).toBe('completed');
     const after = restarted.managed.service.listEnvironments();
     expect(after.ok ? after.value[0]?.activeGenerationId : undefined).toBe(environment.activeGenerationId);
+    await restarted.managed.close();
+  });
+
+  it('repairs a pre-existing cancelled create operation over a committed pointer (upgrade path)', async () => {
+    const dataRoot = freshRoot('hdsl-pointer-upgrade-');
+    const paused = await buildHarness({ dataRoot, faults: { pauseAfterPointerSwitch: true } });
+    const operationId = await createEnvironment(paused, combinationA.id, 'req-pointer-upgrade');
+    const deadline = Date.now() + 10_000;
+    for (;;) {
+      const listed = paused.managed.service.listEnvironments();
+      const environment = listed.ok ? listed.value[0] : undefined;
+      if (environment !== undefined && environment.activeGenerationId !== null) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error('the active generation pointer was never switched');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    await paused.managed.close();
+
+    // Simulate the residue an older build could leave: pointer committed but the
+    // operation already stored as `cancelled`, with an in-progress ledger.
+    const layout = resolveLayout(dataRoot);
+    const operations = new OperationStore(layout);
+    const record = operations.read(operationId)!;
+    operations.write({
+      ...record,
+      status: 'cancelled',
+      phase: 'cancelled',
+      sequence: record.sequence + 1,
+      updatedAt: '2026-09-22T00:05:00.000Z',
+    });
+    new IdempotencyStore(layout).write('req-pointer-upgrade', {
+      state: 'in-progress',
+      method: 'environments.create',
+      fingerprint: 'fp',
+    });
+
+    const restarted = await buildHarness({ dataRoot });
+    const report = await restarted.managed.recover();
+    expect(report.finalized).toBeGreaterThanOrEqual(1);
+    const operation = restarted.managed.service.findOperation(operationId);
+    expect(operation.ok ? operation.value.status : undefined).toBe('succeeded');
+    expect(new IdempotencyStore(layout).read('req-pointer-upgrade')?.state).toBe('completed');
     await restarted.managed.close();
   });
 
