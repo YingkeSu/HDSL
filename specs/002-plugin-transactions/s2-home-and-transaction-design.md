@@ -16,7 +16,7 @@ home 派生机制、含密文件与可变运行数据归属、旧代恢复语义
 
 - 目标 `generationPaths().homeDirectory` = `<env>/home`，**不再**是 `<gen>/home`（当前实现见 ADR 0006 G1/G2）。
 - 代目录**不得持久包含** `home/`、`sessions/`、`storages/`、`.credentials.yaml`；事务只写暂存组成。
-- **profile 加载机制未定（E10b，ADR 0006 §2.3）**：共享 home 下 DSH 固定读取 `$DSH_HOME/profiles/<name>`。本代组成要生效，必须有已批准的每代 profile 选择/发布机制（候选 P-A/P-B/P-C/P-D）；**在 E10b 通过前，不得声称本代 profile 已生效，也不得预判 symlink 安全**。
+- **profile 加载机制（P-A 方向）**：共享 home 下 DSH 固定读取 `$DSH_HOME/profiles/<name>`；本代 profile 必须发布到 `hdsl-<gen>` 命名空间的 profile 目录，启动 argv 传 `--profile hdsl-<gen>`。**组成身份取自 staged 声明源**（`package.json`/`pnpm-lock.yaml`/`cordis.patch.yml`）；boot 重写的 `cordis.yml`、`node_modules`、`profiles/node_modules` 回退 symlink 是 live 派生状态，**不得**参与身份或摘要重建。GC 仅限 `hdsl-` 命名空间；被指针引用的 profile 永不删。
 - **`<gen>/config/`**：当前无消费者（`manager.ts` 只用 `dataDirectory` 作 cwd）；目标布局**不引入** `<env>/config/`，S2 删除该字段或明确其归属。
 
 ### 1.1 首次布局迁移（`<gen>/home` → `<env>/home`）
@@ -107,17 +107,20 @@ interface ChangeFaults {
 
 ### 6.1 最小实证 checklist（区分实现前机制证据 / 实现后生产回归）
 
-**实现前（机制证据，可用仓库外废弃原型或入库 research 脚本）**
-- [ ] E10b-1 真实 boot：选定 `--profile <gen>` 后，运行期加载的 bundle 集 == 该代 profile 声明集（已用 web-app 就绪 line 作 marker 部分证明，需扩到每代完整集合与摘要绑定）。
-- [ ] E10b-2 双代切换：A→B→A 各自加载自身集，互不污染（已证）。
-- [ ] E10b-3 发布/切换崩溃窗口 W1–W4：旧代 composition lock 字节不变、旧代仍可启动；孤儿回收**由 journal 键控**（已用废弃原型证明排序语义，需真实 HDSL 事务实现）。
-- [ ] E10b-4 `profiles/node_modules` 回退 symlink 在跨代 DSH 安装变化下的行为。
-- [ ] 全相位抛错 + `SIGKILL` + `recover()` 对账（可用原型先行）。
-- [ ] 迁移四类崩溃分支 + 空环境/新环境分支（可用原型先行）。
-- [ ] E9：`--dump-config` 静态性（受控 bundle 代码执行 marker）。
+> **实现前必须闭合**（review `5774788522`）：E10b-1～4 + 全相位抛错/`SIGKILL` 原型 + M1–M3。未闭合不得开生产实现。
+
+**实现前（机制证据；仓库外废弃原型 / 入库 research 脚本）**
+- [x] E10b-1（部分）真实 boot：选定 `--profile <gen>` 后运行期加载集绑定于声明集（web-app 就绪行 marker；负控为**存活 no-ready** + loader 已运行，非崩溃）。**待收尾**：在 profile 内实际安装一个已审 bundle，并断言完整加载集合与摘要绑定。
+- [x] E10b-2 双代切换：A→B→A 各自加载自身集，互不污染。
+- [x] E10b-3 发布/切换崩溃窗口 W1–W5 + 真实子进程 `SIGKILL`/抛错（`staged`/`published`/`pointed`）：旧代 lock 字节不变；**指针引用者永不删**；W5 roll-forward。
+- [x] E10b-4 `profiles/node_modules` 回退 symlink：跨安装 per-boot heal，依赖单一活动代不变。
+- [x] 迁移四类崩溃分支 + 空环境/新环境分支（设计 + 部分原型）。
+- [x] M2 身份边界：身份取自 staged 声明源；live 派生状态排除；摘要不得从 live 重建；`restore` 重发布/复用规则。
+- [ ] E9：`--dump-config` 静态性（受控 bundle 代码执行 marker）——**未闭合**。
 
 **实现后（生产回归，需机制证据独立审核后）**
-- [ ] 真实 HDSL 双代事务：gen1 已提交 → gen2 stage → 提交前失败后仍指向 gen1、可启动且摘要不变。
+- [ ] 真实启动 argv `--profile hdsl-<gen>` 接线与提交顺序（先发布、后切指针）。
+- [ ] 真实双代端到端：gen1 已提交 → gen2 stage → 提交前失败后仍指向 gen1、可启动且摘要不变。
 - [ ] 真实布局迁移 + 崩溃恢复；`changes.*`/`generations.restore`。
 - [ ] 默认拒执行哨兵（依赖闭包）；受管 pnpm 身份冻结（E1）。
 - [ ] 真实安装/桌面（opt-in）；Windows 未测不声明。

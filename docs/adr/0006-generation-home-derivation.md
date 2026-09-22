@@ -75,9 +75,24 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 
 就绪行来自 `@deepseek-ai/dsh-web-app`（与 HDSL 现有 `readiness.ts` 解析同一行），因此它是**运行期实际加载 web-app bundle** 的 marker，不是 `--dump-config`。这收敛了机制方向，但**尚未**完成 E10b：HDSL 生产启动 argv / 提交顺序未接线，"旧代加载集合 == 组成摘要"的双代端到端未证。
 
-**发布/切换崩溃窗口（废弃原型，非生产）**：`scripts/research/e10b-publish-crash-prototype.mjs` 4/4 验证了 P-A 排序（先发布 profile、后切指针）的四个崩溃窗口：W1 发布前、W2 发布中、W3 发布后切指针前、W4 切指针后；并得出**回收必须由事务 journal 键控**（而非"非当前活动代"），否则会错误删掉仍可供 `restore` 的旧代 profile。仅排序语义，不含 fsync/持久性保证。
+**发布/切换崩溃窗口与对账规则（废弃原型，非生产）**：`scripts/research/e10b-publish-crash-prototype.mjs` 7/7 与真实子进程 `scripts/research/e10b-phase-kill-prototype.mjs` 6/6（真 `SIGKILL`/抛错于 `staged`/`published`/`pointed` 各相位）验证了 P-A 排序（先发布 profile、后切指针）与以下**对账规则**：
 
-证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture）；崩溃原型为**原型**（非生产，无持久性保证）。
+- **指针为权威**：任何被 `activeGenerationId` 引用的 profile **永不被回收**（窗口 W5：指针已切、journal 未 committed → roll-forward，保留新代）。
+- **journal 仅识别待处理事务**：仅在指针**不**引用该事务代时回收孤儿 profile + stage。
+- **GC 限定 `hdsl-` 命名空间**：绝不触碰 `web`/用户 profile（负控已验）。
+- **原子 rename → 部分发布不可达**：W2（部分写入的已发布 profile）仅为防御性（若将来改用非原子 copy 发布）；发布必须是单次 `rename`。
+- 上述仅为排序语义，不含 fsync/持久性保证。
+
+**跨代 DSH 安装的回退 symlink（E10b-4）**：`scripts/research/e10b-4-module-fallback-probe.sh` 用两个自有 rc.2 安装副本 + 共享 home，真 boot 验证：`$DSH_HOME/profiles/node_modules` 的 symlink 会**每次 boot 被重新治愈（heal）**到**当前 boot 的代际安装**（A→A、B→B、再 A→A）。结论：共享回退路径会随 boot **摆动**，正确性依赖**单一活动代**不变（HDSL 已禁止并发 start/change）；并发 boot 会竞态该路径，不在范围内。
+
+**身份边界（组成身份取自不可变声明源）**：
+
+- 组成身份 = **staged 的声明源**（`package.json`、`pnpm-lock.yaml`、生成的 `cordis.patch.yml`）。
+- 一切 **live 派生状态**（boot 重写的 `cordis.yml`、`node_modules`、`$DSH_HOME/profiles/node_modules` 的安装回退 symlink）**不得**参与身份计算。
+- **组成锁/摘要绝不得从 live profile 重建**（否则每次 boot 摘要漂移，D13 的来源锁与旧代绑定失效）；复核只读 staged/不可变源。
+- `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile（覆盖 live 派生状态）；仅当 live 声明源与身份逐字节一致时才可复用现有 profile。
+
+证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture，负控为**存活且 no-ready** + loader 已运行，非崩溃）；崩溃/杀进程与 E10b-4 为**原型/`raw`**（自有副本，非生产）。
 
 **候选机制（仍不预选；P-A 为当前证据支持方向）**：
 
@@ -116,7 +131,8 @@ A 被否的核心理由：它把运行数据并入组成快照，违反 G5，并
 | 对象 | 归属 | 事务行为 | 导出/整合包 |
 | --- | --- | --- | --- |
 | 受管运行时（node/dsh 产物） | 代际（不可变） | 新建 stage | 否（按摘要引用） |
-| profile 三元组（`package.json` + `pnpm-lock.yaml` + 生成 `cordis.patch.yml`） | **组成身份**归代际；**物理加载位置未决（E10b）** | 新建 stage；共享 home 下需经批准机制发布到 `$DSH_HOME/profiles/<name>` 或等价位置 | 组成摘要，不含凭据 |
+| profile 声明源（`package.json` + `pnpm-lock.yaml` + 生成 `cordis.patch.yml`） | **组成身份**归代际（取自不可变 staged 源） | 新建 stage；共享 home 下经批准机制发布到 `$DSH_HOME/profiles/hdsl-<gen>` | 组成摘要，不含凭据 |
+| `cordis.yml`（boot 重写的根）/ `node_modules` / `profiles/node_modules` 回退 symlink | **live 派生可变状态**，非身份 | DSH 每次 boot 重写/治愈；事务与摘要**不得**从它重建身份 | 否 |
 | `composition.lock.json` / `generation.json` / `install-manifest.json` | 代际（不可变） | 新建 stage；提交后才可被指针引用 | 摘要/来源锁 |
 | `home/` 目录 | 环境（可变、共享） | **只读校验，不复制不删除** | 否 |
 | `.credentials.yaml`（0600，含密） | 环境（含密） | 只读校验存在性/权限，不读内容 | **永不** |
@@ -201,7 +217,7 @@ interface ChangeFaults {
 
 ## 7. 未决与后续闸门（不得当作已实现）
 
-- **E10b 未关（阻塞 D18-2/D15 的插件集部分）**：§2.3 已在固定 rc.2 上（真实 boot）证明 `--profile` 选择 profile 且 web-app marker 绑定于所选 profile 的 bundle 集，并用废弃原型验证 P-A 的四类发布/切换崩溃窗口（含"回收由 journal 键控"）。但**HDSL 生产启动 argv / 提交顺序未接线**，双代端到端（真实 HDSL 事务 + 真实 boot）未证。候选机制 P-A 为当前证据支持方向，P-B **不预判 symlink 安全**。E10b 未关前不得宣称旧代加载其自身组成，也不得把 D18-2/D15 写成已满足。
+- **E10b 未关（阻塞 D18-2/D15 的插件集部分）**：§2.3 已在固定 rc.2 上（真实 boot）证明 `--profile` 选择 profile 且 web-app marker 绑定于所选 profile 的 bundle 集；废弃原型验证 P-A 的发布/切换崩溃窗口、真 `SIGKILL`/抛错各相位、E10b-4 回退 symlink heal，并定下对账规则（指针权威、journal 仅识别待处理事务、GC 限 `hdsl-` 命名空间）。但**HDSL 生产启动 argv/提交顺序未接线**，双代端到端（真实 HDSL 事务 + 真实 boot）未证。候选机制 P-A 为当前证据支持方向，P-B **不预判 symlink 安全**。实现前 checklist（S2 §6.1）除 E9 外已闭合；E10b 未关前不得宣称旧代加载其自身组成。
 - **E9 未证**：`--dump-config` 的静态性（不 require/执行 bundle 模块）以及"离线解析组合树 == 运行期实际加载集合"的等价性仍未验证。本片的 E10b 运行时 marker（§2.3）证明的是"真实 boot 加载 web-app bundle"，**不能**替代 E9（它没有证明 dump-config 与运行时加载集合逐项等价，也未做 bundle 代码执行 marker）。在 E9 前，生效判据仍只写"活动代际记录 + 离线解析组合树"。
 - **受管 pnpm 身份（E1）**：候选 `11.7.0` 仍未以受管方式冻结。本片只做了一次有界只读**网络**官方来源核对：`npm view pnpm@11.7.0`（`https://registry.npmjs.org/pnpm`）返回 `11.7.0`、`dist.integrity = sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、`engines.node >= 22.13`。这是官方来源/版本约束核对，**不是**受管执行器冻结证据：仍需 S2 决定 HDSL 如何随包固定该 tarball 并在 apply 时校验摘要；宿主 pnpm `11.7.0` 不作为证据。
 - **上游 home 数据版本兼容（§4.2 条件 4）**：需真实 session 迁移实验；当前只到格式版本/home 形态证据。
@@ -222,8 +238,10 @@ interface ChangeFaults {
 - 实证：
   - `scripts/research/home-derivation-probe.mjs`（合成运行时 + 真实 `@hdsl/core` dist，零网络）在 macOS ARM64、Node `24.21.0` 上 **11/11 通过**：只证明事务删除作用域与指针提交点。
   - `scripts/research/dsh-profile-mechanism-probe.sh`（自有副本 + 已核身份的真实 rc.2 安装）实测 P1–P3：`--profile <name>` 选 `$DSH_HOME/profiles/<name>`，bundle 集来自 profile `package.json`，两个 profile 并存被各自选中。
-  - `scripts/research/dsh-profile-runtime-marker-probe.sh`（真实 boot、自有 fixture、零模型/凭据）：Web-app 就绪行作为运行时 marker，证明选定 `--profile` 决定运行期加载集，A→B(无 web-app)→A 可切换且互不影响。
-  - `scripts/research/e10b-publish-crash-prototype.mjs`（**废弃原型**，非生产）4/4：P-A 发布/切换四类崩溃窗口，旧代 lock 字节不变，孤儿回收必须由 journal 键控。
+  - `scripts/research/dsh-profile-runtime-marker-probe.sh`（真实 boot、自有 fixture、零模型/凭据）：web-app 就绪行作运行时 marker，证明选定 `--profile` 决定运行期加载集，A→B(base-only，**存活 no-ready 负控**)→A 可切换且互不影响。
+  - `scripts/research/e10b-publish-crash-prototype.mjs`（**废弃原型**）7/7：W1–W5（含指针已切/journal 未 committed）+ `hdsl-` 命名空间 GC + `web` 负控。
+  - `scripts/research/e10b-phase-kill-prototype.mjs`（**废弃原型**，真子进程 `SIGKILL`/抛错）6/6。
+  - `scripts/research/e10b-4-module-fallback-probe.sh`（两个自有 rc.2 副本 + 共享 home）PASS：`profiles/node_modules` 每次 boot heal 到当前代际安装。
 - 记录见 [plugin-home-derivation-validation.md](../development/plugin-home-derivation-validation.md)。
 - 未验证：**E10b 生产接线与双代端到端未证**；E1、E9、E2/E4/E5/E6/E7 与真实安装/桌面路径未证。本片运行了固定完整性 rc.2 自身的真实 boot（自有副本、无第三方插件代码），未调用模型、未读个人凭据。
 - 本 ADR 不关闭 #76，也不宣称 #76 门禁已满足（E10b 与 S2 实现仍需后续；见 §7）。

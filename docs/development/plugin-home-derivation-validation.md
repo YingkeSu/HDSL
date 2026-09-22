@@ -101,31 +101,67 @@ scripts/research/dsh-profile-runtime-marker-probe.sh <generation-directory>
 identity OK: dsh 0.1.5-rc.2 sha256 f4c54839d69e82bf… installMode=npm-ci
   genA bundles=['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
   genB bundles=['@deepseek-ai/dsh-base']
-boot genA (web-app) -> ready@4s
-boot genB (base-only) -> no-ready
-boot genA again (switch back) -> ready@3s
+boot genA (web-app) -> ready|yes|-|4s
+boot genB (base-only) -> no-ready|yes|-|25
+boot genA again (switch back) -> ready|yes|-|3s
 RESULT: PASS — the selected --profile determines the runtime-loaded bundle set;
         two profiles in one DSH_HOME are independent and switchable.
+negative control: genB live no-ready for the full 25s window (exit code -), loader ran, so 'not loaded' is not a crash;
+margin: web-app marker appeared in 4s vs 25s window (21s spare).
 ```
 
-**能证明**：真实 boot（非 `--dump-config`）下运行期加载集绑定于所选 `--profile` 的声明 bundle 集；两代 profile 在同一 home 下独立且可切换。**不能证明**：HDSL 生产启动 argv/提交顺序已接线（未实现），双代端到端；也**不**替代 E9（dump-config 等价性）。
+**能证明**：真实 boot（非 `--dump-config`）下运行期加载集绑定于所选 `--profile` 的声明 bundle 集；两代 profile 在同一 home 下独立且可切换。**负控强度**（review M1）：`genB` 必须显式 `no-ready` 且**窗口内进程存活**（`exited`/非零退出判 FAIL）、loader 确实运行（`<profile>/cordis.yml` 存在）；输出保留脱敏日志尾部与退出码。“未加载”不是“崩溃”。**不能证明**：完整加载集合与组成摘要的逐项绑定（web-app 就绪 line 是单一 marker）；HDSL 生产启动 argv/提交顺序已接线；也**不**替代 E9。
 
-**附带发现**：DSH 每次 boot **重写** `<profile>/cordis.yml` → profile 目录是可变运行状态，不应放进"不可变已提交代"目录（支持 P-A：profile 落在共享 home）。
+**附带发现**：DSH 每次 boot **重写** `<profile>/cordis.yml` → profile 目录是可变运行状态，不应放进"不可变已提交代"目录（支持 P-A）。
+
+**本探针不含真实 `SIGKILL`**（用于 marker 绑定），真 `SIGKILL`/抛错见证据 5。
 
 ## 证据 4：P-A 发布/切换崩溃窗口（废弃原型，非生产）
 
 `scripts/research/e10b-publish-crash-prototype.mjs`（仅文件系统层建模，无 fsync/持久性保证）：
 
 ```text
-PASS W1 crash before publish: gen1 lock unchanged; actions=[removed stage gen2]
-PASS W2 crash mid-publish (orphan, pointer still gen1): gen1 lock unchanged; actions=[removed orphan profile hdsl-gen2]
-PASS W3 crash after publish before pointer (orphan removed, old gen bootable): gen1 lock unchanged; actions=[removed orphan profile hdsl-gen2]
-PASS W4 crash after pointer switch (finalize keeps gen2, gen1 restorable): active=gen2; actions=[finalized committed gen2]
-# prototype only: ordering semantics, not production durability/fsync or real DSH boot
-# 4/4 checks passed
+PASS W1 crash before publish: actions=[no profile hdsl-gen2, removed stage gen2]
+PASS W2 defensive partial publish (atomic-rename gap, orphan removed): actions=[removed orphan profile hdsl-gen2]
+PASS W3 crash after publish before pointer (orphan removed)
+PASS W4 crash after pointer switch + committed journal (finalize, gen1 restorable)
+PASS W5 pointer switched, journal uncommitted (roll-forward; active profile never deleted)
+PASS N1 user/default `web` profile never touched by GC
+PASS N2 GC confined to hdsl- namespace (non-managed name refused)
+# 7/7 checks passed
 ```
 
-**能证明（原型级）**：P-A 排序（先发布 profile、后切指针）在四个窗口下旧代 composition lock 字节不变、旧代 profile 保留；孤儿回收**必须由事务 journal 键控**（按"非当前活动代"会误删仍可供 `restore` 的旧代）。**不能证明**：真实持久性/fsync、真实 HDSL 事务与真实 boot 的端到端。
+**能证明（原型级）**：P-A 排序（先发布、后切指针）下旧代 composition lock 字节不变；**指针为权威**（被 `activeGenerationId` 引用的 profile 永不删，W5 roll-forward）；**journal 仅识别待处理事务**；**GC 限于 `hdsl-` 命名空间**（`web`/用户 profile 负控）；W2 在原子 rename 下不可达，仅为防御项。**不能证明**：真实 fsync/持久性、真实 HDSL 事务与真实 boot 的端到端。
+
+## 证据 5：真实子进程 `SIGKILL`/抛错各相位（废弃原型）
+
+`scripts/research/e10b-phase-kill-prototype.mjs` 真实 spawn `e10b-phase-worker.mjs`，在各可达相位发真 `SIGKILL`（观察 `signal==='SIGKILL'`）或让其抛错：
+
+```text
+PASS KILL@staged: signal=SIGKILL active=gen1 oldGenKept=true actions=[removed stage gen2]
+PASS KILL@published: signal=SIGKILL active=gen1 oldGenKept=true actions=[removed orphan hdsl-gen2]
+PASS KILL@pointed: signal=SIGKILL active=gen2 oldGenKept=true actions=[roll-forward: pointer references gen2; kept hdsl-gen2]
+PASS THROW@staged: exit=1 active=gen1 newProfileKept=false actions=[removed stage gen2]
+PASS THROW@published: exit=1 active=gen1 newProfileKept=false actions=[removed orphan hdsl-gen2]
+PASS THROW@pointed: exit=1 active=gen2 newProfileKept=true actions=[roll-forward: pointer references gen2; kept hdsl-gen2]
+# 6/6 checks passed
+```
+
+**能证明（原型级）**：真 `SIGKILL` 与抛错在各相位后，旧代 lock 字节不变、旧代保留；提交点后的失败（`pointed`）roll-forward 而非谎报回滚。**不能证明**：真实 HDSL 事务/journal 接线的 `recover()`。
+
+## 证据 6（E10b-4）：跨代 DSH 安装的回退 symlink
+
+`scripts/research/e10b-4-module-fallback-probe.sh`：两个自有 rc.2 安装副本 + 共享 home，真 boot：
+
+```text
+after boot genA (installA): home fallback -> <work>/installA/node_modules/@deepseek-ai/dsh
+after boot genB (installB): home fallback -> <work>/installB/node_modules/@deepseek-ai/dsh
+after re-boot genA (installA): home fallback -> <work>/installA/node_modules/@deepseek-ai/dsh
+RESULT: PASS — the shared $DSH_HOME/profiles/node_modules fallback is healed per boot
+        to the currently booting generation's DSH install.
+```
+
+**能证明**：共享回退路径每次 boot 被治愈到当前代际安装（A→A、B→B、再 A→A）。**设计含义**：该路径会随 boot 摆动，正确性依赖**单一活动代**不变（HDSL 已禁止并发 start/change）；并发 boot 竞态不在范围。**身份边界**：回退 symlink 是 live 派生状态，不参与组成身份。
 
 
 - 探针 1/2：**零网络**（合成 fixture / 自有副本上的本地 dump）。
@@ -134,7 +170,7 @@ PASS W4 crash after pointer switch (finalize keeps gen2, gen1 restorable): activ
 ## 复现注意事项
 
 - 探针 1 需要先 `pnpm run build`，读取 `packages/*/dist`；`--keep` 保留临时 data root。
-- 探针 2/3 拒绝身份不符的安装；只复制 `dsh`（与 `node`）到临时目录，源不变；`KEEP=1` 保留工作目录。
-- **如何取得受管的 `npm-ci` rc.2 安装**（探针 2/3 依赖，未入库路径）：用 HDSL 自身在 macOS ARM64 上 `environments.create` 一个 `darwin-arm64-node22_19_0-dsh0_1_5-rc_2`（或 node24）环境，得到 `<dataRoot>/environments/<env>/generations/<gen>/`；探针会校验其 `install-manifest.json` 的 `installMode=npm-ci` 与 `dsh.version/sha256`，不符即 REFUSE。
-- 探针 6（废弃原型）无外部依赖，直接 node 运行。
+- 探针 2/3/6 拒绝身份不符的安装；只复制 `dsh`（与 `node`）到临时目录，源不变；`KEEP=1` 保留工作目录。
+- 探针 4/5 无外部依赖，直接 node 运行（探针 5 会真实 spawn 子进程并 `SIGKILL`）。
+- **如何取得受管的 `npm-ci` rc.2 安装**（探针 2/3/6 依赖，未入库路径）：用 HDSL 自身在 macOS ARM64 上 `environments.create` 一个 `darwin-arm64-node22_19_0-dsh0_1_5-rc_2`（或 node24）环境，得到 `<dataRoot>/environments/<env>/generations/<gen>/`；探针会校验其 `install-manifest.json` 的 `installMode=npm-ci` 与 `dsh.version/sha256`，不符即 REFUSE。
 - 所有探针只写 `mkdtemp` 目录，不触碰宿主 home。

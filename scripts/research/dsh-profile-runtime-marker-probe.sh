@@ -77,22 +77,40 @@ PY
 }
 read_bundles() { python3 -c "import json,sys;print(json.load(open(sys.argv[1]))['dsh']['profile']['bundles'])" "$WORK/home/profiles/$1/package.json"; }
 
-# Bounded boot: prints "ready@<n>s", "exited@<n>s" or "no-ready".
+# Bounded boot. Echoes "<result>|<alive>|<exitcode>|<elapsed>s":
+#   result: ready | no-ready | exited
+#   alive:  yes|no at window end; exitcode: numeric or '-' when still alive.
+# A live process that never printed the marker is the only valid negative control;
+# "exited" is a distinct, failing outcome, never treated as "not loaded".
 boot() {
-  local profile="$1" log="$WORK/$1.log" pid
+  local profile="$1" log="$WORK/$1.log" pid rc elapsed result alive
+  : >"$log"
   "$NODE" "$DSH" --profile "$profile" --no-open --host 127.0.0.1 --port 0 >"$log" 2>&1 &
   pid=$!
-  local i result="no-ready"
+  result="no-ready"; elapsed="$READY_TIMEOUT"
+  local i
   for i in $(seq 1 "$READY_TIMEOUT"); do
     sleep 1
-    if grep -q "dsh web:" "$log"; then result="ready@${i}s"; break; fi
-    if ! kill -0 "$pid" 2>/dev/null; then result="exited@${i}s"; break; fi
+    if grep -q "dsh web:" "$log"; then result="ready"; elapsed="${i}s"; break; fi
+    if ! kill -0 "$pid" 2>/dev/null; then result="exited"; elapsed="${i}s"; break; fi
   done
-  kill "$pid" 2>/dev/null || true
-  sleep 1
-  kill -9 "$pid" 2>/dev/null || true
-  printf '%s' "$result"
+  if kill -0 "$pid" 2>/dev/null; then
+    alive="yes"
+    kill "$pid" 2>/dev/null || true
+    sleep 1
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null
+    rc="-"
+  else
+    alive="no"
+    wait "$pid" 2>/dev/null
+    rc="$?"
+  fi
+  printf '%s|%s|%s|%s' "$result" "$alive" "$rc" "$elapsed"
 }
+
+field() { printf '%s' "$1" | cut -d'|' -f"$2"; }
+exitcode() { case "$(field "$1" 3)" in 0) printf '0';; '' ) printf 'unknown';; *) printf '%s' "$(field "$1" 3)";; esac; }
 
 echo "generation A: base + web-app"
 init_profile genA
@@ -113,19 +131,43 @@ A_AFTER="$(read_bundles genA)"
 B_AFTER="$(read_bundles genB)"
 PROFILE_FILES="$(ls "$WORK/home/profiles/genA" | tr '\n' ' ')"
 
+# Evidence: masked log tails + loader side effect for the negative control.
+echo "--- masked log tails ---"
+for p in genA genB; do
+  printf '  %s: %s\n' "$p" "$(tail -c 300 "$WORK/$p.log" 2>/dev/null | mask | tr '\n' ' ')"
+done
+LOADER_RAN_B="$([ -f "$WORK/home/profiles/genB/cordis.yml" ] && echo yes || echo no)"
+
 fail=0
-[ "$A1" != "no-ready" ] && [ "${A1#ready}" != "$A1" ] || { echo "FAIL: genA did not reach runtime readiness"; fail=1; }
-case "$B1" in ready*) echo "FAIL: base-only genB reached web readiness (marker not bound to profile)"; fail=1;; esac
-[ "${A2#ready}" != "$A2" ] || { echo "FAIL: switch-back to genA did not reach readiness"; fail=1; }
+[ "$(field "$A1" 1)" = "ready" ] || { echo "FAIL: genA did not reach runtime readiness ($A1)"; fail=1; }
+# Negative control: must be live-but-no-marker, never a crash/exit.
+[ "$(field "$B1" 1)" = "no-ready" ] || { echo "FAIL: genB must be a live no-ready negative control, got $B1"; fail=1; }
+[ "$(field "$B1" 2)" = "yes" ] || { echo "FAIL: genB exited (exit $(exitcode "$B1")) instead of staying live; cannot claim 'not loaded'"; fail=1; }
+[ "$LOADER_RAN_B" = "yes" ] || { echo "FAIL: genB loader did not run (no cordis.yml), negative control is vacuous"; fail=1; }
+[ "$(field "$A2" 1)" = "ready" ] || { echo "FAIL: switch-back to genA did not reach readiness ($A2)"; fail=1; }
 [ "$A_AFTER" = "$BUNDLES_A" ] || { echo "FAIL: genA bundles changed after genB boot"; fail=1; }
 [ "$B_AFTER" = "$BUNDLES_B" ] || { echo "FAIL: genB bundles changed after genA boot"; fail=1; }
-if [ "$fail" -ne 0 ]; then echo "RESULT: FAIL"; exit 1; fi
 
+if [ "$fail" -ne 0 ]; then
+  echo "genA1=$A1 genB=$B1 genA2=$A2 loaderRanGenB=$LOADER_RAN_B"
+  echo "RESULT: FAIL"
+  exit 1
+fi
+
+MARGIN_A=$((READY_TIMEOUT - $(field "$A1" 4 | tr -d 's')))
+echo "genA1=$A1 genB=$B1 genA2=$A2 loaderRanGenB=$LOADER_RAN_B"
 echo "RESULT: PASS — the selected --profile determines the runtime-loaded bundle set;"
 echo "        two profiles in one DSH_HOME are independent and switchable."
+echo "negative control: genB live no-ready for the full ${READY_TIMEOUT}s window (exit code $(exitcode "$B1")), loader ran, so 'not loaded' is not a crash;"
+echo "margin: web-app marker appeared in $(field "$A1" 4) vs ${READY_TIMEOUT}s window (${MARGIN_A}s spare)."
 echo "profile files after boot: $PROFILE_FILES"
 echo "NOTE: DSH rewrites <profile>/cordis.yml on boot; a profile dir is mutable runtime state,"
 echo "      so it belongs in the shared home, not inside an immutable committed generation dir."
+echo "NOTE: --from-default-profile web copies the shipped 'web' template into genA/genB; this probe"
+echo "      reuses those names for brevity. Production will use an 'hdsl-<gen>' namespace and leave"
+echo "      'web' and user profiles untouched (GC confined to that namespace)."
+echo "NOTE: this probe contains NO real SIGKILL; per-phase SIGKILL/throw is covered by"
+echo "      e10b-phase-kill-prototype.mjs (process-level), and it does not stand in for production."
 echo "NOTE: publish/switch atomicity and crash recovery are NOT covered here (see e10b-publish-crash-prototype.mjs)."
 echo "NOTE: HDSL production wiring (start argv --profile <genName>, commit ordering) is not implemented;"
 echo "      E10b remains open until this mechanism is wired and the dual-generation seam is proven end to end."
