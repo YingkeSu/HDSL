@@ -22,14 +22,24 @@ import {
   type RevisionCommand,
   type RuntimeCombination,
 } from '@hdsl/contracts';
+import type {
+  PluginInspectCommand,
+  PluginSearchCommand,
+} from '@hdsl/contracts';
 import type { DiagnosticsExporter } from './ports.js';
 import type { EnvironmentService } from './creation-service.js';
+import type { PluginDiscoveryService } from './plugin-discovery-service.js';
 
 export interface EnvironmentContractPortOptions {
   readonly service: EnvironmentService;
   readonly host?: HostPlatform;
   readonly catalog: readonly RuntimeCombination[];
   readonly exportDiagnostics?: DiagnosticsExporter;
+  /**
+   * Global read-only plugin discovery. Optional so the environment-only unit
+   * tests keep a narrow surface; `main` always wires it.
+   */
+  readonly pluginDiscovery?: PluginDiscoveryService;
 }
 
 const NOT_IMPLEMENTED = 'this capability is owned by the managed-process slice (T005/T006)';
@@ -39,6 +49,7 @@ export const createEnvironmentContractPort = (
 ): ContractPort => {
   const { service } = options;
   const exporter = options.exportDiagnostics;
+  const pluginDiscovery = options.pluginDiscovery;
 
   return {
     host: options.host ?? service.host,
@@ -56,7 +67,8 @@ export const createEnvironmentContractPort = (
     },
 
     findOperation(operationId: string): PortOutcome<OperationSnapshot> {
-      return service.findOperation(operationId);
+      const plugin = pluginDiscovery?.findOperation(operationId);
+      return plugin ?? service.findOperation(operationId);
     },
 
     findCombination(combinationId: string): PortOutcome<RuntimeCombination> {
@@ -80,7 +92,20 @@ export const createEnvironmentContractPort = (
     },
 
     cancelOperation(command: OperationCommand): PortOutcome<OperationSnapshot> {
-      return service.cancelOperation(command.operationId);
+      const plugin = pluginDiscovery?.cancelOperation(command.operationId);
+      return plugin ?? service.cancelOperation(command.operationId);
+    },
+
+    searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef> {
+      return pluginDiscovery === undefined
+        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
+        : pluginDiscovery.search(command);
+    },
+
+    inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef> {
+      return pluginDiscovery === undefined
+        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
+        : pluginDiscovery.inspect(command);
     },
 
     exportDiagnostics(command: EnvironmentCommand) {

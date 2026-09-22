@@ -11,8 +11,14 @@
  * `specs/001-environment-lifecycle/contracts/local-api.md` and the fixture
  * table in `fixtures.ts`, and let the orchestrator tag the frozen revision
  * after review. No consumer may silently accept a different version.
+ *
+ * `1.1` adds the plugin discovery surface (`plugins.search`/`plugins.inspect`,
+ * `OperationSnapshot.output`, `retryAfterSeconds` and the D11 error codes) per
+ * ADR 0005. The frozen `1.0` contract is retained as the tag
+ * `contracts-v1.0.0`; this constant is the single authority for the wire
+ * version and both sides ship from the same build.
  */
-export const API_VERSION = '1.0' as const;
+export const API_VERSION = '1.1' as const;
 
 export type ApiVersion = typeof API_VERSION;
 

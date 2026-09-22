@@ -46,9 +46,12 @@ import {
   openWebUIResultSchema,
   operationRefSchema,
   operationSnapshotSchema,
+  pluginInspectionSchema,
+  pluginSearchResultSchema,
   runtimeCombinationListSchema,
   sanitizeOperationPhase,
   subscriptionRefSchema,
+  type OperationKind,
   type OperationSnapshot,
   type RuntimeCombination,
   type SubscriptionRef,
@@ -98,22 +101,31 @@ export interface ContractRuntime {
 
 interface PortFailureLike {
   readonly code: ErrorCode;
+  readonly retryAfterSeconds?: number;
 }
 
 const failure = (code: ErrorCode, message: string): ContractResponse<never> =>
   contractFail(API_VERSION, contractError(code, message));
 
 /** Controlled-message failure; downstream port text is never forwarded. */
-const failureForCode = (code: ErrorCode): ContractResponse<never> =>
-  contractFail(API_VERSION, contractErrorForCode(code));
+const failureForCode = (
+  code: ErrorCode,
+  retryAfterSeconds?: number,
+): ContractResponse<never> =>
+  contractFail(
+    API_VERSION,
+    retryAfterSeconds === undefined
+      ? contractErrorForCode(code)
+      : contractErrorForCode(code, { retryAfterSeconds }),
+  );
 
 const guardFailure = (outcome: PortFailureLike): Execution => ({
-  response: failureForCode(outcome.code),
+  response: failureForCode(outcome.code, outcome.retryAfterSeconds),
   executed: false,
 });
 
 const executedFailure = (outcome: PortFailureLike): Execution => ({
-  response: failureForCode(outcome.code),
+  response: failureForCode(outcome.code, outcome.retryAfterSeconds),
   executed: true,
 });
 
@@ -133,21 +145,50 @@ const validatePortValue = <T>(schema: Schema<T>, value: unknown, label: string):
 };
 
 /**
+ * Terminal `output` schemas per operation kind (ADR 0005 D5). Only kinds with a
+ * real payload are listed; every other kind must carry no `output`.
+ */
+const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> = {
+  search: pluginSearchResultSchema,
+  inspect: pluginInspectionSchema,
+};
+
+/**
+ * Enforces the D5 `output` rule: a terminal succeeded payload kind must carry a
+ * schema-valid `output`; queued/running/failed/cancelled and every kind without
+ * a payload must not. A violation is a port contract breach → `INTERNAL_ERROR`.
+ */
+const assertOperationOutput = (snapshot: OperationSnapshot): OperationSnapshot => {
+  const schema = OPERATION_OUTPUT_SCHEMAS[snapshot.kind];
+  if (snapshot.status === 'succeeded' && schema !== undefined) {
+    const output = validatePortValue(schema, snapshot.output, `${snapshot.kind}.output`);
+    return { ...snapshot, output };
+  }
+  if (snapshot.output !== undefined) {
+    throw new ContractPortViolation(
+      `${snapshot.kind} must not carry output while ${snapshot.status}`,
+    );
+  }
+  return snapshot;
+};
+
+/**
  * A port-produced snapshot is normalized before it can cross the bridge: the
  * free-text `phase` is sanitized and bounded to its own DTO postcondition
- * (matching the event path) and a nested error's port message is replaced with
- * the controlled message for its code.
+ * (matching the event path), a nested error's port message is replaced with the
+ * controlled message for its code, and the terminal `output` rule is enforced.
  */
 const sanitizeOperationSnapshot = (snapshot: OperationSnapshot): OperationSnapshot => {
   const phase = sanitizeOperationPhase(snapshot.phase);
   const normalized = phase === snapshot.phase ? snapshot : { ...snapshot, phase };
-  if (normalized.error === undefined || normalized.error === null) {
-    return normalized;
-  }
-  return {
-    ...normalized,
-    error: { ...normalized.error, message: contractErrorForCode(normalized.error.code).message },
-  };
+  const withError =
+    normalized.error === undefined || normalized.error === null
+      ? normalized
+      : {
+          ...normalized,
+          error: { ...normalized.error, message: contractErrorForCode(normalized.error.code).message },
+        };
+  return assertOperationOutput(withError);
 };
 
 export const unsupportedCombinationReason = (
@@ -385,6 +426,36 @@ const execute = (
         ),
         executed: true,
       };
+    }
+    case 'plugins.search': {
+      const typed = input as MethodInputs['plugins.search'];
+      // Global, environment-independent: no resource guard can reject it and no
+      // environment `ENVIRONMENT_BUSY` applies (ADR 0005 D5).
+      markInProgress();
+      const outcome = runtime.port.searchPlugins({
+        requestId: typed.requestId,
+        query: typed.query,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(operationRefSchema, outcome.value, 'plugins.search');
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
+    }
+    case 'plugins.inspect': {
+      const typed = input as MethodInputs['plugins.inspect'];
+      markInProgress();
+      const outcome = runtime.port.inspectPluginSource({
+        requestId: typed.requestId,
+        source: typed.source,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(operationRefSchema, outcome.value, 'plugins.inspect');
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
     }
   }
 };

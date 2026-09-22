@@ -26,6 +26,7 @@ import {
 import { archSchema, platformSchema } from './platform.js';
 import {
   sArray,
+  sBoolean,
   sBooleanLiteral,
   sInteger,
   sLiteral,
@@ -34,6 +35,7 @@ import {
   sObject,
   sOptional,
   sString,
+  sUnknown,
   type Infer,
 } from './schema.js';
 
@@ -144,7 +146,17 @@ export const operationStatusSchema = sLiteral(
 );
 export type OperationStatus = Infer<typeof operationStatusSchema>;
 
-export const operationKindSchema = sLiteral('create', 'start', 'stop', 'openWebUI', 'export');
+export const operationKindSchema = sLiteral(
+  'create',
+  'start',
+  'stop',
+  'openWebUI',
+  'export',
+  // 1.1 plugin discovery (ADR 0005 D4/D5). `preview`/`apply`/`restore` are
+  // added by S2+ inside the same not-yet-tagged 1.1 surface (ADR §5.4).
+  'search',
+  'inspect',
+);
 export type OperationKind = Infer<typeof operationKindSchema>;
 
 /** `OperationSnapshot.phase` / `operation.updated` phase share this bound. */
@@ -176,7 +188,15 @@ export const environmentSummarySchema = sObject({
 });
 export type EnvironmentSummary = Infer<typeof environmentSummarySchema>;
 
-/** OperationSnapshot includes the final error, sequence and optional progress. */
+/**
+ * OperationSnapshot includes the final error, sequence and optional progress.
+ *
+ * `output` is the optional terminal result payload (ADR 0005 D5); it is
+ * required for a succeeded `search`/`inspect` and must be absent for
+ * queued/running/failed/cancelled and for every pre-1.1 kind. The dispatcher
+ * enforces that rule with a per-kind schema, so the loose `sUnknown` here is
+ * never what crosses the bridge.
+ */
 export const operationSnapshotSchema = sObject({
   id: operationIdSchema,
   environmentId: sNullable(environmentIdSchema),
@@ -186,6 +206,7 @@ export const operationSnapshotSchema = sObject({
   sequence: sInteger({ min: 0 }),
   progress: sOptional(sNumber({ min: 0, max: 100 })),
   error: sOptional(sNullable(contractErrorSchema)),
+  output: sOptional(sUnknown()),
 });
 export type OperationSnapshot = Infer<typeof operationSnapshotSchema>;
 
@@ -210,6 +231,125 @@ export const openWebUIResultSchema = sObject({
   loopbackOrigin: sString({ minLength: 1, maxLength: 128 }),
 });
 export type OpenWebUIResult = Infer<typeof openWebUIResultSchema>;
+
+/** GitHub owner (user/org login): letters, digits and internal hyphens only. */
+const githubOwnerSchema = sString({
+  minLength: 1,
+  maxLength: 64,
+  pattern: /^[A-Za-z0-9][A-Za-z0-9-]*$/,
+  patternHint: 'must be a GitHub owner login',
+});
+
+/**
+ * GitHub repository name. Real names may contain `.`, `_` and `-`
+ * (e.g. `Unclecheng-li/AI_Animation`), so only path separators/URL syntax are
+ * rejected; the value is never used as a local path in this slice.
+ */
+const githubRepoSchema = sString({
+  minLength: 1,
+  maxLength: 100,
+  pattern: /^[A-Za-z0-9._-]+$/,
+  patternHint: 'must be a GitHub repository name',
+});
+
+/** Optional ref (branch/tag/commit label): no whitespace or URL syntax. */
+const githubRefSchema = sString({
+  minLength: 1,
+  maxLength: 128,
+  pattern: /^[A-Za-z0-9][A-Za-z0-9._/-]*$/,
+  patternHint: 'must be a bounded git ref',
+});
+
+/** Public GitHub repository URL; credentials/query/fragment are not allowed. */
+const githubHtmlUrlSchema = sString({
+  minLength: 1,
+  maxLength: 2048,
+  pattern: /^https:\/\/github\.com\/[A-Za-z0-9][A-Za-z0-9-]*\/[A-Za-z0-9._-]+$/,
+  patternHint: 'must be a public https://github.com repository URL',
+});
+
+/** Default discovery query (issue #75): topic + fork/archived exclusion. */
+export const DEFAULT_PLUGIN_QUERY = 'topic:dsh-plugin fork:false archived:false';
+
+export const PLUGIN_QUERY_MIN_LENGTH = 1;
+export const PLUGIN_QUERY_MAX_LENGTH = 256;
+export const PLUGIN_TOPICS_MAX = 50;
+export const PLUGIN_HITS_MAX = 100;
+
+/** GitHub repository search only paginates the first 1000 results. */
+export const GITHUB_SEARCH_RESULT_LIMIT = 1000;
+export const PLUGIN_SEARCH_PAGE_SIZE = 100;
+
+/**
+ * `plugins.search` / `plugins.inspect` source selector. Only a GitHub
+ * `owner`/`name` plus an optional `ref` is accepted: `link:`/`file:`/local
+ * paths/arbitrary URLs are `INVALID_INPUT` (ADR 0005 D4).
+ */
+export const pluginSourceSelectorSchema = sObject({
+  owner: githubOwnerSchema,
+  name: githubRepoSchema,
+  ref: sOptional(githubRefSchema),
+});
+export type PluginSourceSelector = Infer<typeof pluginSourceSelectorSchema>;
+
+/** One repository hit from a GitHub search; metadata only, never a safety signal. */
+export const pluginSearchHitSchema = sObject({
+  fullName: sString({ minLength: 3, maxLength: 200 }),
+  owner: githubOwnerSchema,
+  name: githubRepoSchema,
+  description: sNullable(sString({ minLength: 1, maxLength: 512 })),
+  htmlUrl: githubHtmlUrlSchema,
+  stars: sInteger({ min: 0 }),
+  topics: sArray(sString({ minLength: 1, maxLength: 64 }), { maxLength: PLUGIN_TOPICS_MAX }),
+  defaultBranch: sString({ minLength: 1, maxLength: 256 }),
+  updatedAt: sString({ minLength: 1, maxLength: 64 }),
+  archived: sBoolean,
+  fork: sBoolean,
+  license: sNullable(sString({ minLength: 1, maxLength: 128 })),
+});
+export type PluginSearchHit = Infer<typeof pluginSearchHitSchema>;
+
+/**
+ * Terminal `plugins.search` payload (ADR 0005 D16/D20). `query` is the exact
+ * string sent to GitHub, character for character; `hasMore` already accounts
+ * for the 1000-result search ceiling so the UI can distinguish "truly this
+ * few" from "truncated by GitHub".
+ */
+export const pluginSearchResultSchema = sObject({
+  query: sString({ minLength: PLUGIN_QUERY_MIN_LENGTH, maxLength: PLUGIN_QUERY_MAX_LENGTH }),
+  hits: sArray(pluginSearchHitSchema, { maxLength: PLUGIN_HITS_MAX }),
+  totalCount: sInteger({ min: 0 }),
+  incompleteResults: sBoolean,
+  hasMore: sBoolean,
+  fetchedAt: sString({ minLength: 1, maxLength: 64 }),
+  fromCache: sBoolean,
+});
+export type PluginSearchResult = Infer<typeof pluginSearchResultSchema>;
+
+/** Public repository detail returned by `plugins.inspect`. */
+export const pluginRepositoryDetailSchema = sObject({
+  fullName: sString({ minLength: 3, maxLength: 200 }), // owner/name, no further format rule
+  description: sNullable(sString({ minLength: 1, maxLength: 512 })),
+  htmlUrl: githubHtmlUrlSchema,
+  stars: sInteger({ min: 0 }),
+  topics: sArray(sString({ minLength: 1, maxLength: 64 }), { maxLength: PLUGIN_TOPICS_MAX }),
+  defaultBranch: sString({ minLength: 1, maxLength: 256 }),
+  updatedAt: sString({ minLength: 1, maxLength: 64 }),
+  archived: sBoolean,
+  fork: sBoolean,
+  license: sNullable(sString({ minLength: 1, maxLength: 128 })),
+  homepage: sNullable(sString({ minLength: 1, maxLength: 2048 })),
+});
+export type PluginRepositoryDetail = Infer<typeof pluginRepositoryDetailSchema>;
+
+/** Terminal `plugins.inspect` payload; repository metadata only in S1. */
+export const pluginInspectionSchema = sObject({
+  source: pluginSourceSelectorSchema,
+  repository: pluginRepositoryDetailSchema,
+  fetchedAt: sString({ minLength: 1, maxLength: 64 }),
+  fromCache: sBoolean,
+});
+export type PluginInspection = Infer<typeof pluginInspectionSchema>;
 
 export const generationSchema = sObject({
   id: generationIdSchema,

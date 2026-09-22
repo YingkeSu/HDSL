@@ -16,6 +16,8 @@ export * from './data-root-lock.js';
 export * from './credential-store.js';
 export * from './environment-store.js';
 export * from './operation-store.js';
+export * from './plugin-source.js';
+export * from './plugin-discovery-service.js';
 export * from './journal.js';
 export * from './idempotency-store.js';
 export * from './ports.js';
