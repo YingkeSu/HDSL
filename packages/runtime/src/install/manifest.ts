@@ -20,6 +20,12 @@ export interface InstallManifest {
     readonly version: string;
     readonly sha256: string;
     readonly executable: string;
+    /**
+     * Optional (schema v1 add-on): deterministic digest of the installed Node
+     * tree. Older records lack it; reuse verification fails closed for those
+     * with an explainable reason instead of silently trusting file existence.
+     */
+    readonly treeDigest?: string;
   };
   readonly dsh: {
     readonly version: string;

@@ -22,10 +22,17 @@ export const createGenerationRuntimeVerifier = (): ((input: GenerationRuntimeVer
     try {
       const manifest = JSON.parse(readFileSync(input.manifestPath, 'utf8')) as {
         dsh?: { treeDigest?: string };
-        node?: { version?: string };
+        node?: { treeDigest?: string };
       };
-      const expected = manifest.dsh?.treeDigest;
-      if (typeof expected !== 'string' || expected.length !== 64) {
+      const expectedDsh = manifest.dsh?.treeDigest;
+      const expectedNode = manifest.node?.treeDigest;
+      // Both digests are required: a missing digest (older record) fails closed
+      // with an explainable reason rather than trusting file existence, and is
+      // not accepted from the same manifest being verified.
+      if (typeof expectedDsh !== 'string' || expectedDsh.length !== 64) {
+        return false;
+      }
+      if (typeof expectedNode !== 'string' || expectedNode.length !== 64) {
         return false;
       }
       if (!existsSync(join(input.nodeDirectory, 'bin', 'node'))) {
@@ -35,7 +42,10 @@ export const createGenerationRuntimeVerifier = (): ((input: GenerationRuntimeVer
       if (!existsSync(packageDirectory)) {
         return false;
       }
-      return sha256TreeDigestSync(packageDirectory) === expected;
+      return (
+        sha256TreeDigestSync(input.nodeDirectory) === expectedNode &&
+        sha256TreeDigestSync(packageDirectory) === expectedDsh
+      );
     } catch {
       return false;
     }

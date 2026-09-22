@@ -20,6 +20,8 @@ import {
 } from '@hdsl/core';
 import {
   createPluginApplyPort,
+  createGenerationRuntimeVerifier,
+  sha256TreeDigestSync,
   type GitProvider,
   type PluginExecutorPort,
 } from '@hdsl/runtime';
@@ -102,7 +104,7 @@ const fakeExecutor = (calls: { args: readonly string[] }[]): PluginExecutorPort 
   },
 });
 
-const build = (verifyRuntime: () => boolean) => {
+const build = (options: { verify?: (input: { manifestPath: string; nodeDirectory: string; dshDirectory: string }) => boolean; tamperNode?: boolean } = {}) => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'hdsl-apply-port-'));
   roots.push(dataRoot);
   const layout = resolveLayout(dataRoot);
@@ -118,7 +120,21 @@ const build = (verifyRuntime: () => boolean) => {
   mkdirSync(join(oldPaths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
   writeFileSync(join(oldPaths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\n');
   writeFileSync(join(oldPaths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'bin.js'), '// dsh\n');
-  writeFileSync(oldPaths.manifestPath, JSON.stringify({ schemaVersion: '1', installMode: 'npm-ci', node: { version: '22.19.0' }, dsh: { version: '0.1.5-rc.2' } }));
+  writeFileSync(
+    oldPaths.manifestPath,
+    JSON.stringify({
+      schemaVersion: '1',
+      installMode: 'npm-ci',
+      node: { version: '22.19.0', treeDigest: sha256TreeDigestSync(oldPaths.nodeDirectory) },
+      dsh: {
+        version: '0.1.5-rc.2',
+        treeDigest: sha256TreeDigestSync(join(oldPaths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')),
+      },
+    }),
+  );
+  if (options.tamperNode === true) {
+    writeFileSync(join(oldPaths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\necho tampered\n');
+  }
   writeFileSync(oldPaths.lockPath, JSON.stringify(currentLock()));
 
   const plans = new ChangePlanStore(layout);
@@ -131,7 +147,7 @@ const build = (verifyRuntime: () => boolean) => {
     layout, plans, environments, operations,
     compositionDigest: (lock) => JSON.stringify(lock.plugins),
     port,
-    verifyGenerationRuntime: verifyRuntime,
+    ...(options.verify === undefined ? {} : { verifyGenerationRuntime: options.verify }),
     now: () => new Date(now),
   });
   return { layout, environments, operations, service, gitCalls, runCalls };
@@ -151,7 +167,7 @@ const waitTerminal = async (operations: OperationStore, id: string) => {
 
 describe('changes.apply through the runtime apply port', () => {
   it('invokes the runtime port, installs with default deny and commits a new generation', async () => {
-    const { layout, environments, operations, service, gitCalls, runCalls } = build(() => true);
+    const { layout, environments, operations, service, gitCalls, runCalls } = build({ verify: () => true });
     const started = service.applyChange(command());
     expect(started.ok).toBe(true);
     if (!started.ok) return;
@@ -175,8 +191,24 @@ describe('changes.apply through the runtime apply port', () => {
     expect(existsSync(join(layout.environments, ENVIRONMENT_ID, 'home', 'profiles', `hdsl-${environment.activeGenerationId}`))).toBe(true);
   });
 
+  it('blocks a tampered Node binary (DSH tree unchanged) with the real verifier and keeps the old generation', async () => {
+    const { environments, operations, service, gitCalls, runCalls } = build({
+      verify: createGenerationRuntimeVerifier(),
+      tamperNode: true,
+    });
+    const started = service.applyChange(command());
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const snapshot = await waitTerminal(operations, started.value.operationId);
+    expect(snapshot.status).toBe('failed');
+    expect(gitCalls.count).toBe(0);
+    expect(runCalls).toHaveLength(0);
+    expect(environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+  });
+
   it('blocks before the runtime port when the reused runtime identity is not verified', async () => {
-    const { environments, operations, service, gitCalls, runCalls } = build(() => false);
+    const { environments, operations, service, gitCalls, runCalls } = build({ verify: () => false });
     const started = service.applyChange(command());
     expect(started.ok).toBe(true);
     if (!started.ok) return;
