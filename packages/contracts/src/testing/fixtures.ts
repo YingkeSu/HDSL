@@ -1074,6 +1074,22 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     seed: PLUGIN_NOT_FOUND_SEED,
   },  // generations.list (read-only, no requestId)
   {
+    id: 'plugins-installed-legal',
+    method: 'plugins.installed',
+    kind: 'legal',
+    description: 'reads the installed plugin list of a well-formed environment id',
+    request: request('plugins.installed', { environmentId: FIXTURE_IDS.environment.running }),
+    expected: 'ok',
+  },
+  {
+    id: 'plugins-installed-missing-environment',
+    method: 'plugins.installed',
+    kind: 'illegal',
+    description: 'a plugins.installed request without environmentId is rejected',
+    request: request('plugins.installed', {}),
+    expected: 'INVALID_INPUT',
+  },
+  {
     id: 'generations-list-legal',
     method: 'generations.list',
     kind: 'legal',

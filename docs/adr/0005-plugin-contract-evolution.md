@@ -75,6 +75,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | `changes.apply` | 长时操作（事务） | `requestId`, `environmentId`, `expectedRevision`, `planId`, `buildAuthorization?` | `OperationRef` | 单环境 |
 | `generations.restore` | 长时操作 | `requestId`, `environmentId`, `expectedRevision`, `targetGenerationId` | `OperationRef` | 单环境 |
 | `generations.list` | 只读即时查询（无 `requestId`） | `environmentId` | `GenerationSummary[]` | 单环境 |
+| `plugins.installed` | 只读即时查询（无 `requestId`） | `environmentId` | `InstalledPluginsView`（活动代的组成插件 + 内置/启用/来源摘要 + revision/generationId 绑定） | 单环境 |
 
 - **返回风格规则**（解释语义一致性）：长时/网络/事务类 → `OperationRef` + 终态 `output`（D5）；只读即时查询 → 直接返回值。据此 `generations.list` 直接返回，而 `plugins.search`（网络 + 可取消）返回 `OperationRef`。
 - 预留名字 `changes.preview` / `changes.apply` / `generations.restore` 从"仅文档预留"提升为白名单成员；`pack.inspect` / `pack.import` / `pack.export` **继续预留**，不暴露（003 定义）。
@@ -265,8 +266,8 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 
 | 类别 | 项目 |
 | --- | --- |
-| 方法 | `plugins.search`、`plugins.inspect`、`changes.preview`、`changes.apply`、`generations.restore`（预留名提升）、`generations.list`（只读即时） |
-| DTO | `PluginSearchResult`、`PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan`、`ChangePlanAction`、`ChangeBlockingReference`、`BuildScriptEntry`、`BuildAuthorization`、`ChangeApplication`、`GenerationSummary` |
+| 方法 | `plugins.search`、`plugins.inspect`、`changes.preview`、`changes.apply`、`generations.restore`（预留名提升）、`generations.list`（只读即时）、`plugins.installed`（只读即时，S3 追加；本节记于 1.1 尚未打标签的差异面，`contracts-v1.0.0` 标签不动） |
+| DTO | `PluginSearchResult`、`PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan`、`ChangePlanAction`、`ChangeBlockingReference`、`BuildScriptEntry`、`BuildAuthorization`、`ChangeApplication`、`GenerationSummary`、`InstalledPlugin`/`InstalledPluginsView`（S3） |
 | 既有 DTO 的加可选字段 | `OperationSnapshot.output?`（逐 kind/state 必填规则见 D5）；`ContractError.retryAfterSeconds?`；`CompositionLock.pluginSources?`（非摘要，摘要字节不变见 D13） |
 | 枚举 | `operationKind` 新增 `search` / `inspect` / `preview` / `apply` / `restore` |
 | 错误码 | D11 的 15 个新码；`retryable` 集新增 2 项；复用既有 `DOWNLOAD_FAILED` 承载传输失败 |

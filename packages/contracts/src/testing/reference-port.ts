@@ -28,6 +28,7 @@ import type {
   EnvironmentSummary,
   ExportResult,
   GenerationSummary,
+  InstalledPluginsView,
   OpenWebUIResult,
   OperationKind,
   OperationRef,
@@ -117,6 +118,21 @@ export class ReferenceContractPort implements ContractPort {
 
   listGenerations(_environmentId: string): PortOutcome<readonly GenerationSummary[]> {
     return portOk([]);
+  }
+
+  listInstalledPlugins(environmentId: string): PortOutcome<InstalledPluginsView> {
+    const environment = this.#environments.get(environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    // The reference double records no plugin composition; the empty list is the
+    // explicit controlled value (never a fabrication of installed plugins).
+    return portOk({
+      environmentId,
+      revision: environment.revision,
+      generationId: environment.activeGenerationId,
+      plugins: [],
+    });
   }
 
   restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef> {

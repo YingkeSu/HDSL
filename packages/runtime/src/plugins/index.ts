@@ -7,3 +7,4 @@ export * from './runtime-verifier.js';
 export * from './runtime-repair.js';
 export * from './target-profile.js';
 export * from './resolving-preview.js';
+export * from './removal.js';

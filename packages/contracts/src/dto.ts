@@ -514,6 +514,45 @@ export const changeApplicationSchema = sObject({
 export type ChangeApplication = Infer<typeof changeApplicationSchema>;
 
 /** One generation summary for `generations.list` / `generations.restore`. */
+export const INSTALLED_PLUGINS_MAX = 128;
+
+/**
+ * One installed plugin of the ACTIVE generation's recorded composition
+ * (`plugins.installed`, ADR 0005 D4/D15). Minimal and bounded by design: no disk
+ * paths, no manifest text and no credentials — `isBuiltin` is resolved from the
+ * current managed DSH install, never from the client or a same-name profile
+ * dependency.
+ */
+export const installedPluginSchema = sObject({
+  id: pluginIdSchema,
+  version: artifactVersionSchema,
+  sha256: sha256Schema,
+  isBuiltin: sBoolean,
+  enabledBundle: sBoolean,
+  /** Public source identity recorded in the composition lock; never a path. */
+  source: sNullable(
+    sObject({
+      owner: githubOwnerSchema,
+      name: githubRepoSchema,
+      commitSha: sNullable(sString({ minLength: 40, maxLength: 40 })),
+    }),
+  ),
+});
+export type InstalledPlugin = Infer<typeof installedPluginSchema>;
+
+/**
+ * Read-only view returned by `plugins.installed`. `revision` and `generationId`
+ * bind the list to the environment state the UI must re-verify before a remove
+ * preview/apply, so a stale list cannot target a superseded generation.
+ */
+export const installedPluginsViewSchema = sObject({
+  environmentId: environmentIdSchema,
+  revision: revisionSchema,
+  generationId: sNullable(generationIdSchema),
+  plugins: sArray(installedPluginSchema, { maxLength: INSTALLED_PLUGINS_MAX }),
+});
+export type InstalledPluginsView = Infer<typeof installedPluginsViewSchema>;
+
 export const generationSummarySchema = sObject({
   generationId: generationIdSchema,
   environmentId: environmentIdSchema,
