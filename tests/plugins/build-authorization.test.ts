@@ -254,7 +254,7 @@ describe('github-form pinned-lock identity derivation (matches the production pr
   });
 });
 
-describe('enumerateInstallScriptsFromInstalledTree (pinned-lock guided, .pnpm layout)', () => {
+describe('enumerateInstallScriptsFromInstalledTree (pinned-lock guided, .pnpm layout unit logic)', () => {
   const readPackageJsonText = (path: string): string | undefined => {
     try {
       return readFileSync(path, 'utf8');
@@ -331,6 +331,49 @@ describe('enumerateInstallScriptsFromInstalledTree (pinned-lock guided, .pnpm la
     const scripts = enumerateInstallScriptsFromInstalledTree({
       nodeModulesDirectory: nodeModules,
       lockText: CLOSURE_LOCK,
+      excludePackageName: 'hdsl-plugin-demo',
+      readPackageJsonText,
+    });
+    expect(scripts).toBeUndefined();
+  });
+
+  it('fail-closes when two reachable identities share name+version but differ in resolved Git identity', () => {
+    // `(name, version)` equality does NOT prove the same commit/peer identity; a
+    // one-to-many merge is never silently accepted.
+    const ambiguousLock = [
+      "lockfileVersion: '9.0'",
+      'importers:',
+      '  .:',
+      '    dependencies:',
+      '      a:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      '      b:',
+      '        specifier: 1.0.0',
+      '        version: 1.0.0',
+      'packages:',
+      '  a@1.0.0:',
+      '    version: 1.0.0',
+      '  b@1.0.0:',
+      '    version: 1.0.0',
+      '  dup@1.0.0:',
+      '    version: 1.0.0',
+      '  dup@git+file:///x#abc:',
+      '    version: 1.0.0',
+      'snapshots:',
+      '  a@1.0.0:',
+      '    dependencies:',
+      '      dup: 1.0.0',
+      '  b@1.0.0:',
+      '    dependencies:',
+      '      dup: git+file:///x#abc',
+      '  dup@1.0.0: {}',
+      '  dup@git+file:///x#abc: {}',
+    ].join('\n');
+    const { nodeModules } = buildTree();
+    const scripts = enumerateInstallScriptsFromInstalledTree({
+      nodeModulesDirectory: nodeModules,
+      lockText: ambiguousLock,
       excludePackageName: 'hdsl-plugin-demo',
       readPackageJsonText,
     });

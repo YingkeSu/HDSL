@@ -74,6 +74,13 @@ export const sameBuildScriptSet = (
 const asRecord = (value: unknown): Record<string, unknown> | undefined =>
   isPlainRecord(value) ? value : undefined;
 
+/**
+ * A registry depPath is `<name>@<version>`; pnpm omits the `version` field when it
+ * is encoded in the key. A git/tarball depPath keeps the URL in the key, so a URL
+ * suffix is never mistaken for a version.
+ */
+const REGISTRY_VERSION_SUFFIX = /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/;
+
 /** Maximum dependency package directories inspected (bounded, non-executing). */
 const INSTALLED_SCAN_MAX = 4_000;
 
@@ -232,6 +239,7 @@ export const enumerateInstallScriptsFromInstalledTree = (input: {
   // Expected reachable (name, version) multiset. An identity whose version cannot
   // be established is an unsupported shape.
   const expectedCounts = new Map<string, number>();
+  const depPathsByKey = new Map<string, Set<string>>();
   for (const depPath of closure.reachable) {
     const at = depPath.lastIndexOf('@');
     if (at <= 0) {
@@ -244,6 +252,21 @@ export const enumerateInstallScriptsFromInstalledTree = (input: {
     }
     const key = `${name}\u0000${version}`;
     expectedCounts.set(key, (expectedCounts.get(key) ?? 0) + 1);
+    const set = depPathsByKey.get(key);
+    if (set === undefined) {
+      depPathsByKey.set(key, new Set([depPath]));
+    } else {
+      set.add(depPath);
+    }
+  }
+  // Conservative refusal: `(name, version)` equality does NOT prove the same
+  // commit/peer identity. If two reachable, DISTINCT depPaths share a
+  // name+version, they cannot be bound uniquely to a manifest, so the closure is
+  // not fully verifiable (never merged one-to-many).
+  for (const set of depPathsByKey.values()) {
+    if (set.size > 1) {
+      return undefined;
+    }
   }
   const manifests = collectInstalledManifests(input.nodeModulesDirectory, input.readPackageJsonText);
   if (manifests === undefined) {
@@ -316,9 +339,12 @@ export const readLockedIdentities = (lockText: string): readonly LockedIdentity[
         continue;
       }
       const entry = asRecord(value);
-      const version = entry !== undefined && typeof entry['version'] === 'string' ? entry['version'] : undefined;
+      const versionField = entry !== undefined && typeof entry['version'] === 'string' ? entry['version'] : undefined;
       const at = depPath.lastIndexOf('@');
       const name = at > 0 ? depPath.slice(0, at) : depPath;
+      const suffix = at > 0 ? depPath.slice(at + 1) : undefined;
+      const version =
+        versionField ?? (suffix !== undefined && REGISTRY_VERSION_SUFFIX.test(suffix) ? suffix : undefined);
       if (!seen.has(depPath)) {
         seen.set(depPath, { depPath, name, version });
       }
