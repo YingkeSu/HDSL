@@ -20,6 +20,7 @@ import {
   ChangeApplyService,
   ChangePlanStore,
   EnvironmentStore,
+  IdempotencyStore,
   OperationStore,
   ensureLayout,
   generationPaths,
@@ -29,7 +30,7 @@ import {
   type EnvironmentRecord,
 } from '@hdsl/core';
 import { computeCompositionDigest, sha256TreeDigestSync } from '@hdsl/runtime';
-import type { ChangePlan, CompositionLock } from '@hdsl/contracts';
+import type { ChangePlan, CompositionLock, IdempotencyRecord } from '@hdsl/contracts';
 
 
 const roots: string[] = [];
@@ -160,18 +161,20 @@ const build = (port: PluginApplyPort, faults?: ChangeFaults) => {
   const plans = new ChangePlanStore(layout);
   plans.write({ schemaVersion: '1', plan: plan(), consumedBy: null });
   const operations = new OperationStore(layout);
+  const idempotency = new IdempotencyStore(layout);
   const service = new ChangeApplyService({
     layout,
     plans,
     environments,
     operations,
+    idempotency,
     compositionDigest: computeCompositionDigest,
     port,
     verifyGenerationRuntime: () => true,
     now: () => new Date('2026-09-22T00:05:00.000Z'),
     ...(faults === undefined ? {} : { faults }),
   });
-  return { environments, plans, operations, service };
+  return { environments, plans, operations, idempotency, service };
 };
 
 const command = { requestId: 'req-cancel-install', environmentId: ENV, expectedRevision: 3, planId: PLAN, buildAuthorization: null };
@@ -233,19 +236,24 @@ describe('changes.apply cancellation at the commit boundary (S5 #79)', () => {
   });
 
   /**
-   * D1 (open defect, tracked by a QA issue): cancel DURING the commit window —
-   * after the pointer switched but before the operation reaches a terminal state —
-   * must return `CANNOT_CANCEL` (D10). Today `cancelOperation` only checks
-   * `isTerminalStatus`, so it accepts the cancel and the operation diverges from
-   * the committed pointer. Marked `it.fails` so default CI stays green while the
-   * defect is open; it flips red when the product is fixed and this test must be
-   * converted back to a normal expectation.
+   * D1 commit-window cancel (fixed by #93, merge 3457769f3296bfda138af1d19e8ec99615dae5b2):
+   * cancel after the pointer switched but before the op is terminal must be refused
+   * (CANNOT_CANCEL), and recovery must converge op / pointer / plan / ledger. The
+   * ledger assertion is explicit (an in-progress entry is seeded first), so a
+   * missing ledger fails rather than passing vacuously.
    */
-  it.fails('commit-window cancel (pointer switched, op still running) must be refused — D1', async () => {
+  it('commit-window cancel (pointer switched, op still running) is refused, and recovery converges op/pointer/plan/ledger', async () => {
     const f = build(stagedPort(), { pauseAt: 'committed' });
+    // Explicit in-progress ledger residue (what the dispatcher writes before the effect).
+    f.idempotency.write('req-cancel-install', {
+      state: 'in-progress',
+      method: 'changes.apply',
+      fingerprint: 'fp',
+    } as unknown as IdempotencyRecord);
     const started = f.service.applyChange(command);
     expect(started.ok).toBe(true);
     if (!started.ok) return;
+    const operationId = started.value.operationId;
     const deadline = Date.now() + 5_000;
     for (;;) {
       const env = f.environments.read(ENV);
@@ -253,9 +261,54 @@ describe('changes.apply cancellation at the commit boundary (S5 #79)', () => {
       if (Date.now() > deadline) throw new Error('pointer did not switch');
       await new Promise((r) => setTimeout(r, 5));
     }
-    const cancel = f.service.cancelOperation(started.value.operationId);
-    // Contract D10: after the commit point the cancel must be refused.
+
+    // Contract D10: after the commit point the cancel must be refused, with no state change.
+    const cancel = f.service.cancelOperation(operationId);
     expect(cancel?.ok).toBe(false);
+    if (cancel?.ok === false) expect(cancel.code).toBe('CANNOT_CANCEL');
+
+    // Recovery must converge op / pointer / plan / ledger consistently.
+    const recover = await f.service.recover();
+    expect(recover.finalized).toBeGreaterThanOrEqual(1);
+    expect(f.operations.read(operationId)?.status).toBe('succeeded');
+    expect(f.environments.read(ENV)?.activeGenerationId).not.toBe(OLD_GEN);
+    expect(f.plans.read(PLAN)?.consumedBy).toBe('req-cancel-install');
+    expect(f.idempotency.read('req-cancel-install')?.state).toBe('completed'); // precise: absence fails
+  });
+
+  it('residual state (cancelled op + committed journal + in-progress ledger) recovers without throwing (#92)', async () => {
+    const f = build(stagedPort(), { pauseAt: 'committed' });
+    f.idempotency.write('req-residual', {
+      state: 'in-progress',
+      method: 'changes.apply',
+      fingerprint: 'fp',
+    } as unknown as IdempotencyRecord);
+    const started = f.service.applyChange({ ...command, requestId: 'req-residual' });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const operationId = started.value.operationId;
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const env = f.environments.read(ENV);
+      if (env?.activeGenerationId !== OLD_GEN) break;
+      if (Date.now() > deadline) throw new Error('pointer did not switch');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    // Simulate the pre-#92 residue: the op was cancelled while the journal was committed.
+    const current = f.operations.read(operationId)!;
+    f.operations.update(current, { status: 'cancelled', phase: 'cancelled' }, new Date().toISOString());
+
+    let threw: unknown = null;
+    try {
+      await f.service.recover();
+    } catch (error) {
+      threw = error;
+    }
+    expect(threw).toBeNull(); // must not throw a raw terminal-store error
+    expect(f.operations.read(operationId)?.status).toBe('succeeded');
+    expect(f.environments.read(ENV)?.activeGenerationId).not.toBe(OLD_GEN);
+    expect(f.plans.read(PLAN)?.consumedBy).toBe('req-residual');
+    expect(f.idempotency.read('req-residual')?.state).toBe('completed'); // precise: absence fails
   });
 
 });

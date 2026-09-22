@@ -18,13 +18,13 @@
 | install apply | pre-commit 失败→旧代不变、plan 不消费 | **PASS** | `tests/core/change-apply-guards.test.ts`「keeps the old generation unchanged and does not consume on a pre-commit failure」 |
 | install apply | **pre-commit 取消**→`cancelled`、旧代活动、revision 不变、plan 未消费 | **PASS（本片新增）** | `tests/core/change-apply-cancel.test.ts`（新增） |
 | install apply | 终态 op 取消→`CANNOT_CANCEL`（`isTerminalStatus` 规则） | **PASS（本片新增）** | `tests/core/change-apply-cancel.test.ts` |
-| install apply | **提交窗口内取消**（指针已切、op 仍 `running`）→ 期望 `CANNOT_CANCEL` | **FAIL（缺陷 #92）** | 实测 cancel 返回 `ok`、op 变 `cancelled`，指针已切新代；recovery `finalized:1` 后 op 仍 `cancelled` ⇒ 状态/账本分叉。复现入 `it.fails`（PR #91）；缺陷登记 https://github.com/YingkeSu/HDSL/issues/92 |
+| install apply | **提交窗口内取消**（指针已切、op 仍 `running`）→ `CANNOT_CANCEL`；recovery 四元一致 | **PASS（#92 已修）** | 修复 PR #93，**merge SHA `3457769f3296bfda138af1d19e8ec99615dae5b2`**。旧红：`f8d9cd04` 上 cancel 返回 `ok`、op `cancelled`、ledger 卡 `in-progress`；新绿：`80a2d9ab` 上 `CANNOT_CANCEL` + `recover()` 后 op `succeeded`/指针新代/plan 消费/ledger `completed`（精确断言，缺失失败）。回归：`tests/core/change-apply-cancel.test.ts`（含残余态用例） |
 | install apply | 执行器不可用/身份漂移/锁改写等 runtime port 受控失败 | **PASS** | `tests/core/change-apply-runtime-port.test.ts` |
 | install/remove | codeload/registry **连接前**失败 → NETWORK_UNAVAILABLE（retryable） | **PASS** | `tests/core/removal-apply.test.ts`、`tests/plugins/removal-port.test.ts` |
 | install/remove | codeload/registry **传输/完整性**失败 → DOWNLOAD_FAILED（未提交） | **PASS** | removal-apply「registry transfer/integrity failure → DOWNLOAD_FAILED and no commit」 |
 | install/remove | 不可识别失败 → 脱敏、非重试 INTERNAL_ERROR | **PASS** | removal-apply「unidentifiable install failure → sanitized non-retryable INTERNAL_ERROR」 |
 | remove | preview/apply 取消（preview 终态无 plan；pre-commit 取消旧代不变） | **PASS** | removal-apply「cancels a removal preview…」「cancels a removal apply before the commit point…」 |
-| remove | **提交窗口内取消**（同源 `cancelOperation`） | **FAIL（同上 #92）** | 与 install 同代码路径；修复后由 QA 独立验窗口/幂等 |
+| remove | **提交窗口内取消**（同源 `cancelOperation`） | **PASS（#92 已修）** | 与 install 同代码路径；候选上 `removal-apply` 窗口用例通过（merge SHA `3457769f`） |
 | 幂等 | 同 requestId 重放返原记录、不重复副作用 | **PASS（30 边界审计范围；本片只在网络/取消面引用）** | `tests/core/apply-idempotency-recovery.test.ts`、`tests/contracts/idempotency.test.ts` |
 | 幂等 | `retryable` 失败用新 requestId 重试成功（remove） | **PASS** | removal-apply「lets a new requestId retry a pre-commit removal apply failure to success」 |
 | 幂等 | **install apply**：真 dispatcher + 真 core，受控 `DOWNLOAD_FAILED` → 同 requestId 重放原终态且**不重复副作用** → **新 id 才重试成功** | **PASS（本片新增）** | `tests/core/change-apply-retryable-replay.test.ts`（`createContractRuntime` + 真 `ChangeApplyService`；stage 调用计数 1→1→2） |
@@ -40,9 +40,11 @@
 
 ## 实质缺口 / 待编排裁决（未记 PASS）
 
+**已修缺陷**：`#92`（提交窗口内取消/恢复分叉）由 PR #93 修复并 merge（`3457769f`）；旧红→新绿见上表。
+
 1. **403 区分能力（F1）**：`packages/runtime/src/plugins/github.ts:300` 把**任意** `403||429` 映射为 `RATE_LIMITED`（retryable）。可识别限流（带 `x-ratelimit-reset`/`retry-after`）已有测试 PASS；但 GitHub 的 **权限/认证类 403** 与限流 403 未加区分，且无「无 rate-limit 头部的 403」测试。冻结契约 D11 原文即「403/429 → RATE_LIMITED」，故这是**契约精度 vs 编排预期**的差异，**请编排裁决**；`retryAfterSeconds` 仅在响应有可靠依据时给出、无则不编造（已核）。
 2. **pnpm/registry 429 不可识别**：受管 pnpm 取包失败分类（`removal-port`/`classifyManagedInstallFailure`）只产出 `NETWORK_UNAVAILABLE`/`DOWNLOAD_FAILED`/`INTERNAL_ERROR`，**无可靠 429 token，不臆造**（与 34/35 结论一致）⇒ 矩阵中「install/remove 429」**未验证为 RATE_LIMITED**，记为**能力限制/AC 覆盖差异**。
-3. **remove 提交窗口内取消**：与 install 同源（共用 `ChangeApplyService.cancelOperation`），缺陷 #92 已登记；**修复候选审过后由 QA 独立验窗口/幂等**（不在本 PR 预判）。
+3. **remove 提交窗口内取消**：与 install 同源；已随 #93 修复并在候选上由 `removal-apply` 窗口用例覆盖（merge `3457769f`）。
 
 ## 未覆盖 / 边界
 
