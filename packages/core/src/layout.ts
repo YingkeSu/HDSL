@@ -21,6 +21,7 @@
  *   operations/<operation-id>.json
  *   transactions/<transaction-id>.json
  *   idempotency/<hashed-request-id>.json
+ *   plans/<plan-id>.json
  * ```
  *
  * Names are never turned into paths: only opaque ids do, and each derived path
@@ -37,6 +38,7 @@ export interface AppDataLayout {
   readonly tmp: string;
   readonly environments: string;
   readonly operations: string;
+  readonly plans: string;
   readonly transactions: string;
   readonly idempotency: string;
   readonly logs: string;
@@ -51,6 +53,7 @@ export const resolveLayout = (dataRoot: string): AppDataLayout => {
     tmp: join(root, 'tmp'),
     environments: join(root, 'environments'),
     operations: join(root, 'operations'),
+    plans: join(root, 'plans'),
     transactions: join(root, 'transactions'),
     idempotency: join(root, 'idempotency'),
     logs: join(root, 'logs'),
@@ -65,6 +68,7 @@ export const ensureLayout = (layout: AppDataLayout): void => {
     layout.tmp,
     layout.environments,
     layout.operations,
+    layout.plans,
     layout.transactions,
     layout.idempotency,
     layout.logs,

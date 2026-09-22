@@ -14,6 +14,8 @@ export * from './ids.js';
 export * from './layout.js';
 export * from './home-migration.js';
 export * from './generation-profile.js';
+export * from './change-plan-store.js';
+export * from './plugin-preview.js';
 export * from './data-root-lock.js';
 export * from './credential-store.js';
 export * from './environment-store.js';
