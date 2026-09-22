@@ -89,7 +89,44 @@ NOTE: --dump-config output is config resolution, not proof of the runtime-loaded
 - 未证明 `profiles/node_modules` 回退 symlink 在跨代 DSH 安装变化下的行为。
 - 因此：在 E10b 通过前，**不得**声称某代 profile 已生效、旧代加载其自身组成，或 D18-2/D15 已满足。
 
-## 网络证据分栏
+## 证据 3：E10b 真实 boot 运行时 marker（`dsh-profile-runtime-marker-probe.sh`）
+
+同一个共享 `DSH_HOME` 下两代 profile，用 `@deepseek-ai/dsh-web-app` 的运行时就绪行 `dsh web: http://127.0.0.1:<port>/?token=…`（仅当 web-app bundle 实际加载后才打印）作为 marker。
+
+```sh
+scripts/research/dsh-profile-runtime-marker-probe.sh <generation-directory>
+```
+
+```text
+identity OK: dsh 0.1.5-rc.2 sha256 f4c54839d69e82bf… installMode=npm-ci
+  genA bundles=['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']
+  genB bundles=['@deepseek-ai/dsh-base']
+boot genA (web-app) -> ready@4s
+boot genB (base-only) -> no-ready
+boot genA again (switch back) -> ready@3s
+RESULT: PASS — the selected --profile determines the runtime-loaded bundle set;
+        two profiles in one DSH_HOME are independent and switchable.
+```
+
+**能证明**：真实 boot（非 `--dump-config`）下运行期加载集绑定于所选 `--profile` 的声明 bundle 集；两代 profile 在同一 home 下独立且可切换。**不能证明**：HDSL 生产启动 argv/提交顺序已接线（未实现），双代端到端；也**不**替代 E9（dump-config 等价性）。
+
+**附带发现**：DSH 每次 boot **重写** `<profile>/cordis.yml` → profile 目录是可变运行状态，不应放进"不可变已提交代"目录（支持 P-A：profile 落在共享 home）。
+
+## 证据 4：P-A 发布/切换崩溃窗口（废弃原型，非生产）
+
+`scripts/research/e10b-publish-crash-prototype.mjs`（仅文件系统层建模，无 fsync/持久性保证）：
+
+```text
+PASS W1 crash before publish: gen1 lock unchanged; actions=[removed stage gen2]
+PASS W2 crash mid-publish (orphan, pointer still gen1): gen1 lock unchanged; actions=[removed orphan profile hdsl-gen2]
+PASS W3 crash after publish before pointer (orphan removed, old gen bootable): gen1 lock unchanged; actions=[removed orphan profile hdsl-gen2]
+PASS W4 crash after pointer switch (finalize keeps gen2, gen1 restorable): active=gen2; actions=[finalized committed gen2]
+# prototype only: ordering semantics, not production durability/fsync or real DSH boot
+# 4/4 checks passed
+```
+
+**能证明（原型级）**：P-A 排序（先发布 profile、后切指针）在四个窗口下旧代 composition lock 字节不变、旧代 profile 保留；孤儿回收**必须由事务 journal 键控**（按"非当前活动代"会误删仍可供 `restore` 的旧代）。**不能证明**：真实持久性/fsync、真实 HDSL 事务与真实 boot 的端到端。
+
 
 - 探针 1/2：**零网络**（合成 fixture / 自有副本上的本地 dump）。
 - 独立一次性只读查询（**有网络**，E1 官方来源核对）：`npm view pnpm@11.7.0` → `https://registry.npmjs.org/pnpm`，观测 `version=11.7.0`、`dist.integrity=sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、`engines.node>=22.13`。这是来源/版本约束核对，**不是**受管执行器冻结证据。
@@ -97,5 +134,7 @@ NOTE: --dump-config output is config resolution, not proof of the runtime-loaded
 ## 复现注意事项
 
 - 探针 1 需要先 `pnpm run build`，读取 `packages/*/dist`；`--keep` 保留临时 data root。
-- 探针 2 拒绝身份不符的安装；只复制 `dsh/` 到临时目录，源不变；`KEEP=1` 保留工作目录。
-- 两者都只写 `mkdtemp` 目录，不触碰宿主 home。
+- 探针 2/3 拒绝身份不符的安装；只复制 `dsh`（与 `node`）到临时目录，源不变；`KEEP=1` 保留工作目录。
+- **如何取得受管的 `npm-ci` rc.2 安装**（探针 2/3 依赖，未入库路径）：用 HDSL 自身在 macOS ARM64 上 `environments.create` 一个 `darwin-arm64-node22_19_0-dsh0_1_5-rc_2`（或 node24）环境，得到 `<dataRoot>/environments/<env>/generations/<gen>/`；探针会校验其 `install-manifest.json` 的 `installMode=npm-ci` 与 `dsh.version/sha256`，不符即 REFUSE。
+- 探针 6（废弃原型）无外部依赖，直接 node 运行。
+- 所有探针只写 `mkdtemp` 目录，不触碰宿主 home。

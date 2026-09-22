@@ -24,13 +24,16 @@ home 派生机制、含密文件与可变运行数据归属、旧代恢复语义
 旧环境只有一个活动代，但迁移仍需作为**独立、可崩溃恢复、先于任何启动**的前置步骤，不能隐含在 `apply` 或 `start` 里。
 
 - **持久标志**：`<env>/migration/home-v2.json`（`schemaVersion` + `sourceGenerationId` + `state ∈ pending|copying|copied|verified|finalized` + `createdAt`/`updatedAt` + 逐项摘要）。标志缺席 = 尚未迁移。
+- **分支：空环境/无旧位置**：若 `activeGenerationId=null`（探针 A5 证明可达）或活动代无 `<gen>/home`，直接写 `state=finalized`（跳过复制，**不算失败**）。
+- **分支：新布局下新建环境**：创建提交时直接建 `<env>/home` 并写 `state=finalized`（源代即本代，无旧位置），使 `recover` 不会尝试迁移新环境；“标志缺席”仅用于识别旧环境。
 - **提交点**：`state=finalized` 的原子写入 + 旧位置删除完成。`finalized` 之前，`<env>/home` 不被任何启动/事务当作已就绪。
-- **启动前恢复顺序**（在已验证 data-root lease 内）：`recover()` → 若标志非 `finalized` 且旧位置存在 → 先完成/重跑迁移 → 再允许 `start`/`create`/`apply`；未就绪时以可解释状态拒绝启动，不暴露"空 home"。
+- **启动前恢复顺序**（在已验证 data-root lease 内）：`recover()` → 若标志存在且非 `finalized` → 先完成/重跑迁移 → 再允许 `start`/`create`/`apply`；未就绪时以可解释状态拒绝启动，不暴露"空 home"。
 - **含密副本生命周期**：复制 `.credentials.yaml` 时保留 0600，只校验权限与存在性、不读内容；先复制到临时目录并 `fsync` 文件+目录，校验后原子 `rename` 到 `<env>/home`；**旧副本只在 `<env>` 副本校验通过后才删除**；迁移完成后断言环境级单份。
 - **覆盖范围**：`home/`、`data/` 同步迁移；`<gen>/config/` 无消费者，不迁移（见 §1 目标表）。
 - **已提交代不可变的一次性例外**：迁移会读取并（仅在校验通过后）删除既有活动代的 `<gen>/home`。这是**一次性、按环境一次、仅限 `home`/`data`、仅在未运行时**的显式例外，不改动该代的运行时产物/组成锁/manifest；必须在代纪录/迁移标志中留痕（tombstone）。除该例外外，已提交代目录不可变。
+- **rename 不可见性 guard**：断言"`<env>/home` 存在 ⟺ 原子 rename 已完成"；不存在 `<env>/home` 的**部分内容**这种中间态（写入只发生在临时目录，最终整体 rename）。
 - **半复制/fsync/删旧崩溃恢复**：
-  - 崩于复制中：临时目录未 rename；`<env>/home` 不存在或为部分副本 → 丢弃临时、以旧位置为源重跑；
+  - 崩于复制中：临时目录不完整、尚未 rename → `<env>/home` 不存在 → 丢弃临时、以旧位置为源重跑；
   - 崩于 rename 后、删旧前（`state=verified`）：以已校验的 `<env>` 副本为准，删除旧副本后进入 `finalized`；
   - 崩于删旧中：源仍然存在（删除不完整）→ 重跑删除即可；
   - `<env>` 副本已校验但标志未落盘：以内容/摘要重校验，幂等进入 `finalized`。
@@ -102,7 +105,24 @@ interface ChangeFaults {
 
 默认 CI 完全离线；真实 GitHub/真实安装不进默认 CI（ADR 0005 D19）。E9（`--dump-config` 等价性）与 **E10b（每代 profile 加载等价性）均未证**：未证前生效判据只写"活动代际记录 + 离线解析组合树"，不得写"运行期实际加载集合"，也不得宣称旧代加载其自身组成。
 
+### 6.1 最小实证 checklist（区分实现前机制证据 / 实现后生产回归）
+
+**实现前（机制证据，可用仓库外废弃原型或入库 research 脚本）**
+- [ ] E10b-1 真实 boot：选定 `--profile <gen>` 后，运行期加载的 bundle 集 == 该代 profile 声明集（已用 web-app 就绪 line 作 marker 部分证明，需扩到每代完整集合与摘要绑定）。
+- [ ] E10b-2 双代切换：A→B→A 各自加载自身集，互不污染（已证）。
+- [ ] E10b-3 发布/切换崩溃窗口 W1–W4：旧代 composition lock 字节不变、旧代仍可启动；孤儿回收**由 journal 键控**（已用废弃原型证明排序语义，需真实 HDSL 事务实现）。
+- [ ] E10b-4 `profiles/node_modules` 回退 symlink 在跨代 DSH 安装变化下的行为。
+- [ ] 全相位抛错 + `SIGKILL` + `recover()` 对账（可用原型先行）。
+- [ ] 迁移四类崩溃分支 + 空环境/新环境分支（可用原型先行）。
+- [ ] E9：`--dump-config` 静态性（受控 bundle 代码执行 marker）。
+
+**实现后（生产回归，需机制证据独立审核后）**
+- [ ] 真实 HDSL 双代事务：gen1 已提交 → gen2 stage → 提交前失败后仍指向 gen1、可启动且摘要不变。
+- [ ] 真实布局迁移 + 崩溃恢复；`changes.*`/`generations.restore`。
+- [ ] 默认拒执行哨兵（依赖闭包）；受管 pnpm 身份冻结（E1）。
+- [ ] 真实安装/桌面（opt-in）；Windows 未测不声明。
+
 ## 7. 本阶段已交付/未交付
 
-- 已交付：ADR 0006（rev 2）决策与 E10b 门禁；本文档；可复现实证 `scripts/research/home-derivation-probe.mjs`（11/11）与 `scripts/research/dsh-profile-mechanism-probe.sh`（rc.2 P1–P3）；记录 `docs/development/plugin-home-derivation-validation.md`。
-- 未交付：任何生产实现（布局迁移、`changes.*`/`generations.restore`、受管 pnpm、home 数据版本告警）；**E10b/E9/E1 实证**；真实安装/桌面验收。
+- 已交付：ADR 0006（rev 2 + 机制收敛）决策与 E10b 门禁；本文档；可复现实证 `scripts/research/home-derivation-probe.mjs`（11/11）、`scripts/research/dsh-profile-mechanism-probe.sh`（rc.2 P1–P3，含 web 未被改写断言）、`scripts/research/dsh-profile-runtime-marker-probe.sh`（真实 boot marker）、`scripts/research/e10b-publish-crash-prototype.mjs`（4/4，废弃原型）；记录 `docs/development/plugin-home-derivation-validation.md`。
+- 未交付：任何生产实现（布局迁移、`changes.*`/`generations.restore`、受管 pnpm、home 数据版本告警、启动 `--profile` 接线）；**E10b 生产接线与双代端到端未证**；E9/E1 未证；真实安装/桌面验收。

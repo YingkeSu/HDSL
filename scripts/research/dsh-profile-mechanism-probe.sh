@@ -93,15 +93,23 @@ data["dsh"]["profile"]["bundles"] = ["@deepseek-ai/dsh-base"]
 json.dump(data, open(path, "w"), indent=2)
 PY
 run --profile genA --dump-config > "$WORK/genA-baseonly.txt"
+run --profile web --dump-config > "$WORK/web-after.txt"
 
 WEB_HEADERS=$(grep -c '^# ==' "$WORK/web.txt")
+WEB_AFTER_HEADERS=$(grep -c '^# ==' "$WORK/web-after.txt")
 GENA_HEADERS=$(grep -c '^# ==' "$WORK/genA-default.txt")
 BASEONLY_HEADERS=$(grep -c '^# ==' "$WORK/genA-baseonly.txt")
-echo "  web headers=$WEB_HEADERS genA-default headers=$GENA_HEADERS genA-baseonly headers=$BASEONLY_HEADERS"
+echo "  web heads=$WEB_HEADERS genA-default=$GENA_HEADERS genA-baseonly=$BASEONLY_HEADERS web-after=$WEB_AFTER_HEADERS"
 
 fail=0
-[ "$WEB_HEADERS" -eq "$GENA_HEADERS" ] || { echo "FAIL P3: same bundles under two profile names should match"; fail=1; }
-[ "$BASEONLY_HEADERS" -lt "$GENA_HEADERS" ] || { echo "FAIL P2: base-only bundles should shrink the dump"; fail=1; }
+[ "$WEB_HEADERS" -eq "$GENA_HEADERS" ] || { echo "FAIL: same bundles under two profile names should match"; fail=1; }
+[ "$BASEONLY_HEADERS" -lt "$GENA_HEADERS" ] || { echo "FAIL: base-only bundles should shrink the dump"; fail=1; }
+# Over-write check: changing genA must not change the web profile's composed tree.
+if ! diff -q <(grep '^# ==' "$WORK/web.txt") <(grep '^# ==' "$WORK/web-after.txt") >/dev/null; then
+  echo "FAIL: changing genA bundles changed the web profile dump"; fail=1
+fi
 if [ "$fail" -ne 0 ]; then exit 1; fi
-echo "PASS: profile name selects the directory under \$DSH_HOME/profiles; bundle set comes from that profile's package.json"
-echo "NOTE: --dump-config output is config resolution, not proof of the runtime-loaded set (E9 remains open)."
+echo "PASS: profile name selects the directory under \$DSH_HOME/profiles; bundle set comes from that profile's package.json;"
+echo "      two profile directories coexist under one DSH_HOME and are each selected without affecting the other"
+echo "NOTE: --dump-config output is config resolution, not proof of the runtime-loaded set (see"
+echo "      dsh-profile-runtime-marker-probe.sh for real-boot marker evidence; E9 still open)."
