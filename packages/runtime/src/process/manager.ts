@@ -581,7 +581,10 @@ export const createProcessManager = (options: ProcessManagerOptions): ProcessMan
         request.port === undefined || request.port === 'auto' ? '0' : String(request.port);
       const args = [
         request.dshEntrypoint,
-        'web',
+        // P-A: boot the generation-scoped managed profile. `web` is the shipped
+        // alias/default and keeps generations with no published profile working.
+        '--profile',
+        request.profileName ?? 'web',
         '--no-open',
         '--host',
         '127.0.0.1',

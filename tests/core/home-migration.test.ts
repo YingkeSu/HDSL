@@ -27,6 +27,7 @@ import {
   createManagedInstall,
   environmentPaths,
   generationPaths,
+  managedProfileName,
   migrateEnvironmentHome,
   resolveLayout,
   treeFingerprint,
@@ -420,8 +421,7 @@ describe('recover() migration gating (ADR 0006 requirement 4)', () => {
     await managed.close();
   });
 
-  it('records a path- and secret-free recovery detail on a migration conflict', async () => {
-    const { dataRoot, paths, env } = buildEnvironment('stopped');
+  it('records a path- and secret-free recovery detail on a migration conflict', async () => {    const { dataRoot, paths, env } = buildEnvironment('stopped');
     // Foreign pre-existing target: migration must fail closed and be explained.
     mkdirSync(join(env.homeDirectory, 'sessions'), { recursive: true });
     writeFileSync(join(env.homeDirectory, 'sessions', 'newer.json'), '{"newer":true}');
@@ -435,6 +435,21 @@ describe('recover() migration gating (ADR 0006 requirement 4)', () => {
     expect(conflict?.resolution).toBe('failed');
     expect(JSON.stringify(report.details)).not.toContain(dataRoot);
     expect(existsSync(paths.legacyHomeDirectory)).toBe(true);
+    await managed.close();
+  });
+
+  it('does not auto-GC any managed-namespace profile during recover (MF1)', async () => {
+    const { dataRoot, layout } = buildEnvironment('stopped');
+    const managed = await openService(dataRoot, 'no-process');
+    await managed.recover();
+    const profiles = environmentPaths(layout, ENVIRONMENT_ID).profilesDirectory;
+    mkdirSync(join(profiles, 'hdsl-foreign'), { recursive: true });
+    mkdirSync(join(profiles, managedProfileName(GENERATION_ID)), { recursive: true });
+
+    await managed.recover();
+    // No prefix/retain inference: unrelated and just-created managed profiles stay.
+    expect(existsSync(join(profiles, 'hdsl-foreign'))).toBe(true);
+    expect(existsSync(join(profiles, managedProfileName(GENERATION_ID)))).toBe(true);
     await managed.close();
   });
 });

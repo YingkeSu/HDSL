@@ -40,6 +40,7 @@ import { join } from 'node:path';
 import {
   ensureDirectory,
   isSpaceError,
+  pathExists,
   readJsonFile,
   removePath,
   tryReadJsonFile,
@@ -55,6 +56,10 @@ import {
 } from './layout.js';
 import { migrateEnvironmentHome, HomeMigrationStore } from './home-migration.js';
 import {
+  managedProfileName,
+  publishGenerationProfile,
+  readGenerationProfileName,
+} from './generation-profile.js';import {
   CredentialStore,
   type CredentialBinding,
   type LaunchCredentialRequest,
@@ -192,6 +197,8 @@ interface GenerationView {
   readonly dshEntrypoint: string;
   readonly installMode: 'npm-ci' | 'artifacts-only';
   readonly compositionDigest: string;
+  /** Published managed profile name, when the generation owns one. */
+  readonly profileName?: string;
 }
 
 interface CreateJob {
@@ -785,6 +792,7 @@ tryReadInstallManifest(
       dshEntrypoint: generation.dshEntrypoint,
       installMode: generation.installMode,
       signal: controller.signal,
+      ...(generation.profileName === undefined ? {} : { profileName: generation.profileName }),
       onPhase: (phase, progress) => {
         this.#updateOperationPhase(operationId, phase, progress);
       },
@@ -835,6 +843,11 @@ tryReadInstallManifest(
     if (manifest === undefined) {
       return undefined;
     }
+    const recordedProfile = readGenerationProfileName(
+      this.#layout,
+      environmentId,
+      environment.activeGenerationId,
+    );
     return {
       environmentId,
       expectedRevision: environment.revision,
@@ -847,6 +860,7 @@ tryReadInstallManifest(
       dshEntrypoint: join(paths.generationDirectory, manifest.dsh.entrypoint),
       installMode: manifest.installMode,
       compositionDigest: environment.compositionDigest ?? manifest.compositionDigest,
+      ...(recordedProfile === undefined ? {} : { profileName: recordedProfile }),
     };
   }
 
@@ -1111,6 +1125,12 @@ tryReadInstallManifest(
       });
     }
 
+    // NOTE (MF1): no automatic orphan-profile GC runs here. Namespace-prefix + a
+    // retain set derived from generation directories cannot prove provenance and
+    // could delete unrelated `hdsl-*` profiles or a just-published generation
+    // when the retain set is momentarily empty. Journal-keyed GC ships with the
+    // full transaction wiring (pending, uncommitted transaction + no reference).
+
     return {
       reconciled: details.length,
       finalized: details.filter((detail) => detail.resolution === 'finalized').length,
@@ -1372,6 +1392,31 @@ tryReadInstallManifest(
     ensureDirectory(paths.configDirectory);
     ensureDirectory(paths.dataDirectory);
     ensureDirectory(paths.homeDirectory);
+    // Publish the generation's own managed profile BEFORE the pointer switch.
+    // A crash here leaves the old active generation untouched; the staged
+    // profile directory remains for the next attempt.
+    let profileName: string | undefined;
+    let profileDigest: string | undefined;
+    const stagedProfile = join(paths.generationDirectory, 'profile');
+    if (pathExists(stagedProfile)) {
+      try {
+        const published = publishGenerationProfile({
+          layout: this.#layout,
+          environmentId: job.environmentId,
+          generationId: job.generationId,
+          stagedDirectory: stagedProfile,
+        });
+        profileName = managedProfileName(job.generationId);
+        profileDigest = published.fingerprint;
+      } catch (error) {
+        this.#fail(
+          job,
+          'INTERNAL_ERROR',
+          error instanceof Error ? error.message : 'the generation profile could not be published',
+        );
+        return;
+      }
+    }
     // A brand-new environment has no legacy home/data; record both migrations as
     // finalized so the migration never mistakes the commit-created environment
     // home for a foreign target (ADR 0006 §1.1 new-environment branch).
@@ -1396,6 +1441,8 @@ tryReadInstallManifest(
       environmentId: job.environmentId,
       compositionDigest: job.digest,
       createdAt: job.createdAt,
+      ...(profileName === undefined ? {} : { profileName }),
+      ...(profileDigest === undefined ? {} : { profileDigest }),
     });
 
     const environment = this.#environments.read(job.environmentId);

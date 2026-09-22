@@ -33,6 +33,8 @@ export interface ProcessLifecycleRequest {
   /** Absolute `<generation>/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js`. */
   readonly dshEntrypoint: string;
   readonly installMode: 'npm-ci' | 'artifacts-only';
+  /** DSH profile name to boot; defaults to `web` when absent. */
+  readonly profileName?: string;
   readonly signal: AbortSignal;
   readonly onPhase?: (phase: string, progress?: number) => void;
   /**

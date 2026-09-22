@@ -75,6 +75,12 @@ export interface ProcessLifecycleRequest {
   readonly dshEntrypoint: string;
   /** The runtime refuses to really start an `artifacts-only` generation. */
   readonly installMode: InstallMode;
+  /**
+   * DSH profile name to boot (`--profile <name>`). Defaults to `web` when
+   * absent, preserving the pre-P-A behavior for generations with no published
+   * managed profile.
+   */
+  readonly profileName?: string;
   readonly signal: AbortSignal;
   readonly onPhase: (phase: ManagedProcessPhase, progress?: number) => void;
   /** `'auto'` asks for an OS-assigned loopback port. */
