@@ -11,13 +11,15 @@
  * channel; every effect goes through {@link RendererActions} and the injected
  * restricted client.
  */
-import type {
-  ContractError,
-  EnvironmentSummary,
-  ExportResult,
-  OperationKind,
-  OperationStatus,
-  RuntimeCombination,
+import {
+  DEFAULT_PLUGIN_QUERY,
+  type ContractError,
+  type EnvironmentSummary,
+  type ExportResult,
+  type OperationKind,
+  type OperationStatus,
+  type PluginSearchResult,
+  type RuntimeCombination,
 } from '@hdsl/contracts';
 
 /** Where the initial catalog/environment load is. */
@@ -38,6 +40,8 @@ export interface TrackedOperation {
   readonly progress: number | null;
   readonly environmentId: string | null;
   readonly error: ContractError | null;
+  /** Terminal payload for `search`/`inspect`; `null` while absent. */
+  readonly output: unknown;
 }
 
 /** Immutable renderer state; the controller replaces it wholesale on change. */
@@ -73,6 +77,12 @@ export interface RendererState {
   /** Set only after `openWebUI` returns a verified loopback origin. */
   readonly webUIOrigin: string | null;
   readonly notice: string | null;
+  /** Current plugin discovery input; defaults to the fixed `#75` query. */
+  readonly pluginQuery: string;
+  /** Last succeeded `plugins.search` payload, or null. */
+  readonly pluginSearch: PluginSearchResult | null;
+  /** Selected repository in the discovery detail panel, by `fullName`. */
+  readonly selectedPluginFullName: string | null;
 }
 
 /**
@@ -94,6 +104,11 @@ export interface RendererActions {
   cancelTrackedOperation(): void;
   /** Explicit recovery after polling paused on repeated transient failures. */
   retryTracking?(): void;
+  setPluginQuery(query: string): void;
+  resetPluginQuery(): void;
+  runPluginSearch(): void;
+  selectPlugin(fullName: string | null): void;
+  cancelPluginSearch(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -115,7 +130,14 @@ export const INITIAL_STATE: RendererState = {
   exportResult: null,
   webUIOrigin: null,
   notice: null,
+  pluginQuery: DEFAULT_PLUGIN_QUERY,
+  pluginSearch: null,
+  selectedPluginFullName: null,
 };
+
+/** The repository currently shown in the discovery detail panel, or null. */
+export const selectedPluginHit = (state: RendererState) =>
+  state.pluginSearch?.hits.find((hit) => hit.fullName === state.selectedPluginFullName) ?? null;
 
 export const selectedEnvironment = (state: RendererState): EnvironmentSummary | null =>
   state.environments.find((environment) => environment.id === state.selectedEnvironmentId) ?? null;

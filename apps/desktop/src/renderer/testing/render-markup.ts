@@ -10,9 +10,13 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AppView, type AppViewProps } from '../App.js';
 import { CreateEnvironmentForm } from '../components/CreateEnvironmentForm.js';
+import { PluginDiscovery } from '../components/PluginDiscovery.js';
 
 export const renderAppView = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(AppView, props));
 
 export const renderCreateForm = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(CreateEnvironmentForm, props));
+
+export const renderPluginDiscovery = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(PluginDiscovery, props));

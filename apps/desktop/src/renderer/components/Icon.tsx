@@ -11,6 +11,7 @@ const paths = {
   stop: 'M5 5h14v14H5z',
   close: 'm6 6 12 12 M6 18 18 6',
   refresh: 'M20 7v5h-5 M4 17v-5h5 M5 8a8 8 0 0 1 14-2l1 2 M4 16l1 2a8 8 0 0 0 14-2',
+  discover: 'M11 4a7 7 0 1 1 0 14 7 7 0 0 1 0-14z M20 20l-4-4',
 } as const;
 
 export function Icon({ name }: { readonly name: keyof typeof paths }): ReactElement {

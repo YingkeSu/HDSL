@@ -40,6 +40,7 @@ import {
   API_VERSION,
   contractErrorForCode,
   contractErrorSchema,
+  DEFAULT_PLUGIN_QUERY,
   environmentSummaryListSchema,
   exportResultSchema,
   isLoopbackOrigin,
@@ -47,6 +48,7 @@ import {
   openWebUIResultSchema,
   operationRefSchema,
   operationSnapshotSchema,
+  pluginSearchResultSchema,
   REQUEST_ID_PATTERN,
   runtimeCombinationListSchema,
   subscriptionRefSchema,
@@ -113,7 +115,10 @@ const toTrackedOperation = (snapshot: OperationSnapshot): TrackedOperation => ({
   progress: snapshot.progress ?? null,
   environmentId: snapshot.environmentId,
   error: snapshot.error ?? null,
+  output: snapshot.output ?? null,
 });
+
+const PLUGIN_OPERATION_KINDS: ReadonlySet<string> = new Set(['search', 'inspect']);
 
 const DEFAULT_POLL_INTERVAL_MS = 400;
 const DEFAULT_MAX_POLL_RETRIES = 3;
@@ -337,6 +342,59 @@ export class RendererController implements RendererActions {
         notice: '诊断导出完成（已脱敏；结果不含本地路径）。',
       });
     });
+  }
+
+  setPluginQuery(query: string): void {
+    this.#update({ pluginQuery: query, actionError: null });
+  }
+
+  resetPluginQuery(): void {
+    this.#update({ pluginQuery: DEFAULT_PLUGIN_QUERY, actionError: null });
+  }
+
+  async runPluginSearch(): Promise<void> {
+    await this.#runCommand(async () => {
+      this.#update({
+        actionError: null,
+        notice: null,
+        pluginSearch: null,
+        selectedPluginFullName: null,
+      });
+      const result = await this.#call(
+        'plugins.search',
+        { requestId: this.#newRequestId(), query: this.#state.pluginQuery },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  selectPlugin(fullName: string | null): void {
+    this.#update({ selectedPluginFullName: fullName });
+  }
+
+  /**
+   * Cancels only an in-flight plugin discovery operation. Cancellation is a
+   * terminal state with no side effect (ADR 0005 D10); a finished search keeps
+   * its result and cannot be cancelled.
+   */
+  async cancelPluginSearch(): Promise<void> {
+    const tracked = this.#state.trackedOperation;
+    if (
+      tracked === null ||
+      !PLUGIN_OPERATION_KINDS.has(tracked.kind ?? '') ||
+      isOperationTerminal(tracked.status)
+    ) {
+      return;
+    }
+    await this.cancelTrackedOperation();
   }
 
   async cancelTrackedOperation(): Promise<void> {
@@ -643,8 +701,30 @@ export class RendererController implements RendererActions {
       }
     }
     if (tracked.status === 'succeeded') {
+      this.#applyPluginOutput(tracked);
       await this.#refreshEnvironments(epoch);
     }
+  }
+
+  /**
+   * Re-validates a terminal plugin payload before it can reach the UI. The
+   * dispatcher already enforces the per-kind schema; this is defence in depth
+   * so a malformed value is an explicit `INTERNAL_ERROR`, never a partial list.
+   */
+  #applyPluginOutput(tracked: TrackedOperation): void {
+    if (tracked.kind !== 'search') {
+      return;
+    }
+    const issues: ValidationIssue[] = [];
+    const parsed = pluginSearchResultSchema(tracked.output, 'output', issues);
+    if (parsed === undefined) {
+      this.#update({ pluginSearch: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+      return;
+    }
+    this.#update({
+      pluginSearch: parsed,
+      selectedPluginFullName: parsed.hits[0]?.fullName ?? null,
+    });
   }
 
   async #refreshEnvironments(epoch?: number): Promise<void> {

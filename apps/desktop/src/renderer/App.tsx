@@ -6,6 +6,7 @@ import { EnvironmentDetail } from './components/EnvironmentDetail.js';
 import { EnvironmentList } from './components/EnvironmentList.js';
 import { DemoBanner, Notices } from './components/Notices.js';
 import { OperationPanel } from './components/OperationPanel.js';
+import { PluginDiscovery } from './components/PluginDiscovery.js';
 import { LaunchBar } from './components/LaunchBar.js';
 import { Icon } from './components/Icon.js';
 import { ENVIRONMENT_STATE_LABELS } from './format.js';
@@ -21,10 +22,15 @@ export interface AppViewProps {
   readonly actions: RendererActions;
 }
 
-type Page = 'home' | 'environments' | 'tasks' | 'help';
+type Page = 'home' | 'environments' | 'discover' | 'tasks' | 'help';
 const pages = [
   { id: 'home', label: '启动', description: '从熟悉的环境，继续手边的工作。' },
   { id: 'environments', label: '环境', description: '为不同的工作，保留独立的环境。' },
+  {
+    id: 'discover',
+    label: '发现插件',
+    description: '从公开 GitHub 仓库发现插件；发现不代表可安装或安全。',
+  },
   { id: 'tasks', label: '任务', description: '查看当前操作的进度与结果。' },
   { id: 'help', label: '帮助', description: '配置凭据与排查运行问题。' },
 ] as const;
@@ -238,6 +244,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
             </div>
           </>
         )}
+        {page === 'discover' && <PluginDiscovery state={state} actions={actions} />}
         {(page === 'home' || page === 'tasks') && (
           <OperationPanel state={state} actions={actions} />
         )}

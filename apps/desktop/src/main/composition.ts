@@ -27,14 +27,17 @@ import {
   createEnvironmentContractPort,
   EnvironmentService,
   OperationStore,
+  PluginDiscoveryService,
   type CloseReport,
   type DataRootLockSnapshot,
   type DiagnosticsExporter,
   type ManagedProcessPort,
   type ManagedRuntimePort,
+  type PluginSourcePort,
   type RecoveryReport,
 } from '@hdsl/core';
 import {
+  createGitHubPluginSource,
   createLaunchCredentialPort,
   createProcessManager,
   createRuntimePort,
@@ -90,6 +93,8 @@ export interface DesktopCompositionOptions {
   readonly catalog?: readonly RuntimeCombination[];
   readonly host?: HostPlatform;
   readonly runtime?: ManagedRuntimePort;
+  /** Test seam: replaces the real GitHub read adapter (no fixture hits the network). */
+  readonly pluginSource?: PluginSourcePort;
   /** Test seam: replaces the real process manager (still decorated + attached). */
   readonly process?: ManagedProcessPort;
   /** Test seam: a runtime manager used for observability in diagnostics. */
@@ -306,11 +311,20 @@ export const createDesktopComposition = async (
   });
   exported.current = exporter;
 
+  // Global, read-only plugin discovery. The GitHub adapter is unauthenticated
+  // and network-only; it never touches an environment composition (ADR 0005
+  // D16/D17). Tests inject a controlled source here.
+  const pluginDiscovery = new PluginDiscoveryService({
+    layout: service.layout,
+    source: options.pluginSource ?? createGitHubPluginSource({ fetch: globalThis.fetch }),
+  });
+
   const port = createEnvironmentContractPort({
     service,
     catalog,
     ...(options.host === undefined ? {} : { host: options.host }),
     exportDiagnostics: exporter,
+    pluginDiscovery,
   });
 
   const recovery = await service.recover();

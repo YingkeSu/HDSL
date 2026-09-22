@@ -31,7 +31,20 @@ export const OPERATION_KIND_LABELS: Record<string, string> = {
   stop: '停止',
   openWebUI: '打开 WebUI',
   export: '导出诊断',
+  search: '检索插件',
+  inspect: '查看仓库详情',
 };
+
+/** Display label for an operation kind; unknown kinds fall back to the raw value. */
+export const formatOperationKind = (kind: string | null): string =>
+  kind === null ? '操作' : (OPERATION_KIND_LABELS[kind] ?? kind);
+
+/**
+ * Deterministic, locale-free display of an ISO timestamp. The renderer never
+ * reinterprets the contract value, so tests are stable across hosts.
+ */
+export const formatTimestamp = (value: string): string =>
+  value.replace('T', ' ').replace(/Z$/, ' UTC');
 
 /** `CODE：sanitized message（可重试）`, never a raw downstream message. */
 export const describeError = (error: ContractError): string =>
