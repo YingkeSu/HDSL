@@ -52,19 +52,61 @@ const isWithin = (root: string, candidate: string): boolean => {
   return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
 };
 
-/** Fails closed if any symlink in the tree resolves outside the source root. */
-const assertNoEscapingSymlinks = (root: string, current = root): PortOutcome<void> => {
+/**
+ * Symlink policy for reuse: a relative symlink that resolves inside the source
+ * generation root is preserved and relocates with the copy (its relative target
+ * stays valid in the new tree). An absolute symlink that resolves inside the
+ * source generation root is rejected: after the copy it would still point at the
+ * OLD generation and break the new generation's independence. Any link that
+ * escapes the generation root is rejected too.
+ */
+const assertRelocatableLinks = (
+  generationRoot: string,
+  current = generationRoot,
+): PortOutcome<void> => {
   for (const name of readdirSync(current)) {
     const full = join(current, name);
     const stats = lstatSync(full);
     if (stats.isSymbolicLink()) {
       const target = readlinkSync(full);
-      const resolved = isAbsolute(target) ? target : resolve(join(full, '..'), target);
-      if (!isWithin(root, resolved)) {
+      if (isAbsolute(target)) {
+        // Absolute links either point back into the source generation (breaks the
+        // new generation's independence) or escape it; both are rejected. The
+        // real fixed managed install uses only relative links in node/ and dsh/.
+        return portFail(
+          'INTERNAL_ERROR',
+          'the source generation contains an absolute symlink, which cannot be relocated safely',
+        );
+      }
+      const resolved = resolve(join(full, '..'), target);
+      if (!isWithin(generationRoot, resolved)) {
         return portFail('INTERNAL_ERROR', 'the source generation contains a symlink that escapes its root');
       }
     } else if (stats.isDirectory()) {
-      const nested = assertNoEscapingSymlinks(root, full);
+      const nested = assertRelocatableLinks(generationRoot, full);
+      if (!nested.ok) {
+        return nested;
+      }
+    }
+  }
+  return portOk(undefined);
+};
+
+/** Post-copy defence: the target must not link back into the old generation. */
+const assertNotLinkedToOld = (
+  oldGenerationRoot: string,
+  current: string,
+): PortOutcome<void> => {
+  for (const name of readdirSync(current)) {
+    const full = join(current, name);
+    const stats = lstatSync(full);
+    if (stats.isSymbolicLink()) {
+      const target = readlinkSync(full);
+      if (isAbsolute(target) && isWithin(oldGenerationRoot, target)) {
+        return portFail('INTERNAL_ERROR', 'the copied generation still links into the old generation');
+      }
+    } else if (stats.isDirectory()) {
+      const nested = assertNotLinkedToOld(oldGenerationRoot, full);
       if (!nested.ok) {
         return nested;
       }
@@ -122,15 +164,20 @@ export const reuseGenerationRuntime = (
     } catch {
       return portFail('INTERNAL_ERROR', 'the source generation runtime directory is missing');
     }
-    const links = assertNoEscapingSymlinks(from);
+    const links = assertRelocatableLinks(source.generationDirectory);
     if (!links.ok) {
       return links;
     }
-    // Independent physical copy: the new generation owns its files. Symlinks are
-    // copied as links (never followed) so a legitimate DSH structure is kept.
+    // Independent physical copy: the new generation owns its files. Relative
+    // symlinks are copied as links (never followed) so a legitimate DSH
+    // structure is kept and relocates with the subtree.
     cpSync(from, to, { recursive: true, dereference: false, verbatimSymlinks: true });
   }
   cpSync(source.manifestPath, target.manifestPath);
+  const linkedBack = assertNotLinkedToOld(source.generationDirectory, target.generationDirectory);
+  if (!linkedBack.ok) {
+    return linkedBack;
+  }
 
   const identityVerified =
     options.verify === undefined

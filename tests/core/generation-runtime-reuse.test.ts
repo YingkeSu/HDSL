@@ -101,3 +101,40 @@ describe('generation runtime reuse', () => {
     }
   });
 });
+
+describe('generation runtime reuse: cross-generation link safety', () => {
+  it('preserves a relative internal link and the new generation does not depend on the old one', () => {
+    const { layout, paths } = build();
+    // A legitimate relative link inside the generation root (e.g. a DSH fallback).
+    symlinkSync('../node/bin/node', join(paths.dshDirectory, 'node-link'));
+    const outcome = reuseGenerationRuntime({
+      layout,
+      environmentId: ENVIRONMENT_ID,
+      fromGenerationId: FROM,
+      toGenerationId: TO,
+    });
+    expect(outcome.ok).toBe(true);
+    const target = generationPaths(layout, ENVIRONMENT_ID, TO);
+    const copiedLink = join(target.dshDirectory, 'node-link');
+    expect(readFileSync(copiedLink, 'utf8')).toBe('#!/bin/sh\necho node\n');
+
+    // Removing the OLD generation must not break the new one.
+    rmSync(paths.generationDirectory, { recursive: true, force: true });
+    expect(readFileSync(copiedLink, 'utf8')).toBe('#!/bin/sh\necho node\n');
+  });
+
+  it('rejects an absolute symlink into the old generation tree', () => {
+    const { layout, paths } = build();
+    symlinkSync(join(paths.nodeDirectory, 'bin', 'node'), join(paths.dshDirectory, 'absolute-link'));
+    const outcome = reuseGenerationRuntime({
+      layout,
+      environmentId: ENVIRONMENT_ID,
+      fromGenerationId: FROM,
+      toGenerationId: TO,
+    });
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.code).toBe('INTERNAL_ERROR');
+    }
+  });
+});
