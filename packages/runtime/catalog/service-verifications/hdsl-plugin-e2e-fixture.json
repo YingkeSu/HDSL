@@ -48,8 +48,10 @@
       "side effect limited to writing <DSH_HOME>/hdsl-e2e-marker/applied (no DSH_HOME => no file); errors swallowed"
     ],
     "boundary": "not a general plugin safety guarantee; runtime loading/service-resolution behavior was not executed or proven",
-    "report": "/tmp/qa33/fixture-cordis-review-e7825788.md"
+    "report": "/tmp/qa33/fixture-cordis-review-e7825788.md (QA one-off; the durable record above is authoritative)",
+    "durableRecord": "docs/development/plugin-remove-service-verification.md"
   },
   "treeSha256": "a0336c83accebb1430d2f95f8bb12c8c7f5da808221765854547fc46296ebc2e",
-  "treeSha256Coverage": "sha256 over sorted (relpath, file sha256) pairs"
+  "treeSha256Coverage": "sha256 over sorted (relpath, file sha256) pairs",
+  "treeSha256Algorithm": "sha256 over sorted (relpath, fileSha256) pairs — do not mix with other tree digest algorithms"
 }

@@ -52,7 +52,9 @@ export type ServiceVerificationLookup =
  * manifest digest that must be recorded with it).
  *
  * The matching evidence files live in `catalog/service-verifications/<plugin>.json`
- * (per-file and manifest SHA-256 of the reviewed exact commit, plus provenance).
+ * (per-file and manifest SHA-256 of the reviewed exact commit, plus provenance), and
+ * the durable, reviewable record is
+ * `docs/development/plugin-remove-service-verification.md`.
  */
 export const SERVICE_VERIFICATION_RECORDS: readonly ServiceVerificationRecord[] = [
   {
@@ -67,7 +69,7 @@ export const SERVICE_VERIFICATION_RECORDS: readonly ServiceVerificationRecord[] 
     review: {
       status: 'confirmed',
       evidence:
-        'hdsl-33 independent review of the exact commit (one bounded fetch of the public archive, no execution): known empty providers; per-file + manifest + tree SHA-256 recorded in catalog/service-verifications/hdsl-plugin-e2e-fixture.json; valid only for this commit',
+        'hdsl-33 independent review of the exact commit (one bounded fetch of the public archive, no execution): known empty providers; durable record docs/development/plugin-remove-service-verification.md with per-file + manifest + tree SHA-256 and exact-source permalinks; valid only for this commit',
     },
   },
 ];
