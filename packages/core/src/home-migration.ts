@@ -56,6 +56,8 @@ export interface TreeMigrationRecord {
 export interface HomeMigrationFaults {
   /** Aborts after the copy is fsynced but before it is published. */
   readonly failAfterCopy?: boolean;
+  /** Aborts after the publish rename + directory fsync but before the `copied` record. */
+  readonly failAfterRename?: boolean;
   /** Aborts after the published copy exists but before the legacy source is removed. */
   readonly failAfterPublish?: boolean;
   /** Corrupts the published target after publish (simulates truncation/loss). */
@@ -71,6 +73,11 @@ export interface MigrateEnvironmentHomeOptions {
 }
 
 export interface HomeMigrationResult {
+  /**
+   * `finalized` covers both "this run migrated the trees" and "both trees were
+   * already finalized"; both are terminal for the migration. A finalized tree is
+   * the live, mutable environment home/data, so its contents are not re-hashed.
+   */
   readonly state: 'finalized' | 'already-finalized' | 'interrupted' | 'conflict';
   readonly actions: readonly string[];
   /** Which tree conflicted and a secret/path-free reason. */
@@ -241,20 +248,32 @@ const migrateTree = (
   }
 
   // Resume: the record claims a published copy. Never trust the label: the target
-  // must exist and match the recorded digest before the legacy source is removed.
+  // must be provably a product of THIS transaction (recorded digest + intact
+  // legacy source) before the legacy source is removed.
   if (record !== undefined && (record.state === 'copied' || record.state === 'copying')) {
     const legacyFingerprint = treeFingerprint(legacy);
     const sourceIntact = record.sourceDigest !== null && legacyFingerprint === record.sourceDigest;
-    if (targetFingerprint !== undefined && record.publishedDigest === targetFingerprint) {
-      // Verified own product. If the source is still intact, finish by removing it.
+    // The expected published digest is recorded before the publish rename. A
+    // crash between `rename` and the `copied` record can leave `publishedDigest`
+    // unset only for records written by an older build; for those, the copied
+    // bytes are known to equal the (verified) source digest.
+    const expectedPublished =
+      record.publishedDigest ??
+      (record.sourceDigest !== null && sourceIntact ? record.sourceDigest : null);
+    const publishedIsOurs =
+      targetFingerprint !== undefined &&
+      expectedPublished !== null &&
+      targetFingerprint === expectedPublished;
+
+    if (publishedIsOurs) {
       if (legacyFingerprint === undefined) {
-        store.write(makeRecord(environmentId, kind, sourceGenerationId, 'finalized', record.sourceDigest, record.publishedDigest, createdAt, now()));
+        store.write(makeRecord(environmentId, kind, sourceGenerationId, 'finalized', record.sourceDigest, expectedPublished, createdAt, now()));
         actions.push(`${kind}: verified published copy; legacy already gone; finalized`);
         return { outcome: 'finalized', actions };
       }
       if (sourceIntact) {
         removePath(legacy);
-        store.write(makeRecord(environmentId, kind, sourceGenerationId, 'finalized', record.sourceDigest, record.publishedDigest, createdAt, now()));
+        store.write(makeRecord(environmentId, kind, sourceGenerationId, 'finalized', record.sourceDigest, expectedPublished, createdAt, now()));
         actions.push(`${kind}: verified published copy; legacy removed; finalized`);
         return { outcome: 'finalized', actions };
       }
@@ -263,7 +282,7 @@ const migrateTree = (
     // The recorded published copy is missing or corrupt. Keep the legacy source
     // and never delete it; if the legacy source is byte-identical to what we
     // copied, we may safely discard our own orphan and republish it.
-    if (targetFingerprint !== undefined && targetFingerprint !== record.publishedDigest) {
+    if (targetFingerprint !== undefined) {
       return { outcome: 'conflict', reason: `${kind}: published directory is corrupt or foreign`, actions };
     }
     if (!sourceIntact) {
@@ -294,7 +313,7 @@ const migrateTree = (
     removePath(temporary);
     return { outcome: 'conflict', reason: `${kind}: copy verification failed`, actions };
   }
-  store.write(makeRecord(environmentId, kind, sourceGenerationId, 'copying', legacyFingerprint, null, createdAt, now()));
+  store.write(makeRecord(environmentId, kind, sourceGenerationId, 'copying', legacyFingerprint, legacyFingerprint, createdAt, now()));
   if (faults.failAfterCopy === true) {
     actions.push(`${kind}: injected failure after copy (before publish)`);
     return { outcome: 'interrupted', reason: `${kind}: interrupted before publish`, actions };
@@ -302,6 +321,13 @@ const migrateTree = (
 
   renameSync(temporary, target);
   fsyncDirectory(environment.environmentDirectory);
+  if (faults.failAfterRename === true) {
+    // Crash window: the rename published the target but the `copied` record is
+    // not durable. The `copying` record already carries the expected published
+    // digest, so recovery can prove the target is ours and finalize.
+    actions.push(`${kind}: injected failure after rename (before copied record)`);
+    return { outcome: 'interrupted', reason: `${kind}: interrupted after rename`, actions };
+  }
   store.write(makeRecord(environmentId, kind, sourceGenerationId, 'copied', legacyFingerprint, legacyFingerprint, createdAt, now()));
   if (faults.failAfterPublish === true) {
     actions.push(`${kind}: injected failure after publish (legacy retained)`);

@@ -7,6 +7,7 @@
  */
 import {
   chmodSync,
+  cpSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -211,6 +212,56 @@ describe('environment-scoped home + data migration', () => {
     expect(existsSync(join(paths.legacyHomeDirectory, 'sessions', 's.json'))).toBe(true);
   });
 
+  it('converges a crash between the publish rename and the copied record (home and data)', () => {
+    const { layout, paths, env } = build();
+    writeLegacyTree(paths.legacyHomeDirectory);
+    writeLegacyTree(paths.legacyDataDirectory);
+
+    const first = migrate(layout, { failAfterRename: true });
+    expect(first.state).toBe('interrupted');
+    // The rename published the home target, but the record is still `copying`
+    // with the expected published digest persisted; the legacy source is intact.
+    expect(existsSync(env.homeDirectory)).toBe(true);
+    expect(existsSync(paths.legacyHomeDirectory)).toBe(true);
+    const record = new HomeMigrationStore(layout).read(ENVIRONMENT_ID, 'home');
+    expect(record?.state).toBe('copying');
+    expect(record?.publishedDigest).not.toBeNull();
+
+    const second = migrate(layout);
+    expect(second.state).toBe('finalized');
+    expect(existsSync(paths.legacyHomeDirectory)).toBe(false);
+    expect(existsSync(paths.legacyDataDirectory)).toBe(false);
+    expect(readFileSync(join(env.homeDirectory, 'sessions', 's.json'), 'utf8')).toBe('{"session":1}');
+    expect(readFileSync(join(env.dataDirectory, 'sessions', 's.json'), 'utf8')).toBe('{"session":1}');
+  });
+
+  it('converges a legacy null-publishedDigest copying record when the target equals the verified source', () => {
+    const { layout, paths, env } = build();
+    writeLegacyTree(paths.legacyHomeDirectory);
+    // Reproduce the pre-fix crash state: target published, record `copying`, no
+    // publishedDigest persisted (older build).
+    cpSync(paths.legacyHomeDirectory, env.homeDirectory, {
+      recursive: true,
+      dereference: false,
+      verbatimSymlinks: true,
+    });
+    new HomeMigrationStore(layout).write({
+      schemaVersion: '1',
+      environmentId: ENVIRONMENT_ID,
+      kind: 'home',
+      sourceGenerationId: GENERATION_ID,
+      state: 'copying',
+      sourceDigest: fingerprint(paths.legacyHomeDirectory),
+      publishedDigest: null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    expect(migrate(layout).state).toBe('finalized');
+    expect(existsSync(paths.legacyHomeDirectory)).toBe(false);
+    expect(readFileSync(join(env.homeDirectory, 'sessions', 's.json'), 'utf8')).toBe('{"session":1}');
+  });
+
   it('resumes after a crash before publish without leaving a partial target', () => {
     const { layout, paths, env } = build();
     writeLegacyTree(paths.legacyHomeDirectory);
@@ -366,6 +417,24 @@ describe('recover() migration gating (ADR 0006 requirement 4)', () => {
     await managed.recover();
     expect(existsSync(env.homeDirectory)).toBe(true);
     expect(existsSync(paths.legacyHomeDirectory)).toBe(false);
+    await managed.close();
+  });
+
+  it('records a path- and secret-free recovery detail on a migration conflict', async () => {
+    const { dataRoot, paths, env } = buildEnvironment('stopped');
+    // Foreign pre-existing target: migration must fail closed and be explained.
+    mkdirSync(join(env.homeDirectory, 'sessions'), { recursive: true });
+    writeFileSync(join(env.homeDirectory, 'sessions', 'newer.json'), '{"newer":true}');
+
+    const managed = await openService(dataRoot, 'no-process');
+    const report = await managed.recover();
+    const conflict = report.details.find((detail) =>
+      detail.reason?.startsWith('home-migration-conflict'),
+    );
+    expect(conflict).toBeDefined();
+    expect(conflict?.resolution).toBe('failed');
+    expect(JSON.stringify(report.details)).not.toContain(dataRoot);
+    expect(existsSync(paths.legacyHomeDirectory)).toBe(true);
     await managed.close();
   });
 });

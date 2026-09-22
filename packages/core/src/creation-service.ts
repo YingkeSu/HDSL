@@ -128,6 +128,8 @@ export interface RecoveryDetail {
   readonly operationId: string | null;
   readonly generationId: string | null;
   readonly resolution: 'finalized' | 'rolled-back' | 'failed';
+  /** Controlled, path- and secret-free explanation (e.g. a migration conflict). */
+  readonly reason?: string;
 }
 
 export interface RecoveryReport {
@@ -997,12 +999,24 @@ tryReadInstallManifest(
           continue;
         }
         try {
-          migrateEnvironmentHome({
+          const migration = migrateEnvironmentHome({
             layout: this.#layout,
             environmentId: environment.id,
             activeGenerationId: environment.activeGenerationId,
             clock: this.#clock,
           });
+          if (migration.state === 'conflict') {
+            // Surface a controlled, path/secret-free clue; the environment stays
+            // refused for start until the conflict is resolved.
+            details.push({
+              transactionId: null,
+              environmentId: environment.id,
+              operationId: null,
+              generationId: environment.activeGenerationId,
+              resolution: 'failed',
+              reason: `home-migration-conflict:${migration.conflict?.kind ?? 'tree'}`,
+            });
+          }
         } catch {
           // Retried on the next start/recover; the environment stays refused.
         }
