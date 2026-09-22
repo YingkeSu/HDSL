@@ -228,7 +228,7 @@ const waitTerminal = async (operations: OperationStore, operationId: string) => 
 };
 
 describe('changes.apply retryable failure: same-id replay vs new-id retry (real dispatcher, S5 #79)', () => {
-  it('retryable DOWNLOAD_FAILED: same requestId replays the terminal without repeating the effect; new id retries to success', async () => {
+  it('retryable DOWNLOAD_FAILED: same requestId replays the accepted dispatch response without repeating the effect; new id retries to success', async () => {
     const h = build();
     const first = h.dispatch(applyInput('req-install-replay'));
     if (!first.ok) { console.log('FIRST_ERR=' + JSON.stringify(first)); return; }

@@ -32,11 +32,15 @@
 
 ## 本片新增测试（默认 CI、确定性、无产品改动）
 
-`tests/core/change-apply-cancel.test.ts`（2 项，`vitest run` 通过）：
+`tests/core/change-apply-cancel.test.ts`（**4 项**，`vitest run` 通过）：
 1. pre-commit 取消 → `cancelled` 终态、旧代活动、revision 不变、plan `consumedBy=null`；
-2. post-commit 取消 → `CANNOT_CANCEL`、提交 op 仍 `succeeded`、新代保持活动（**提交后不断言旧组成不变**）。
+2. **终态 op** 取消 → `CANNOT_CANCEL`（`isTerminalStatus` 规则，**不是**提交窗口）；
+3. **提交窗口**（指针已切、op 仍 `running`）取消 → `CANNOT_CANCEL`；显式预置 in-progress ledger，`recover()` 后**四元一致**（op `succeeded` / 指针新代 / plan 消费 / ledger `completed`；ledger 缺失即失败）；
+4. **#92 残余态**（预置 `cancelled` op + committed journal + in-progress ledger）→ `recover()` **不抛异常**且四元一致。
 
-原因：改前 `CANNOT_CANCEL` 仅出现在**未执行**的 scenario plan 与 fixture 码表，缺少已执行的行为断言；install-apply 的取消也无确定性测试（remove 侧已有）。
+其余新增：`tests/core/change-apply-retryable-replay.test.ts`（install 真 dispatcher 重放/新 id 重试）、`tests/plugins/github-403-precision.test.ts`（403/429 无 rate-limit 头部负控）。
+
+原因：改前 `CANNOT_CANCEL` 仅出现在**未执行**的 scenario plan 与 fixture 码表，缺少已执行行为断言；install-apply 取消亦无确定性测试（remove 侧已有）；#92 的升级遗留态恢复无回归。
 
 ## 实质缺口 / 待编排裁决（未记 PASS）
 
