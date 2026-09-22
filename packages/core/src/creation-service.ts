@@ -106,6 +106,12 @@ export interface CreationFaults {
    * journal uncommitted, so restart reconciliation must roll forward.
    */
   readonly pauseAfterPointerSwitch?: boolean;
+  /**
+   * Simulates a crash AFTER the generation profile is published but BEFORE the
+   * active-generation pointer switch. The published profile is an uncommitted
+   * orphan; reconciliation must roll back and leave it attributed.
+   */
+  readonly pauseAfterPublishBeforePointer?: boolean;
 }
 
 export interface EnvironmentServiceOptions {
@@ -1439,6 +1445,7 @@ tryReadInstallManifest(
           layout: this.#layout,
           environmentId: job.environmentId,
           generationId: job.generationId,
+          transactionId: job.transactionId,
           stagedDirectory: stagedProfile,
         });
         profileName = managedProfileName(job.generationId);
@@ -1450,6 +1457,13 @@ tryReadInstallManifest(
         'INTERNAL_ERROR',
         error instanceof Error ? error.message : 'the generation profile could not be published',
       );
+      return;
+    }
+
+    if (this.#faults.pauseAfterPublishBeforePointer === true) {
+      // Published (possibly orphaned) but the pointer is not switched: a restart
+      // must roll back and keep the published profile attributable, never delete
+      // it here.
       return;
     }
     // A brand-new environment has no legacy home/data; record both migrations as

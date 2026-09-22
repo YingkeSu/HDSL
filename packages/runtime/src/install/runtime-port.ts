@@ -175,7 +175,7 @@ const PROFILE_DECLARATION_FILES = [
  * files (`cordis.yml`, `node_modules`) are excluded; a missing or irregular
  * declaration source yields `undefined` (never an empty digest).
  */
-const profileDeclarationDigest = (directory: string): string | undefined => {
+export const profileDeclarationDigest = (directory: string): string | undefined => {
   let packageStats: ReturnType<typeof lstatSync>;
   try {
     packageStats = lstatSync(join(directory, 'package.json'));
@@ -183,7 +183,7 @@ const profileDeclarationDigest = (directory: string): string | undefined => {
     return undefined;
   }
   if (!packageStats.isFile()) {
-    return undefined;
+    throw new Error('the profile declaration source package.json is not a regular file');
   }
   const entries: string[] = [];
   for (const name of PROFILE_DECLARATION_FILES) {
@@ -195,7 +195,7 @@ const profileDeclarationDigest = (directory: string): string | undefined => {
       continue;
     }
     if (!stats.isFile()) {
-      return undefined;
+      throw new Error(`the profile declaration file ${name} is not a regular file`);
     }
     entries.push(
       `${name}\u0000${String(stats.size)}\u0000${createHash('sha256').update(readFileSync(path)).digest('hex')}`,

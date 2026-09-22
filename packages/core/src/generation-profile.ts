@@ -20,8 +20,25 @@
 import { closeSync, cpSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync } from 'node:fs';
 import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { ensureDirectory, readJsonFile, removePath } from './fsx.js';
+import { ensureDirectory, readJsonFile, removePath, tryReadJsonFile, writeJsonAtomic } from './fsx.js';
 import { environmentPaths, generationPaths, type AppDataLayout } from './layout.js';
+
+/**
+ * Derived provenance marker written into a PUBLISHED profile. It is NOT part of
+ * the declaration source and is explicitly excluded from the identity digest; it
+ * exists only as future attribution evidence for a journal-keyed GC. It is not a
+ * security proof.
+ */
+export const PROFILE_PROVENANCE_FILENAME = '.hdsl-profile.json';
+
+export interface ProfileProvenance {
+  readonly schemaVersion: '1';
+  readonly generationId: string;
+  readonly profileName: string;
+  /** Declaration-source digest the profile was published from. */
+  readonly digest: string;
+  readonly transactionId: string;
+}
 
 /** Files that constitute a profile's immutable declaration source, in order. */
 export const PROFILE_DECLARATION_FILES = [
@@ -46,10 +63,11 @@ const sha256 = (data: string | Buffer): string => createHash('sha256').update(da
  * - **Fails closed** (throws) when `package.json` or any present declaration file
  *   is not a regular file (symlink, directory, special file): a non-regular
  *   declaration must never collapse into an empty/constant digest.
- * - Live derived files (`cordis.yml`, `node_modules`) are excluded by construction
- *   and are never a source of identity. `pnpm-lock.yaml` is optional: when absent
- *   the identity covers the present declaration files only; it is never rebuilt
- *   from the live install.
+ * - Live derived files (`cordis.yml`, `node_modules`) and the derived provenance
+ *   marker (`.hdsl-profile.json`) are excluded by construction and are never a
+ *   source of identity. `pnpm-lock.yaml` is optional: when absent the identity
+ *   covers the present declaration files only; it is never rebuilt from the live
+ *   install.
  */
 export const profileDeclarationFingerprint = (directory: string): string | undefined => {
   const packageJsonPath = join(directory, 'package.json');
@@ -125,6 +143,8 @@ export interface PublishProfileOptions {
   readonly layout: AppDataLayout;
   readonly environmentId: string;
   readonly generationId: string;
+  /** Transaction that produced this generation (attribution evidence). */
+  readonly transactionId: string;
   /** Staged declaration source (e.g. `<generation>/profile`). */
   readonly stagedDirectory: string;
 }
@@ -162,6 +182,17 @@ export const publishGenerationProfile = (options: PublishProfileOptions): Publis
     dereference: false,
     verbatimSymlinks: true,
   });
+  // Provenance is written into the temporary copy BEFORE the publish rename and
+  // verified after it. It binds the real transaction/generation/name/digest and
+  // is EXCLUDED from the declaration digest.
+  const provenance: ProfileProvenance = {
+    schemaVersion: '1',
+    generationId: options.generationId,
+    profileName,
+    digest: stagedFingerprint,
+    transactionId: options.transactionId,
+  };
+  writeJsonAtomic(join(temporary, PROFILE_PROVENANCE_FILENAME), provenance);
   fsyncTree(temporary);
   const copiedFingerprint = profileDeclarationFingerprint(temporary);
   if (copiedFingerprint !== stagedFingerprint) {
@@ -173,6 +204,17 @@ export const publishGenerationProfile = (options: PublishProfileOptions): Publis
   const fingerprint = profileDeclarationFingerprint(target);
   if (fingerprint !== stagedFingerprint) {
     throw new Error('the published profile does not match the staged declaration source');
+  }
+  const publishedProvenance = tryReadJsonFile<ProfileProvenance>(
+    join(target, PROFILE_PROVENANCE_FILENAME),
+  );
+  if (
+    publishedProvenance?.generationId !== provenance.generationId ||
+    publishedProvenance.profileName !== provenance.profileName ||
+    publishedProvenance.digest !== provenance.digest ||
+    publishedProvenance.transactionId !== provenance.transactionId
+  ) {
+    throw new Error('the published profile provenance is missing or does not match');
   }
   // The staged immutable source must survive publication unchanged. If it did
   // not, the environment would have no provenance for `restore`. Leave the
@@ -186,9 +228,12 @@ export const publishGenerationProfile = (options: PublishProfileOptions): Publis
 // NOTE (MF1): there is intentionally NO automatic orphan-profile GC here. A
 // namespace-prefix + retain scan cannot prove provenance and could delete
 // unrelated `hdsl-*` profiles or a just-published generation when the retain set
-// is momentarily empty. Journal-keyed GC (only profiles a pending, uncommitted
-// transaction published and that no retained/active generation references) is
-// deferred to the full transaction wiring.
+// is momentarily empty. The provenance marker above is attribution evidence for a
+// FUTURE journal-keyed GC; it does not authorize any deletion here.
+
+/** Reads the provenance marker of a published profile, if present. */
+export const readProfileProvenance = (directory: string): ProfileProvenance | undefined =>
+  tryReadJsonFile<ProfileProvenance>(join(directory, PROFILE_PROVENANCE_FILENAME));
 
 /** Reads the published profile name recorded for a generation, if any. */
 export const readGenerationProfileName = (

@@ -1,21 +1,35 @@
 /**
- * A2 production windows with a REAL subprocess SIGKILL and recover():
- *  - before-pointer: crash before the active-generation pointer switch → roll back
- *  - after-pointer:  crash after the pointer switch, before the journal commit →
- *    roll forward (pointer is authoritative; the generation is never deleted)
+ * A2 production windows with a REAL subprocess SIGKILL and recover(), with
+ * profileInit enabled through a controlled executor:
+ *  - before-pointer: killed before publish → roll back, no published profile
+ *  - after-publish:  killed after publish, before the pointer switch → roll back;
+ *    the published profile is an uncommitted orphan that is RETAINED and carries
+ *    provenance (generation/profile/digest/transaction) for future attribution
+ *  - after-pointer:  killed after the pointer switch, before the journal commit →
+ *    roll forward; the published profile belongs to the committed ACTIVE
+ *    generation and must match the generation record name+digest
  *
- * The child drives the real core creation transaction; install artifacts are
- * synthetic fixtures, so this is a lifecycle/process harness, not real-install
- * evidence. Same-environment multi-generation/restore remains gated by the
- * unimplemented `changes.apply` and is NOT claimed here.
+ * The child drives the real core creation transaction and is killed with a real
+ * SIGKILL; install artifacts are synthetic fixtures and profile init uses a
+ * controlled executor, so this is a lifecycle/process harness, not real-install
+ * evidence. A fresh environment is created only as an "other environments are
+ * unaffected" control, never as same-environment retry/dual-generation evidence
+ * (that remains gated by the unimplemented `changes.apply`).
  */
 import { spawn } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
-import { createManagedInstall, generationPaths, resolveLayout } from '@hdsl/core';
+import {
+  createManagedInstall,
+  environmentPaths,
+  generationPaths,
+  managedProfileName,
+  readProfileProvenance,
+  resolveLayout,
+} from '@hdsl/core';
 import { createRuntimePort } from '@hdsl/runtime';
 import {
   sha256,
@@ -42,12 +56,41 @@ const combination = syntheticCombination({
   dshTarball,
 });
 
+const stagingExecutor = async (
+  _executable: string,
+  args: readonly string[],
+  options: { env: Record<string, string> },
+) => {
+  const name = args[args.indexOf('--profile') + 1] as string;
+  const directory = join(options.env['DSH_HOME'] as string, 'profiles', name);
+  mkdirSync(directory, { recursive: true });
+  writeFileSync(
+    join(directory, 'package.json'),
+    JSON.stringify({ name: 'dsh-profile-fixture', dsh: { profile: { bundles: ['@deepseek-ai/dsh-base'] } } }),
+  );
+  writeFileSync(join(directory, 'cordis.patch.yml'), '# fixture patch\n');
+  return { exitCode: 0, stdout: '', stderr: '', timedOut: false };
+};
+
 const buildRuntime = (artifacts: string) =>
-  createRuntimePort({ closureInstall: false, precheck: 'none', localArtifactDirectory: artifacts });
+  createRuntimePort({
+    closureInstall: false,
+    precheck: 'none',
+    profileInit: true,
+    executeCommand: stagingExecutor as never,
+    localArtifactDirectory: artifacts,
+  });
+
+interface Reached {
+  readonly environmentId: string | null;
+  readonly activeGenerationId: string | null;
+  readonly journalGenerationId: string | null;
+  readonly profileName: string | null;
+}
 
 const runWindow = async (
-  phase: 'before-pointer' | 'after-pointer',
-): Promise<{ dataRoot: string; artifacts: string; generationId: string | null }> => {
+  phase: 'before-pointer' | 'after-publish' | 'after-pointer',
+): Promise<{ dataRoot: string; artifacts: string; reached: Reached }> => {
   const dataRoot = mkdtempSync(join(tmpdir(), `hdsl-a2-${phase}-`));
   roots.push(dataRoot);
   const artifacts = mkdtempSync(join(tmpdir(), 'hdsl-a2-window-artifacts-'));
@@ -80,10 +123,8 @@ const runWindow = async (
   const outcome = await exit;
   expect(outcome.signal).toBe('SIGKILL');
 
-  const reached = JSON.parse(readFileSync(join(dataRoot, 'window-reached.json'), 'utf8')) as {
-    activeGenerationId: string | null;
-  };
-  return { dataRoot, artifacts, generationId: reached.activeGenerationId };
+  const reached = JSON.parse(readFileSync(join(dataRoot, 'window-reached.json'), 'utf8')) as Reached;
+  return { dataRoot, artifacts, reached };
 };
 
 const reconcile = async (dataRoot: string, artifacts: string) => {
@@ -100,10 +141,11 @@ const reconcile = async (dataRoot: string, artifacts: string) => {
   return { managed, report };
 };
 
-describe('A2 production windows (real SIGKILL + recover)', () => {
-  it('rolls back when killed before the pointer switch (old generation untouched)', async () => {
-    const { dataRoot, artifacts, generationId } = await runWindow('before-pointer');
-    expect(generationId).toBeNull();
+describe('A2 production windows (real SIGKILL + recover, profileInit)', () => {
+  it('before-pointer: rolls back with no published profile', async () => {
+    const { dataRoot, artifacts, reached } = await runWindow('before-pointer');
+    expect(reached.activeGenerationId).toBeNull();
+    expect(reached.journalGenerationId).not.toBeNull();
 
     const { managed, report } = await reconcile(dataRoot, artifacts);
     expect(report.rolledBack).toBeGreaterThanOrEqual(1);
@@ -112,14 +154,61 @@ describe('A2 production windows (real SIGKILL + recover)', () => {
     if (listed.ok) {
       expect(listed.value[0]?.activeGenerationId).toBeNull();
       expect(listed.value[0]?.state).toBe('error');
+      const layout = resolveLayout(dataRoot);
+      const profileName = managedProfileName(reached.journalGenerationId ?? '');
+      expect(
+        existsSync(join(environmentPaths(layout, listed.value[0]?.id ?? '').profilesDirectory, profileName)),
+      ).toBe(false);
     }
     await managed.close();
   });
 
-  it('rolls forward when killed after the pointer switch, before the journal commit', async () => {
-    const { dataRoot, artifacts, generationId } = await runWindow('after-pointer');
-    expect(generationId).not.toBeNull();
-    if (generationId === null) {
+  it('after-publish: rolls back, retains the uncommitted orphan with provenance, new env unaffected', async () => {
+    const { dataRoot, artifacts, reached } = await runWindow('after-publish');
+    expect(reached.activeGenerationId).toBeNull();
+    expect(reached.journalGenerationId).not.toBeNull();
+
+    const { managed, report } = await reconcile(dataRoot, artifacts);
+    expect(report.rolledBack).toBeGreaterThanOrEqual(1);
+    const listed = managed.service.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      await managed.close();
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment?.activeGenerationId).toBeNull();
+    expect(environment?.state).toBe('error');
+
+    // The uncommitted orphan profile is retained and attributed.
+    const layout = resolveLayout(dataRoot);
+    const profileName = managedProfileName(reached.journalGenerationId ?? '');
+    const published = join(environmentPaths(layout, environment?.id ?? '').profilesDirectory, profileName);
+    expect(existsSync(published)).toBe(true);
+    const provenance = readProfileProvenance(published);
+    expect(provenance?.generationId).toBe(reached.journalGenerationId);
+    expect(provenance?.profileName).toBe(profileName);
+    expect(typeof provenance?.transactionId).toBe('string');
+    expect((provenance?.digest ?? '').length).toBe(64);
+
+    // Control only: another environment is unaffected by the orphan.
+    const second = managed.service.createEnvironment({
+      requestId: 'req-window-control',
+      name: 'window-control',
+      combination,
+    });
+    expect(second.ok).toBe(true);
+    if (second.ok) {
+      const snapshot = await managed.waitForOperation(second.value.operationId, { timeoutMs: 20_000 });
+      expect(snapshot.status).toBe('succeeded');
+    }
+    await managed.close();
+  });
+
+  it('after-pointer: rolls forward; published profile matches the active generation record', async () => {
+    const { dataRoot, artifacts, reached } = await runWindow('after-pointer');
+    expect(reached.activeGenerationId).not.toBeNull();
+    if (reached.activeGenerationId === null) {
       return;
     }
 
@@ -127,16 +216,29 @@ describe('A2 production windows (real SIGKILL + recover)', () => {
     expect(report.finalized).toBeGreaterThanOrEqual(1);
     const listed = managed.service.listEnvironments();
     expect(listed.ok).toBe(true);
-    if (listed.ok) {
-      const environment = listed.value[0];
-      expect(environment?.activeGenerationId).toBe(generationId);
-      expect(environment?.state).toBe('stopped');
-      // The committed generation directory is retained (never deleted on roll-forward).
-      const layout = resolveLayout(dataRoot);
-      expect(
-        existsSync(generationPaths(layout, environment?.id ?? '', generationId).generationDirectory),
-      ).toBe(true);
+    if (!listed.ok) {
+      await managed.close();
+      return;
     }
+    const environment = listed.value[0];
+    expect(environment?.activeGenerationId).toBe(reached.activeGenerationId);
+    expect(environment?.state).toBe('stopped');
+
+    const layout = resolveLayout(dataRoot);
+    const paths = generationPaths(layout, environment?.id ?? '', reached.activeGenerationId);
+    expect(existsSync(paths.generationDirectory)).toBe(true);
+    const record = JSON.parse(readFileSync(paths.generationRecordPath, 'utf8')) as {
+      profileName?: string;
+      profileDigest?: string;
+    };
+    const profileName = managedProfileName(reached.activeGenerationId);
+    expect(record.profileName).toBe(profileName);
+    const published = join(environmentPaths(layout, environment?.id ?? '').profilesDirectory, profileName);
+    expect(existsSync(published)).toBe(true);
+    const provenance = readProfileProvenance(published);
+    expect(provenance?.generationId).toBe(reached.activeGenerationId);
+    expect(provenance?.profileName).toBe(profileName);
+    expect(provenance?.digest).toBe(record.profileDigest);
     await managed.close();
   });
 });
