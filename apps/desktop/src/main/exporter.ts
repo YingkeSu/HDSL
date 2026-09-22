@@ -139,7 +139,10 @@ export const collectDiagnosticsInput = (
       ...(paths === null
         ? []
         : [
-            { from: paths.homeDirectory, to: '<generation-home>' },
+            { from: paths.homeDirectory, to: '<environment-home>' },
+            // Legacy per-generation home (inside the generation dir) is replaced
+            // explicitly before the broader generation-directory replacement.
+            { from: paths.legacyHomeDirectory, to: '<generation>/home' },
             { from: paths.generationDirectory, to: '<generation>' },
           ]),
       { from: options.layout.root, to: '<data-root>' },

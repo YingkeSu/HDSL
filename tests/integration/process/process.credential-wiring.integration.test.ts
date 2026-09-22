@@ -119,11 +119,12 @@ const setup = async (): Promise<Scenario> => {
     'generations',
     environment.activeGenerationId,
   );
-  const homeDirectory = join(generationDirectory, 'home');
+  const homeDirectory = join(harness.dataRoot, 'environments', environment.id, 'home');
+  const dataDirectory = join(harness.dataRoot, 'environments', environment.id, 'data');
   for (const directory of [
     homeDirectory,
+    dataDirectory,
     join(generationDirectory, 'config'),
-    join(generationDirectory, 'data'),
   ]) {
     mkdirSync(directory, { recursive: true });
   }
@@ -134,7 +135,7 @@ const setup = async (): Promise<Scenario> => {
     generationDirectory,
     homeDirectory,
     configDirectory: join(generationDirectory, 'config'),
-    dataDirectory: join(generationDirectory, 'data'),
+    dataDirectory,
     nodeExecutable: process.execPath,
     dshEntrypoint: FIXTURE_SCRIPT,
     installMode: 'npm-ci',

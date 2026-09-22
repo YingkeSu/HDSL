@@ -241,7 +241,9 @@ export class RuntimePort implements ManagedRuntimePort {
       throw new InstallFailure('DISK_FULL', 'the disk is full (injected fault)');
     }
     mkdirSync(destination, { recursive: true });
-    const homeDirectory = join(destination, 'home');
+    // Pre-commit preflight scratch home. The environment-scoped shared home is
+    // created only at commit / migration (ADR 0006); install must not write it.
+    const homeDirectory = join(destination, '.preflight-home');
     mkdirSync(join(homeDirectory, '.tmp'), { recursive: true });
     mkdirSync(join(destination, '.tmp'), { recursive: true });
 

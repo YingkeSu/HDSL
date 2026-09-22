@@ -53,6 +53,7 @@ import {
   type AppDataLayout,
   type GenerationPaths,
 } from './layout.js';
+import { migrateEnvironmentHome, HomeMigrationStore } from './home-migration.js';
 import {
   CredentialStore,
   type CredentialBinding,
@@ -127,6 +128,8 @@ export interface RecoveryDetail {
   readonly operationId: string | null;
   readonly generationId: string | null;
   readonly resolution: 'finalized' | 'rolled-back' | 'failed';
+  /** Controlled, path- and secret-free explanation (e.g. a migration conflict). */
+  readonly reason?: string;
 }
 
 export interface RecoveryReport {
@@ -380,6 +383,53 @@ export class EnvironmentService {
     return record === undefined
       ? notFound('operation was not found')
       : portOk(toOperationSnapshot(record));
+  }
+
+  /**
+   * Runs (or resumes) the ADR 0006 home migration for one environment before any
+   * runtime-affecting operation. Idempotent; refuses while the environment is
+   * running or changing so the shared home is never mutated under a live process.
+   * A new/empty environment finalizes immediately without touching anything.
+   */
+  ensureHomeMigrated(environmentId: string): PortOutcome<void> {
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    if (
+      environment.state === 'starting' ||
+      environment.state === 'running' ||
+      environment.state === 'stopping'
+    ) {
+      return portFail('ENVIRONMENT_BUSY', 'the environment is running or changing');
+    }
+    try {
+      const result = migrateEnvironmentHome({
+        layout: this.#layout,
+        environmentId,
+        activeGenerationId: environment.activeGenerationId,
+        clock: this.#clock,
+      });
+      if (result.state === 'conflict') {
+        // Fail closed: refuse runtime operations rather than risk data loss.
+        return portFail(
+          'INTERNAL_ERROR',
+          `the environment ${result.conflict?.kind ?? 'home'} directory conflicts with the migration record; refusing to start`,
+        );
+      }
+      if (result.state === 'interrupted') {
+        return portFail('INTERNAL_ERROR', 'the home migration is incomplete; retry to resume');
+      }
+      return portOk(undefined);
+    } catch (error) {
+      return portFail(
+        errorCodeFrom(error) ?? 'INTERNAL_ERROR',
+        error instanceof Error ? error.message : 'home migration failed',
+      );
+    }
   }
 
   /**
@@ -696,6 +746,14 @@ tryReadInstallManifest(
     if (generation === undefined) {
       return notFound('no installed generation is available for this environment');
     }
+    // Migration mutates the shared home, so it is only run before a `start`
+    // (never while running/stopping). `stop` must stay available at all times.
+    if (kind === 'start') {
+      const migration = this.ensureHomeMigrated(environment.id);
+      if (!migration.ok) {
+        return portFail(migration.code, migration.message);
+      }
+    }
     const operation = this.#operations.create({
       id: newOperationId(),
       kind,
@@ -906,7 +964,64 @@ tryReadInstallManifest(
     }
     ensureLayout(this.#layout);
     const details: RecoveryDetail[] = [];
+    // ADR 0006 requirement 4: reconcile process ownership FIRST, then migrate.
+    // A migration must never copy/delete a home while a managed process may be
+    // alive. Environments whose record was running/starting/stopping before
+    // reconciliation, and environments owned by an unverifiable/adopted process,
+    // are left for a later explicit start (which runs the same state guard).
+    const protectedEnvironments = new Set(
+      this.#environments
+        .list()
+        .filter(
+          (environment) =>
+            environment.state === 'starting' ||
+            environment.state === 'running' ||
+            environment.state === 'stopping',
+        )
+        .map((environment) => environment.id),
+    );
     const processEntries = await this.#recoverProcesses(details);
+    if (this.#process !== undefined) {
+      const unsafe = new Set(
+        processEntries
+          .filter((entry) => entry.resolution === 'adopted' || entry.resolution === 'unverifiable')
+          .map((entry) => entry.environmentId),
+      );
+      for (const environment of this.#environments.list()) {
+        if (unsafe.has(environment.id) || protectedEnvironments.has(environment.id)) {
+          continue;
+        }
+        if (
+          environment.state === 'starting' ||
+          environment.state === 'running' ||
+          environment.state === 'stopping'
+        ) {
+          continue;
+        }
+        try {
+          const migration = migrateEnvironmentHome({
+            layout: this.#layout,
+            environmentId: environment.id,
+            activeGenerationId: environment.activeGenerationId,
+            clock: this.#clock,
+          });
+          if (migration.state === 'conflict') {
+            // Surface a controlled, path/secret-free clue; the environment stays
+            // refused for start until the conflict is resolved.
+            details.push({
+              transactionId: null,
+              environmentId: environment.id,
+              operationId: null,
+              generationId: environment.activeGenerationId,
+              resolution: 'failed',
+              reason: `home-migration-conflict:${migration.conflict?.kind ?? 'tree'}`,
+            });
+          }
+        } catch {
+          // Retried on the next start/recover; the environment stays refused.
+        }
+      }
+    }
     const journals = this.#journals.list();
     const journalOperations = new Set(journals.map((journal) => journal.operationId));
 
@@ -1257,6 +1372,24 @@ tryReadInstallManifest(
     ensureDirectory(paths.configDirectory);
     ensureDirectory(paths.dataDirectory);
     ensureDirectory(paths.homeDirectory);
+    // A brand-new environment has no legacy home/data; record both migrations as
+    // finalized so the migration never mistakes the commit-created environment
+    // home for a foreign target (ADR 0006 §1.1 new-environment branch).
+    const migrationStore = new HomeMigrationStore(this.#layout);
+    const migrationAt = this.#now();
+    for (const kind of ['home', 'data'] as const) {
+      migrationStore.write({
+        schemaVersion: '1',
+        environmentId: job.environmentId,
+        kind,
+        sourceGenerationId: job.generationId,
+        state: 'finalized',
+        sourceDigest: null,
+        publishedDigest: null,
+        createdAt: migrationAt,
+        updatedAt: migrationAt,
+      });
+    }
     writeJsonAtomic(paths.lockPath, job.lock);
     writeJsonAtomic(paths.generationRecordPath, {
       id: job.generationId,

@@ -102,10 +102,44 @@ export interface GenerationPaths {
   readonly manifestPath: string;
   readonly nodeDirectory: string;
   readonly dshDirectory: string;
+  /**
+   * Environment-scoped runtime home shared by every generation (ADR 0006 D-A).
+   * This is the `DSH_HOME`/`HOME` a managed process runs with.
+   */
   readonly homeDirectory: string;
-  readonly configDirectory: string;
+  /** Environment-scoped DSH process cwd (ADR 0006 §4.1). */
   readonly dataDirectory: string;
+  /** Pre-change per-generation home, kept only so the migration can find it. */
+  readonly legacyHomeDirectory: string;
+  /** Pre-change per-generation data directory. */
+  readonly legacyDataDirectory: string;
+  readonly configDirectory: string;
 }
+
+export interface EnvironmentPaths {
+  readonly environmentId: string;
+  readonly environmentDirectory: string;
+  /** Shared runtime data/home root for the environment (ADR 0006). */
+  readonly homeDirectory: string;
+  readonly dataDirectory: string;
+  readonly migrationDirectory: string;
+  readonly migrationPath: string;
+}
+
+export const environmentPaths = (
+  layout: AppDataLayout,
+  environmentId: string,
+): EnvironmentPaths => {
+  const environmentDirectoryPath = environmentDirectory(layout, environmentId);
+  return {
+    environmentId,
+    environmentDirectory: environmentDirectoryPath,
+    homeDirectory: join(environmentDirectoryPath, 'home'),
+    dataDirectory: join(environmentDirectoryPath, 'data'),
+    migrationDirectory: join(environmentDirectoryPath, 'migration'),
+    migrationPath: join(environmentDirectoryPath, 'migration', 'home-v2.json'),
+  };
+};
 
 export const generationPaths = (
   layout: AppDataLayout,
@@ -117,6 +151,7 @@ export const generationPaths = (
     join(generationsDirectory(layout, environmentId), assertOpaqueId(generationId, 'generationId')),
     'generationId',
   );
+  const environment = environmentPaths(layout, environmentId);
   return {
     environmentId,
     generationId,
@@ -127,9 +162,11 @@ export const generationPaths = (
     // Layout written by the runtime installer (see `install-manifest.json`).
     nodeDirectory: join(generationDirectory, 'node'),
     dshDirectory: join(generationDirectory, 'dsh'),
-    homeDirectory: join(generationDirectory, 'home'),
+    homeDirectory: environment.homeDirectory,
+    dataDirectory: environment.dataDirectory,
+    legacyHomeDirectory: join(generationDirectory, 'home'),
+    legacyDataDirectory: join(generationDirectory, 'data'),
     configDirectory: join(generationDirectory, 'config'),
-    dataDirectory: join(generationDirectory, 'data'),
   };
 };
 

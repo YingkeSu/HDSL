@@ -109,6 +109,7 @@ const buildFixture = () => {
   const layout = resolveLayout(dataRoot);
   const paths = generationPaths(layout, ENVIRONMENT_ID, GENERATION_ID);
   const manifest = buildManifest(paths.homeDirectory);
+  mkdirSync(paths.generationDirectory, { recursive: true });
   mkdirSync(paths.homeDirectory, { recursive: true });
   mkdirSync(join(paths.homeDirectory, 'logs'), { recursive: true });
   mkdirSync(join(paths.homeDirectory, 'sessions'), { recursive: true });
@@ -179,7 +180,7 @@ describe('diagnostic export whitelist', () => {
     expect(written).not.toContain(CANARY);
     expect(written).not.toContain('/Users/operator/secret');
     expect(written).not.toContain(dataRoot);
-    expect(written).toContain('<generation-home>');
+    expect(written).toContain('<environment-home>');
     // Excluded file names never appear as export content.
     expect(written).not.toContain('.credentials.yaml');
     expect(written.toLowerCase()).not.toContain('credentials.json');
