@@ -62,11 +62,39 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 | --- | --- | --- |
 | P1 | `--profile <name>` 选择 `$DSH_HOME/profiles/<name>`；`web` 是 `--profile web` 的硬编码别名；profile 不存在时从 shipped 模板自动初始化 | rc.2 `lib/bin.js`（`--profile <name>` 说明与 `web` 别名）+ `scripts/research/dsh-profile-mechanism-probe.sh` |
 | P2 | 组合的 bundle 层来自该 profile 的 `package.json` `dsh.profile.bundles`；改写它（base-only）使 dump 的 bundle 头从 20 降到 1 | 同上（fresh `web`=20 头；`genA` 默认=20；`genA` base-only=1） |
-| P3 | 同一个共享 `DSH_HOME` 下两个 profile 名（`web`/`genA`）可分别选择、互不覆盖 | 同上 |
+| P3 | 同一个共享 `DSH_HOME` 下两个 profile 目录（`web`/`genA`）**并存并被各自选中**；改写 `genA` 的 bundles 不改变 `web` 的 dump | 同上（修改 `genA` 后重 dump `web` 字节相同） |
 
-证据等级：P1–P3 为 `raw`（固定 rc.2 实测，**config 解析路径**）。它们证明机制**可行**，但**不**证明运行期加载集合等价（E9）、也不证明 HDSL 能原子发布/切换 profile 而不破坏 D-A。
+**真实 boot 运行时 marker（本片实测，`raw`→接近可执行证据）**：用自有已审 fixture + 固定完整性 rc.2，同一个共享 `DSH_HOME` 建两代 profile：
 
-**候选机制（不预选，含所需证据）**：
+| 观察 | 结果 | 证据 |
+| --- | --- | --- |
+| `genA`（base+web-app）真实 boot | `dsh web: http://127.0.0.1:<port>/` 就绪行在 ~4s 出现 | `scripts/research/dsh-profile-runtime-marker-probe.sh` |
+| `genB`（base-only）真实 boot | 无 web 就绪行（web-app 未被加载） | 同上 |
+| 切回 `genA` | 再次出现就绪行；`genA` bundles 未被 `genB` 影响 | 同上 |
+| boot 后 profile 目录 | DSH 每次 boot **重写** `<profile>/cordis.yml` → profile 目录是**可变运行状态**，不属于"不可变已提交代" | 同上 |
+
+就绪行来自 `@deepseek-ai/dsh-web-app`（与 HDSL 现有 `readiness.ts` 解析同一行），因此它是**运行期实际加载 web-app bundle** 的 marker，不是 `--dump-config`。这收敛了机制方向，但**尚未**完成 E10b：HDSL 生产启动 argv / 提交顺序未接线，"旧代加载集合 == 组成摘要"的双代端到端未证。
+
+**发布/切换崩溃窗口与对账规则（废弃原型，非生产）**：`scripts/research/e10b-publish-crash-prototype.mjs` 7/7 与真实子进程 `scripts/research/e10b-phase-kill-prototype.mjs` 6/6（真 `SIGKILL`/抛错于 `staged`/`published`/`pointed` 各相位）验证了 P-A 排序（先发布 profile、后切指针）与以下**对账规则**：
+
+- **指针为权威**：任何被 `activeGenerationId` 引用的 profile **永不被回收**（窗口 W5：指针已切、journal 未 committed → roll-forward，保留新代）。
+- **journal 仅识别待处理事务**：仅在指针**不**引用该事务代时回收孤儿 profile + stage。
+- **GC 限定 `hdsl-` 命名空间**：绝不触碰 `web`/用户 profile（负控已验）。
+- **原子 rename → 部分发布不可达**：W2（部分写入的已发布 profile）仅为防御性（若将来改用非原子 copy 发布）；发布必须是单次 `rename`。
+- 上述仅为排序语义，不含 fsync/持久性保证。
+
+**同版本不同安装路径的回退 symlink（E10b-4）**：`scripts/research/e10b-4-module-fallback-probe.sh` 用**同一 rc.2 版本**的两个自有安装副本（不同路径）+ 共享 home，真 boot 验证：`$DSH_HOME/profiles/node_modules` 的 symlink 会**每次 boot 被重新治愈（heal）**到**当前 boot 的代际安装路径**（A→A、B→B、再 A→A）。**仅证明同版本范围**；**跨版本未证**（本期版本更换已排除，不得声称支持）。结论：共享回退路径会随 boot **摆动**，正确性依赖**单一活动代**不变；该不变式必须覆盖 `start`/`restore`/`recover`/迁移，且按**环境各自 home** 强制执行；并发 boot 会竞态该路径，不在范围内。
+
+**身份边界（组成身份取自不可变声明源）**：
+
+- 组成身份 = **staged 的声明源**（`package.json`、`pnpm-lock.yaml`、生成的 `cordis.patch.yml`）。
+- 一切 **live 派生状态**（boot 重写的 `cordis.yml`、`node_modules`、`$DSH_HOME/profiles/node_modules` 的安装回退 symlink）**不得**参与身份计算。
+- **组成锁/摘要绝不得从 live profile 重建**（否则每次 boot 摘要漂移，D13 的来源锁与旧代绑定失效）；复核只读 staged/不可变源。
+- `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile（覆盖 live 派生状态）；仅当 live 声明源与身份逐字节一致时才可复用现有 profile。
+
+证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture；负控仅“整窗存活 + 无 marker”，**不排除存活但已加载**，空日志不是 boot 证据）；崩溃/杀进程与 E10b-4 为**原型/`raw`**（自有副本；相位为模型化、仅信号真实；E10b-4 仅限同版本不同安装路径），均非生产。
+
+**候选机制（仍不预选；P-A 为当前证据支持方向）**：
 
 | 方案 | 机制 | 需要的证据（E10b） | 风险 |
 | --- | --- | --- | --- |
@@ -75,7 +103,7 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 | P-C 共享 home + 环境级单一 profile | 接受插件集是环境级 | 则必须修订 D-B/§4.1/D18-2：`restore` 不还原插件组成，插件回滚不在本 MVP | 与 #73/#76 的"代际回滚插件"目标冲突 |
 | P-D 独立 config 根覆盖 | 若上游支持 profile 根覆盖 | 需要 rc.2 实测支持；当前源码只显示 `$DSH_HOME/profiles` | 证据不足 |
 
-**硬门禁 E10b**：在固定 rc.2 上（真实 boot，非仅 `--dump-config`）证明所实现机制满足"**恢复后旧代实际加载集合 == 该代组成摘要**"，并证明 profile 发布/切换的原子性与崩溃恢复；在此之前，§2 D-B 的代际组成**只作设计目标**，不得当作已交付能力。
+**硬门禁 E10b**：在固定 rc.2 上（真实 boot）证明所实现机制满足"**恢复后旧代实际加载集合 == 该代组成摘要**"（已收敛为 P-A 方向并有运行时 marker 证据），**并**把该机制接入 HDSL 启动/提交顺序、在双代接缝上端到端证明（旧代失败后仍可启动、摘要不变、发布/切换崩溃恢复）。后两者未完成，因此 E10b **仍未关闭**；在此之前 §2 D-B 的代际组成只作设计目标，不得当作已交付能力。
 
 该决策在获批后取代 ADR 0005 D18 中"机制延后由 002 决定"的待定状态；**批准前 D18 待定状态不变**（获批时再更新 ADR 0005 §9.7/D18 指针）。D18 的四条不变量不变。
 
@@ -103,7 +131,8 @@ A 被否的核心理由：它把运行数据并入组成快照，违反 G5，并
 | 对象 | 归属 | 事务行为 | 导出/整合包 |
 | --- | --- | --- | --- |
 | 受管运行时（node/dsh 产物） | 代际（不可变） | 新建 stage | 否（按摘要引用） |
-| profile 三元组（`package.json` + `pnpm-lock.yaml` + 生成 `cordis.patch.yml`） | **组成身份**归代际；**物理加载位置未决（E10b）** | 新建 stage；共享 home 下需经批准机制发布到 `$DSH_HOME/profiles/<name>` 或等价位置 | 组成摘要，不含凭据 |
+| profile 声明源（`package.json` + `pnpm-lock.yaml` + 生成 `cordis.patch.yml`） | **组成身份**归代际（取自不可变 staged 源） | 新建 stage；共享 home 下经批准机制发布到 `$DSH_HOME/profiles/hdsl-<gen>` | 组成摘要，不含凭据 |
+| `cordis.yml`（boot 重写的根）/ `node_modules` / `profiles/node_modules` 回退 symlink | **live 派生可变状态**，非身份 | DSH 每次 boot 重写/治愈；事务与摘要**不得**从它重建身份 | 否 |
 | `composition.lock.json` / `generation.json` / `install-manifest.json` | 代际（不可变） | 新建 stage；提交后才可被指针引用 | 摘要/来源锁 |
 | `home/` 目录 | 环境（可变、共享） | **只读校验，不复制不删除** | 否 |
 | `.credentials.yaml`（0600，含密） | 环境（含密） | 只读校验存在性/权限，不读内容 | **永不** |
@@ -188,8 +217,8 @@ interface ChangeFaults {
 
 ## 7. 未决与后续闸门（不得当作已实现）
 
-- **E10b 未证（阻塞 D18-2/D15 的插件集部分）**：§2.3 只证明了 `--profile` 机制**可用**；尚未证明"恢复后旧代实际加载集合 == 该代组成摘要"及 profile 发布/切换的原子性与崩溃恢复。候选机制 P-A/P-B/P-C/P-D 均**未选定**，**不得预判 symlink 安全**。在 E10b 通过前，不得宣称旧代际加载其自身组成，也不得把 D18-2/D15 写成已满足。
-- **E9 未证**：`--dump-config` 的静态性（不 require/执行 bundle 模块）与"离线解析组合树 == 运行期实际加载集合"的等价性未验证。本片在已核身份的受管 rc.2 安装上（`0.1.5-rc.2`，tarball sha256 `f4c54839…`，见验证记录）做了**受控 marker 前置实验（config 解析路径）**，但未做 bundle 代码执行 marker；仍需后续以受控 marker 插件在受管 DSH 安装上有界实证。在此之前，生效判据只写"活动代际记录 + 离线解析组合树"。
+- **E10b 未关（阻塞 D18-2/D15 的插件集部分）**：§2.3 已在固定 rc.2 上（真实 boot）证明 `--profile` 选择 profile 且 web-app marker 绑定于所选 profile 的 bundle 集；废弃原型验证 P-A 的发布/切换崩溃窗口、真 `SIGKILL`/抛错各相位（相位模型化），**同版本**不同安装路径的 E10b-4 回退 symlink heal，并定下对账规则（指针权威、journal 仅识别待处理事务、GC 限 `hdsl-` 命名空间）。但**HDSL 生产启动 argv/提交顺序未接线**，双代端到端（真实 HDSL 事务 + 真实 boot）未证；**跨版本未证**且在本期之外。候选机制 P-A 为当前证据支持方向，P-B **不预判 symlink 安全**。实现前 checklist（S2 §6.1）除 E9 外已闭合；E10b 未关前不得宣称旧代加载其自身组成。
+- **E9 未证**：`--dump-config` 的静态性（不 require/执行 bundle 模块）以及"离线解析组合树 == 运行期实际加载集合"的等价性仍未验证。本片的 E10b 运行时 marker（§2.3）证明的是"真实 boot 加载 web-app bundle"，**不能**替代 E9（它没有证明 dump-config 与运行时加载集合逐项等价，也未做 bundle 代码执行 marker）。在 E9 前，生效判据仍只写"活动代际记录 + 离线解析组合树"。
 - **受管 pnpm 身份（E1）**：候选 `11.7.0` 仍未以受管方式冻结。本片只做了一次有界只读**网络**官方来源核对：`npm view pnpm@11.7.0`（`https://registry.npmjs.org/pnpm`）返回 `11.7.0`、`dist.integrity = sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==`、`engines.node >= 22.13`。这是官方来源/版本约束核对，**不是**受管执行器冻结证据：仍需 S2 决定 HDSL 如何随包固定该 tarball 并在 apply 时校验摘要；宿主 pnpm `11.7.0` 不作为证据。
 - **上游 home 数据版本兼容（§4.2 条件 4）**：需真实 session 迁移实验；当前只到格式版本/home 形态证据。
 - **实现落地与首次迁移**：布局从 `<gen>/home` 迁到 `<env>/home` 需要一次性、可崩溃恢复的迁移；具体持久标志/提交点/启动前恢复顺序/含密副本生命周期/已提交代不可变的一次性例外见 [S2 设计 §1.1](../../specs/002-plugin-transactions/s2-home-and-transaction-design.md)；实现属 S2。
@@ -208,7 +237,11 @@ interface ChangeFaults {
 - 决策：本 ADR 已给出（`proposed`，rev 2）。**批准前不据此修改生产实现**。
 - 实证：
   - `scripts/research/home-derivation-probe.mjs`（合成运行时 + 真实 `@hdsl/core` dist，零网络）在 macOS ARM64、Node `24.21.0` 上 **11/11 通过**：只证明事务删除作用域与指针提交点。
-  - `scripts/research/dsh-profile-mechanism-probe.sh`（自有副本 + 已核身份的真实 rc.2 安装）实测 P1–P3：`--profile <name>` 选 `$DSH_HOME/profiles/<name>`，bundle 集来自 profile `package.json`，两个 profile 可分别选择。
+  - `scripts/research/dsh-profile-mechanism-probe.sh`（自有副本 + 已核身份的真实 rc.2 安装）实测 P1–P3：`--profile <name>` 选 `$DSH_HOME/profiles/<name>`，bundle 集来自 profile `package.json`，两个 profile 并存被各自选中。
+  - `scripts/research/dsh-profile-runtime-marker-probe.sh`（真实 boot、自有 fixture、零模型/凭据）：web-app 就绪行作运行时 marker，证明选定 `--profile` 决定 marker 是否出现（**非完整加载集合**）；负控 = 整窗存活 + 无 marker（**不排除**存活但已加载）；A→B→A 可切换且互不影响。
+  - `scripts/research/e10b-publish-crash-prototype.mjs`（**废弃原型**）7/7：W1–W5（含指针已切/journal 未 committed）+ `hdsl-` 命名空间 GC + `web` 负控。
+  - `scripts/research/e10b-phase-kill-prototype.mjs`（**废弃原型**；相位模型化，仅信号真实）6/6。
+  - `scripts/research/e10b-4-module-fallback-probe.sh`（**同一 rc.2 版本**的两个自有安装副本 + 共享 home）PASS：`profiles/node_modules` 每次 boot heal 到当前代际安装**路径**；**跨版本未证**。
 - 记录见 [plugin-home-derivation-validation.md](../development/plugin-home-derivation-validation.md)。
-- 未验证：**E10b（每代 profile 真实加载等价性与发布原子性）未证**；E1、E9、E2/E4/E5/E6/E7 与真实安装/桌面路径未证。本片未运行任何第三方插件代码、未调用模型、未读个人凭据。
+- 未验证：**E10b 生产接线与双代端到端未证**；E1、E9、E2/E4/E5/E6/E7 与真实安装/桌面路径未证。本片运行了固定完整性 rc.2 自身的真实 boot（自有副本、无第三方插件代码），未调用模型、未读个人凭据。
 - 本 ADR 不关闭 #76，也不宣称 #76 门禁已满足（E10b 与 S2 实现仍需后续；见 §7）。
