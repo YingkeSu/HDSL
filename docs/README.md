@@ -19,7 +19,7 @@
 - [领域术语与不变量](../CONTEXT.md)、[工程原则](architecture/principles.md)。
 - [技术设计](architecture/tdd.md)、[架构与流程图](architecture/diagrams.md)、[ADR](adr/README.md)。
 - 环境生命周期：[规格](../specs/001-environment-lifecycle/spec.md)、[实施计划](../specs/001-environment-lifecycle/plan.md)、[任务与进展](../specs/001-environment-lifecycle/tasks.md)、[数据模型](../specs/001-environment-lifecycle/data-model.md)、[接口契约](../specs/001-environment-lifecycle/contracts/local-api.md)、[手工验收流程](../specs/001-environment-lifecycle/quickstart.md)。
-- 插件事务与发现（002，S1 已实现）：[规格](../specs/002-plugin-transactions/spec.md)、[S1 实现计划](development/plugin-discovery-plan.md)；契约演进见 [ADR 0005](adr/0005-plugin-contract-evolution.md)。
+- 插件事务与发现（002，S1 已实现）：[规格](../specs/002-plugin-transactions/spec.md)、[S1 实现计划](development/plugin-discovery-plan.md)、[S2 home/事务设计](../specs/002-plugin-transactions/s2-home-and-transaction-design.md)；契约演进见 [ADR 0005](adr/0005-plugin-contract-evolution.md)、home 派生决策见 [ADR 0006](adr/0006-generation-home-derivation.md)。
 
 ## 上游研究与验证记录
 
@@ -33,5 +33,6 @@
 | renderer 界面交互 | [界面验证与重现](development/ui-design-a.md) |
 | 桌面主流程 | [桌面验证记录](development/desktop-validation.md)、[E2E 运行说明](../tests/e2e/README.md) |
 | 插件发现与详情（S1） | [验证记录](development/plugin-discovery-validation.md)（含 opt-in 真实 GitHub 只读探针） |
+| 插件代际 home 派生与回滚（#76 前置） | [实证记录](development/plugin-home-derivation-validation.md)（合成运行时 + 真实事务/恢复代码） |
 
 验证记录保留历史结果与未测项；其中的计数和 SHA 不是当前版本的自动更新状态。

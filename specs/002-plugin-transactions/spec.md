@@ -61,6 +61,6 @@
 
 ## 未决与依赖
 
-- S2 的 home 派生机制、含密文件处理与崩溃恢复是 [#76](https://github.com/YingkeSu/HDSL/issues/76) 的硬门禁（ADR 0005 D18/E10）。
-- `--dump-config` 静态性与运行期加载集合的等价性待实证（E9）。
+- S2 的 home 派生机制、含密文件处理与崩溃恢复是 [#76](https://github.com/YingkeSu/HDSL/issues/76) 的硬门禁（ADR 0005 D18/E10）：机制决策见 [ADR 0006](../../docs/adr/0006-generation-home-derivation.md)，实现与验证边界见 [S2 home/事务设计](s2-home-and-transaction-design.md)，可复现实证见 [记录](../../docs/development/plugin-home-derivation-validation.md)。**决策已给出，但生产实现未落地**：在实现与 `SIGKILL` 全相位对账完成前，不得宣称"旧代际可启动/数据保留"已实现。
+- `--dump-config` 静态性与运行期加载集合的等价性待实证（E9）；本阶段未证，生效判据仍只到"活动代际记录 + 离线解析组合树"。
 - 真实限流形态、闭包摘要推导与受管 pnpm 身份待实证（E1/E2/E6）。
