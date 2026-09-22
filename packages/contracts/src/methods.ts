@@ -44,6 +44,8 @@ export const CONTRACT_METHODS = [
   // 1.1 plugin transactions (ADR 0005 D4).
   'changes.preview',
   'changes.apply',
+  // 1.1 read-only installed-plugin list (ADR 0005 D4/D15, S3).
+  'plugins.installed',
   // 1.1 read-only generation read (ADR 0005 D4).
   'generations.list',
   'generations.restore',
@@ -118,6 +120,9 @@ export const methodInputSchemas = {
     planId: planIdSchema,
     buildAuthorization: sOptional(buildAuthorizationSchema),
   }),
+  'plugins.installed': sObject({
+    environmentId: environmentIdSchema,
+  }),
   'generations.list': sObject({
     environmentId: environmentIdSchema,
   }),
@@ -171,6 +176,7 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'plugins.inspect': define('plugins.inspect', { readOnly: false, idempotent: true }),
   'changes.preview': define('changes.preview', { readOnly: false, idempotent: true }),
   'changes.apply': define('changes.apply', { readOnly: false, idempotent: true }),
+  'plugins.installed': define('plugins.installed', { readOnly: true, idempotent: false }),
   'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
   'generations.restore': define('generations.restore', { readOnly: false, idempotent: true }),
 };

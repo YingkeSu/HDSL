@@ -16,6 +16,7 @@
     "catalog"
   ],
   "dependencies": {
-    "@hdsl/contracts": "workspace:*"
+    "@hdsl/contracts": "workspace:*",
+    "yaml": "2.9.1"
   }
 }

@@ -1,0 +1,48 @@
+# 服务核验记录：`hdsl-plugin-e2e-fixture` @ `e7825788`（known empty providers）
+
+状态：**confirmed（独立核验通过）**｜关联：ADR 0005 D21、`specs/002-plugin-transactions/spec.md`（S3）、#77。
+本文件是**可持久复核**的仓库内验证记录；catalog 证据（`packages/runtime/catalog/service-verifications/hdsl-plugin-e2e-fixture.json`）指向本文件。
+
+## 绑定（更换 commit/manifest 或任一文件即失效 → unknown）
+
+| 项 | 值 |
+| --- | --- |
+| repository | `YingkeSu/hdsl-plugin-e2e-fixture` |
+| commitSha（精确源码） | `e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838` |
+| manifest `package.json` SHA-256 | `ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c` |
+| tree SHA-256 | `a0336c83accebb1430d2f95f8bb12c8c7f5da808221765854547fc46296ebc2e` |
+| tree 摘要算法 | 对 `(relpath, fileSha256)` 排序后拼接再做 SHA-256（**仅此算法**；勿与其它 tree 算法混用） |
+| provides | `[]`（**known empty**） |
+| 适用 runtime 身份 | `@deepseek-ai/dsh` `0.1.5-rc.2`（sha256 `f4c54839d69e82bf1c3a5a41a910c3ce1405cd9e9d97d753c0c04f406c7d7480`）+ `@deepseek-ai/cordis` `4.0.2` + `@deepseek-ai/cordis-plugin-loader` `1.0.3` |
+
+逐文件 SHA-256（与该 commit 逐字节对应）：
+
+| path | SHA-256 |
+| --- | --- |
+| `README.md` | `9c59037693e2e7de28a102c5b32b073cf5a6b3f8635895f992df5bec3689c0c7` |
+| `cordis.patch.yml` | `6bb83e39e6fe843fc61dda6520d52262c453393856585e461b06eb7ada918211` |
+| `lib/index.mjs` | `a8cf6175a2ebcf9fc6538704c3b68de697012476c4b8f9446b49a902d8579263` |
+| `package.json` | `ee613a2eb425a24bc44e946d84e36b7ceb2f594f1214913ff34dd0d0e450ba5c` |
+| `pnpm-lock.yaml` | `17c814b167307942d3609c7b9d916ceddb85839573ab39baa114e30edb132a1a` |
+
+精确源码 permalink（复核入口）：
+
+- tree：<https://github.com/YingkeSu/hdsl-plugin-e2e-fixture/tree/e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838>
+- 关键文件：<https://github.com/YingkeSu/hdsl-plugin-e2e-fixture/blob/e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838/lib/index.mjs>、<https://github.com/YingkeSu/hdsl-plugin-e2e-fixture/blob/e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838/cordis.patch.yml>、<https://github.com/YingkeSu/hdsl-plugin-e2e-fixture/blob/e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838/package.json>
+
+## 审查范围与结论（独立核验，hdsl-33；确认时间 2026-09-22T14:09:27Z）
+
+- 方式：一次性有界获取该精确公开 commit 的归档（codeload tar.gz，HTTP200，1876B）到临时目录；**未执行 fixture**、无模型、无凭据、无仓库改动、无 claim/PR。与实现方独立取的 `/tmp/qa-service-verify` **5/5 文件逐字节 MATCH**（manifest 与 tree 摘要一致，见下表）。
+- **动态加载边界（对受管 `@deepseek-ai/cordis@4.0.2` 源码语义核验）**：`plugin()` 的 `callback = resolve(plugin)`（对象 → `plugin.apply`）；`name` 仅作 runtime 标签（`if (name === 'apply') name = undefined`），随后仅 `Inject.resolve(plugin.inject)`；服务注册的唯一内建路径是 Service 构造器的 `ctx.reflect.provide(name, self, …)` 或显式 `ctx.provide`。`@deepseek-ai/cordis-plugin-loader` 的 `_start` 为 `plugin = unwrapExports(await tree.import(options.name))` → `ctx.registry.plugin(plugin, config, …)`，即 `insert.name` 是**模块说明符**，按普通插件应用；**加载期不会从 `name`/默认导出推导服务**。本 fixture 无 `inject`、无 Service、`apply` 不接触 `ctx`。
+- 审查的**完整小源码**（5 个文件，无隐藏文件/符号链接）结论：
+  - `lib/index.mjs` 仅导出 `name` / `apply` / `default`；**无** Service 类、`provide`/`ctx`/`inject`/`.set(` 等注册或占用服务的构造；`apply()` 无参数（无 `ctx`），其函数体仅 `DSH_HOME` 守卫 + marker 写入；无动态 `import()`/`require`/`eval`/`new Function`；仅 `node:fs`/`node:path`，无网络/socket/`child_process`，除 `DSH_HOME` 外无 `process.env` 访问；零第三方依赖（无 `dependencies`、无 `scripts`，lock 为空闭包）。
+  - `cordis.patch.yml` 仅一条 insert（`id: hdsl-e2e-marker`，`name: hdsl-plugin-e2e-fixture`），无 `provide`/`service`/`inject` 声明。
+- 结论：**known empty providers** —— 该 commit 不注册/提供任何 Cordis 服务。
+- 审查报告：`/tmp/qa33/fixture-service-verify-e7825788.md`（QA 侧一次性产物，含 cordis 4.0.2 语义引用；本文件是其持久化、可复核的仓库内记录）。
+
+## 边界（不得外推）
+
+- **仅对该精确 commit + 表中所列受管 runtime/loader 身份有效**：换 commit、换任一文件或 manifest 摘要不匹配 ⇒ 记录失效；**受管 DSH/cordis/loader 身份（版本或摘要）变更亦使“动态加载边界”结论失效**（本期不做跨版本支持，需按新版本重新核验）。任何失效情形判定回落为 **unknown 阻塞**（ADR 0005 D21）。lookup 从当前受管代的 install manifest/catalog 建立 runtime 身份并与记录逐项比较。
+- **不是任意插件的安全保证**：“`apply()` 无参数”是本 fixture 的**完整小源码审查**结论，**不得**泛化为“任何 JS 都无法注册服务”。对其它插件，服务提供方仍须逐插件核验（显式声明 + 独立核验记录）。
+- 本记录**未**执行 fixture、**未**证明运行期加载/服务解析行为；运行期生效仍以「活动代际记录 + 受管 DSH 离线解析组合树」与真实重启验收为准。
+- 本记录**不**构成运行时沙箱/隔离承诺（ADR 0005 D21 语义：仅 HDSL 卸载分析的声明/核验范围）。

@@ -19,7 +19,7 @@ import {
   opaqueIdSchema,
   operationIdSchema,
   planIdSchema,
-  pluginIdSchema,
+  pluginPackageNameSchema,
   revisionSchema,
   sha256Schema,
   subscriptionIdSchema,
@@ -82,11 +82,34 @@ export const runtimeArtifactSchema = sObject({
 export type RuntimeArtifact = Infer<typeof runtimeArtifactSchema>;
 
 export const pluginLockSchema = sObject({
-  id: pluginIdSchema,
+  id: pluginPackageNameSchema,
   version: artifactVersionSchema,
   sha256: sha256Schema,
 });
 export type PluginLock = Infer<typeof pluginLockSchema>;
+
+/**
+ * `pluginSources` map schema (ADR 0005 D13). Declared before
+ * `compositionLockSchema` so the `sOptional(...)` argument is initialised; it
+ * resolves `pluginSourceLockSchema` lazily at validation time, so the DTO keeps
+ * its `PluginSourceLock` definition (and its executor/authorization
+ * dependencies) later in the file.
+ */
+const pluginSourcesSchema: Schema<Readonly<Record<string, PluginSourceLock>>> = (value, path, issues) => {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    issues.push({ path, message: 'must be a plain object' });
+    return undefined;
+  }
+  const output: Record<string, PluginSourceLock> = {};
+  for (const [key, entry] of Object.entries(value as Record<string, unknown>)) {
+    const parsed = pluginSourceLockSchema(entry, `${path}.${key}`, issues);
+    if (parsed === undefined) {
+      return undefined;
+    }
+    output[key] = parsed;
+  }
+  return output;
+};
 
 /**
  * CompositionLock: the immutable composition recorded for a generation.
@@ -105,6 +128,12 @@ export const compositionLockSchema = sObject({
     node: artifactSourceSchema,
     dsh: artifactSourceSchema,
   }),
+  /**
+   * Non-digest plugin SOURCE provenance (ADR 0005 D13), keyed by plugin id
+   * (= package name). Missing = no recorded plugin source; it never enters the
+   * composition digest.
+   */
+  pluginSources: sOptional(pluginSourcesSchema),
 });
 export type CompositionLock = Infer<typeof compositionLockSchema>;
 
@@ -461,7 +490,7 @@ export const changePlanActionSchema: Schema<ChangePlanAction> = (value, path, is
     return source === undefined ? undefined : { kind: 'install', source };
   }
   if (record['kind'] === 'remove') {
-    const pluginId = pluginIdSchema(record['pluginId'], `${path}.pluginId`, issues);
+    const pluginId = pluginPackageNameSchema(record['pluginId'], `${path}.pluginId`, issues);
     return pluginId === undefined ? undefined : { kind: 'remove', pluginId };
   }
   issues.push({ path: `${path}.kind`, message: 'must be "install" or "remove"' });
@@ -514,6 +543,45 @@ export const changeApplicationSchema = sObject({
 export type ChangeApplication = Infer<typeof changeApplicationSchema>;
 
 /** One generation summary for `generations.list` / `generations.restore`. */
+export const INSTALLED_PLUGINS_MAX = 128;
+
+/**
+ * One installed plugin of the ACTIVE generation's recorded composition
+ * (`plugins.installed`, ADR 0005 D4/D15). Minimal and bounded by design: no disk
+ * paths, no manifest text and no credentials — `isBuiltin` is resolved from the
+ * current managed DSH install, never from the client or a same-name profile
+ * dependency.
+ */
+export const installedPluginSchema = sObject({
+  id: pluginPackageNameSchema,
+  version: artifactVersionSchema,
+  sha256: sha256Schema,
+  isBuiltin: sBoolean,
+  enabledBundle: sBoolean,
+  /** Public source identity recorded in the composition lock; never a path. */
+  source: sNullable(
+    sObject({
+      owner: githubOwnerSchema,
+      name: githubRepoSchema,
+      commitSha: sNullable(sString({ minLength: 40, maxLength: 40 })),
+    }),
+  ),
+});
+export type InstalledPlugin = Infer<typeof installedPluginSchema>;
+
+/**
+ * Read-only view returned by `plugins.installed`. `revision` and `generationId`
+ * bind the list to the environment state the UI must re-verify before a remove
+ * preview/apply, so a stale list cannot target a superseded generation.
+ */
+export const installedPluginsViewSchema = sObject({
+  environmentId: environmentIdSchema,
+  revision: revisionSchema,
+  generationId: sNullable(generationIdSchema),
+  plugins: sArray(installedPluginSchema, { maxLength: INSTALLED_PLUGINS_MAX }),
+});
+export type InstalledPluginsView = Infer<typeof installedPluginsViewSchema>;
+
 export const generationSummarySchema = sObject({
   generationId: generationIdSchema,
   environmentId: environmentIdSchema,

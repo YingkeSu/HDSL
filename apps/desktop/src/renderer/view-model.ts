@@ -19,6 +19,7 @@ import {
   type ContractError,
   type EnvironmentSummary,
   type ExportResult,
+  type InstalledPluginsView,
   type OperationKind,
   type OperationStatus,
   type PluginInspection,
@@ -103,8 +104,14 @@ export interface RendererState {
   readonly changePlan: ChangePlan | null;
   /** Terminal `changes.apply` result, or null. */
   readonly changeApplication: ChangeApplication | null;
+  /** Action kind of the last committed apply, so each panel reports only its own flow. */
+  readonly lastChangeAction: 'install' | 'remove' | null;
   /** Read-only `generations.list` result for the selected environment. */
   readonly generations: readonly GenerationSummary[];
+  /** Read-only `plugins.installed` view of the selected environment's active generation. */
+  readonly installedPlugins: InstalledPluginsView | null;
+  /** Selected plugin id in the removal panel. */
+  readonly selectedInstalledPluginId: string | null;
 }
 
 /**
@@ -144,6 +151,12 @@ export interface RendererActions {
   loadGenerations(): void;
   /** Restores a previous generation as active (`generations.restore`). */
   restoreGeneration(generationId: string): void;
+  /** Loads the installed-plugin list of the selected environment (`plugins.installed`). */
+  loadInstalledPlugins(): void;
+  /** Selects one installed plugin for the remove flow. */
+  selectInstalledPlugin(pluginId: string | null): void;
+  /** Starts `changes.preview` for the selected installed plugin (remove). */
+  previewPluginRemoval(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -172,7 +185,10 @@ export const INITIAL_STATE: RendererState = {
   installSource: { owner: '', name: '', ref: '' },
   changePlan: null,
   changeApplication: null,
+  lastChangeAction: null,
   generations: [],
+  installedPlugins: null,
+  selectedInstalledPluginId: null,
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */
@@ -195,6 +211,10 @@ export const installSourceSelector = (state: RendererState): PluginSourceSelecto
 
 export const selectedEnvironment = (state: RendererState): EnvironmentSummary | null =>
   state.environments.find((environment) => environment.id === state.selectedEnvironmentId) ?? null;
+
+/** The installed plugin currently selected for removal, or null. */
+export const selectedInstalledPlugin = (state: RendererState) =>
+  state.installedPlugins?.plugins.find((plugin) => plugin.id === state.selectedInstalledPluginId) ?? null;
 
 export const isOperationTerminal = (status: OperationStatus): boolean =>
   status === 'succeeded' || status === 'failed' || status === 'cancelled';

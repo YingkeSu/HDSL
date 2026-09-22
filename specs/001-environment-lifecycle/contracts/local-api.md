@@ -48,6 +48,7 @@
 | operations.subscribe | requestId, operationId? | SubscriptionRef | 建立 `operation.updated` 推送；省略 operationId 表示订阅该窗口全部操作，事件按 operationId 分组 |
 | operations.unsubscribe | requestId, subscriptionId | `null` | 退订后不再推送；未知 subscriptionId → NOT_FOUND |
 | diagnostics.export | requestId, environmentId | ExportResult | 由 main 原生选择路径并脱敏；幂等，失败返回 EXPORT_FAILED |
+| plugins.installed | environmentId | InstalledPluginsView | 1.1 追加（ADR 0005 D4/D15，S3，1.0 标签不动）；只读即时、无 requestId、running 不返回 BUSY；结果为活动代持久组成 + 当前受管 DSH 安装解析，字段最小有界（无磁盘路径/manifest 文本/凭据），`plugins` 上界 128 且**不静默截断**（超出 → 受控 INTERNAL_ERROR，对齐 D20）；环境不存在 → NOT_FOUND，无活动代 → generationId=null 且空列表 |
 
 `OpenWebUIResult` 只返回 `{ loopbackOrigin }`；`loopbackOrigin` 为 `http(s)://127.0.0.1:<port>` 或 `[::1]` 形式，端口必须是 1–65535 的**规范十进制**（拒绝 `:0`、`:65536`、`:99999` 与前导零 `:00080`），**不含 token、cookie 或查询串**。成功即已原生打开，失败一律走错误码，不设 `opened: false` 这种第二套失败表示。main 必须在打开前核对 `LaunchRecord.endpoint` 属于该环境的当前受管进程，且地址为 loopback；否则返回 `WEBUI_UNAVAILABLE`。返回体在出站前按 `openWebUIResultSchema` 校验，额外字段（如 `tokenUrl`/`cookie`）会导致 `INTERNAL_ERROR`。
 
@@ -56,6 +57,8 @@
 ### 组成来源与摘要子集（issue #15 N3）
 
 `CompositionLock` 保留下载来源记录 `sources: { node, dsh }`（各含 `url` 与 `sha256`），用于复现时的来源追溯；但 `RuntimeArtifactRef` **不含** `url`，且 `compositionDigest` 只对子集 `schemaVersion`、`node`/`dsh` 的 `version/platform/arch/sha256`、排序后的 `plugins` 做规范化 JSON + SHA-256。`sources` 永不进入摘要：改动下载 URL（含镜像、签名查询串）不改变摘要。规范化 JSON 的函数在 `packages/contracts/src/digest.ts`，T004 负责对其字节做 SHA-256 与持久化。
+
+**1.1 追加（ADR 0005 D13/D21，S2/S3）**：`CompositionLock` 新增**可选、非摘要**字段 `pluginSources`（`Record<pluginId, PluginSourceLock>`，缺失=无插件来源记录）。它记录已安装插件的精确 `repository/commitSha/manifestSha256/closureLockSha256` 来源身份，供卸载时按精确身份重验（不从 live 文件自建信任）；与 `sources` 同理**不进入 `compositionDigest`**（摘要输入投影只选 `schemaVersion`/`node`/`dsh`/`plugins`）。`pluginSources` 的 map 键与 `PluginLock.id`、`InstalledPlugin.id`、remove 目标 `pluginId` 一致，均为 **npm 包名**（可带 scope，如 `@deepseek-ai/dsh-base`）——比不透明 id 规则宽（真实 in-box bundle 与已安装插件都是包名），上界 214 字符；负控见 `tests/contracts/plugins-installed.test.ts`。
 
 ## 事件
 

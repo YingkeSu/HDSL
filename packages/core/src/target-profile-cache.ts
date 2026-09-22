@@ -86,3 +86,27 @@ export const readTargetProfileCache = (
   }
   return portOk(record);
 };
+
+/**
+ * Removal cache read: the cache is bound to the plan by `planId` + internal
+ * integrity only. The plan's `planInputsDigest` is a composite that binds the
+ * cached declaration binding to the target's exact source/runtime identity; the
+ * apply transaction recomputes that composite from its own fresh derivation and
+ * refuses a mismatch (`PLAN_STALE`) before any effect.
+ */
+export const readTargetProfileCacheForRemoval = (
+  layout: AppDataLayout,
+  planId: string,
+): PortOutcome<TargetProfileCache> => {
+  const record = tryReadJsonFile<TargetProfileCache>(targetProfileCachePath(layout, planId));
+  if (record === undefined || record.planId !== planId) {
+    return portFail('PLAN_STALE', 'the plan target profile cache is missing');
+  }
+  if (sha256(record.lockText) !== record.lockSha256) {
+    return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the cached target lock does not match its recorded digest');
+  }
+  if (declarationBinding(record.declarationText, record.workspaceText) !== record.declarationSha256) {
+    return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the cached target declaration does not match its recorded digest');
+  }
+  return portOk(record);
+};

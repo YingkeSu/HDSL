@@ -18,6 +18,7 @@ import {
   type OpenWebUIResult,
   type OperationCommand,
   type OperationRef,
+  type InstalledPluginsView,
   type OperationSnapshot,
   type PreviewChangeCommand,
   type ApplyChangeCommand,
@@ -30,7 +31,7 @@ import type {
   PluginInspectCommand,
   PluginSearchCommand,
 } from '@hdsl/contracts';
-import type { DiagnosticsExporter } from './ports.js';
+import type { DiagnosticsExporter, InstalledPluginsPort } from './ports.js';
 import type { EnvironmentService } from './creation-service.js';
 import type { PluginDiscoveryService } from './plugin-discovery-service.js';
 import type { ChangePreviewService } from './plugin-preview.js';
@@ -50,6 +51,8 @@ export interface EnvironmentContractPortOptions {
   readonly changePreview?: ChangePreviewService;
   /** Environment-scoped plugin change apply (ADR 0005 D8). */
   readonly changeApply?: ChangeApplyService;
+  /** Read-only installed-plugin list of the active generation (`plugins.installed`). */
+  readonly installedPlugins?: InstalledPluginsPort;
 }
 
 const NOT_IMPLEMENTED = 'this capability is owned by the managed-process slice (T005/T006)';
@@ -76,6 +79,12 @@ export const createEnvironmentContractPort = (
 
     listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]> {
       return service.listGenerations(environmentId);
+    },
+
+    listInstalledPlugins(environmentId: string): PortOutcome<InstalledPluginsView> {
+      return options.installedPlugins === undefined
+        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
+        : options.installedPlugins.list(environmentId);
     },
 
     previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {

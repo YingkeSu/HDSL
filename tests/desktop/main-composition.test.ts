@@ -173,6 +173,45 @@ describe('createDesktopComposition', () => {
     await composition.close();
   });
 
+  it('wires the S3 removal preview and the installed-plugin view (no "not wired" placeholder)', async () => {
+    const dataRoot = freshRoot('hdsl-comp-');
+    const { composition } = await compose(dataRoot);
+    await createEnvironment(composition, 'S3 接线环境');
+    const listed = composition.port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environmentId = listed.value[0]?.id as string;
+    const environment = composition.port.findEnvironment(environmentId);
+    if (!environment.ok) {
+      throw new Error('environment missing');
+    }
+
+    // `plugins.installed` is wired to the real active-generation view; a synthetic
+    // install may fail the in-box identity closed, but it must never be the
+    // "owned by another slice"/"not wired" placeholder.
+    const installed = composition.port.listInstalledPlugins(environmentId);
+    if (!installed.ok) {
+      expect(installed.message).not.toContain('managed-process slice');
+      expect(installed.message).not.toContain('not wired');
+      expect(installed.code).toBe('INTERNAL_ERROR');
+    }
+
+    // The remove preview is dispatched to the S3 removal branch (the adapter IS
+    // wired here); the operation may fail controlled later because this synthetic
+    // environment records no plugin composition.
+    const preview = composition.port.previewChange({
+      requestId: 'req-s3-remove',
+      environmentId,
+      expectedRevision: environment.value.revision,
+      action: { kind: 'remove', pluginId: 'demo-plugin' },
+    });
+    expect(preview.ok).toBe(true);
+
+    await composition.close();
+  });
+
   it('passes the runtime main-only bootstrap into the opener and never returns the token URL', async () => {
     const dataRoot = freshRoot('hdsl-comp-');
     const openedUrls: string[] = [];

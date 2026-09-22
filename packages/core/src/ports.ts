@@ -10,6 +10,7 @@
  * without an import in either direction.
  */
 import type {
+  InstalledPluginsView,
   CompositionLock,
   ExportResult,
   OpenWebUIResult,
@@ -43,6 +44,11 @@ export interface InstalledRuntimeArtifacts {
   readonly nodeExecutable: string;
   readonly dshEntrypoint: string;
   readonly manifestPath: string;
+}
+
+/** Read-only installed-plugin listing of an environment's active generation. */
+export interface InstalledPluginsPort {
+  list(environmentId: string): PortOutcome<InstalledPluginsView>;
 }
 
 export interface ManagedRuntimePort {

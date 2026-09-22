@@ -7,3 +7,8 @@ export * from './runtime-verifier.js';
 export * from './runtime-repair.js';
 export * from './target-profile.js';
 export * from './resolving-preview.js';
+export * from './removal.js';
+export * from './patch-references.js';
+export * from './service-verifications.js';
+export * from './removal-port.js';
+export * from './lock-closure.js';

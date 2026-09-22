@@ -15,6 +15,7 @@ import type { ContractError, ErrorCode } from './errors.js';
 import type { ContractMethod } from './methods.js';
 import type { HostPlatform } from './platform.js';
 import type {
+  InstalledPluginsView,
   BuildAuthorization,
   ChangePlanAction,
   EnvironmentSummary,
@@ -201,6 +202,8 @@ export interface ContractPort {
    * live profile (ADR 0006).
    */
   listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]>;
+  /** Read-only installed-plugin list of the active generation (`plugins.installed`). */
+  listInstalledPlugins(environmentId: string): PortOutcome<InstalledPluginsView>;
 
   /**
    * Restores a previous generation as the active one (ADR 0005 D4/D10). This

@@ -45,6 +45,7 @@ import {
   changeApplicationSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
+  installedPluginsViewSchema,
   generationSummarySchema,
   exportResultSchema,
   openWebUIResultSchema,
@@ -335,6 +336,22 @@ const execute = (
       }
       publishIfKnown(runtime, outcome.value.operationId);
       return { response: contractOk(API_VERSION, outcome.value), executed: true };
+    }
+    case 'plugins.installed': {
+      // Read-only immediate query (ADR 0005 D4): no requestId, no in-progress
+      // ledger write, and never ENVIRONMENT_BUSY for a running environment.
+      const outcome = runtime.port.listInstalledPlugins(
+        (input as MethodInputs['plugins.installed']).environmentId,
+      );
+      return outcome.ok
+        ? {
+            response: contractOk(
+              API_VERSION,
+              validatePortValue(installedPluginsViewSchema, outcome.value, 'plugins.installed'),
+            ),
+            executed: true,
+          }
+        : executedFailure(outcome);
     }
     case 'generations.list': {
       const outcome = runtime.port.listGenerations(

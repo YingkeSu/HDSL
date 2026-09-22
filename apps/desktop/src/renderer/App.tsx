@@ -8,6 +8,7 @@ import { DemoBanner, Notices } from './components/Notices.js';
 import { OperationPanel } from './components/OperationPanel.js';
 import { PluginDiscovery } from './components/PluginDiscovery.js';
 import { PluginInstall } from './components/PluginInstall.js';
+import { PluginRemoval } from './components/PluginRemoval.js';
 import { LaunchBar } from './components/LaunchBar.js';
 import { Icon } from './components/Icon.js';
 import { ENVIRONMENT_STATE_LABELS } from './format.js';
@@ -249,6 +250,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
           <>
             <PluginDiscovery state={state} actions={actions} />
             <PluginInstall state={state} actions={actions} />
+            <PluginRemoval state={state} actions={actions} />
           </>
         )}
         {(page === 'home' || page === 'tasks') && (

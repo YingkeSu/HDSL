@@ -54,7 +54,7 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
   const tracked = state.trackedOperation;
   const previewRunning = tracked?.kind === 'preview' && tracked.status !== 'succeeded' && tracked.status !== 'failed' && tracked.status !== 'cancelled';
   const applyRunning = tracked?.kind === 'apply' && tracked.status !== 'succeeded' && tracked.status !== 'failed' && tracked.status !== 'cancelled';
-  const plan = state.changePlan;
+  const plan = state.changePlan !== null && state.changePlan.action.kind === 'install' ? state.changePlan : null;
   const blockedByBuild = plan !== null && plan.requiresBuildAuthorization;
 
   return (
@@ -165,7 +165,7 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
         </div>
       )}
 
-      {state.changeApplication !== null && (
+      {state.changeApplication !== null && state.lastChangeAction === 'install' && (
         <p role="status">
           安装已提交：新代际 {state.changeApplication.generationId}（组成摘要 {state.changeApplication.compositionDigest}）。
           重启环境后生效。

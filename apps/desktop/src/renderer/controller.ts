@@ -53,6 +53,7 @@ import {
   changeApplicationSchema,
   generationSummaryListSchema,
   generationSummarySchema,
+  installedPluginsViewSchema,
   pluginSearchResultSchema,
   REQUEST_ID_PATTERN,
   runtimeCombinationListSchema,
@@ -70,6 +71,7 @@ import {
   installSourceSelector,
   isOperationTerminal,
   selectedEnvironment,
+  selectedInstalledPlugin,
   selectedPluginHit,
   type RendererActions,
   type RendererState,
@@ -275,6 +277,8 @@ export class RendererController implements RendererActions {
       actionError: null,
       webUIOrigin: null,
       exportResult: null,
+      installedPlugins: null,
+      selectedInstalledPluginId: null,
     });
   }
 
@@ -536,6 +540,77 @@ export class RendererController implements RendererActions {
       }, operationRefSchema);
       if (this.#disposed) return;
       if (!result.ok) { this.#update({ actionError: result.error }); return; }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  selectInstalledPlugin(pluginId: string | null): void {
+    this.#update({ selectedInstalledPluginId: pluginId, changePlan: null, actionError: null });
+  }
+
+  loadInstalledPlugins(): void {
+    void this.#runCommand(async () => {
+      await this.#readInstalledPlugins();
+    });
+  }
+
+  /** Read-only `plugins.installed` read, shared by the button and post-apply refresh. */
+  async #readInstalledPlugins(epoch?: number): Promise<void> {
+    const environment = selectedEnvironment(this.#state);
+    if (environment === null) {
+      this.#update({ installedPlugins: null, selectedInstalledPluginId: null });
+      return;
+    }
+    const result = await this.#call(
+      'plugins.installed',
+      { environmentId: environment.id },
+      installedPluginsViewSchema,
+    );
+    if (this.#disposed) {
+      return;
+    }
+    if (epoch !== undefined && !this.#isCurrent(epoch)) {
+      return;
+    }
+    if (!result.ok) {
+      this.#update({ actionError: result.error });
+      return;
+    }
+    const keep = this.#state.selectedInstalledPluginId;
+    const stillPresent = keep !== null && result.value.plugins.some((plugin) => plugin.id === keep);
+    this.#update({
+      installedPlugins: result.value,
+      selectedInstalledPluginId: stillPresent ? keep : null,
+    });
+  }
+
+  /** Starts a remove preview for the SELECTED installed plugin (precise target). */
+  async previewPluginRemoval(): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      const plugin = selectedInstalledPlugin(this.#state);
+      if (environment === null || plugin === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, changePlan: null, changeApplication: null });
+      const result = await this.#call(
+        'changes.preview',
+        {
+          requestId: this.#newRequestId(),
+          environmentId: environment.id,
+          expectedRevision: environment.revision,
+          action: { kind: 'remove', pluginId: plugin.id },
+        },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
       await this.#trackOperation(result.value.operationId);
     });
   }
@@ -859,6 +934,14 @@ export class RendererController implements RendererActions {
     if (tracked.status === 'succeeded') {
       this.#applyPluginOutput(tracked);
       await this.#refreshEnvironments(epoch);
+      if (!this.#isCurrent(epoch)) {
+        return;
+      }
+      // A committed apply changed the active generation: the installed list must
+      // be re-read from the NEW composition, never left stale in the UI.
+      if (tracked.kind === 'apply') {
+        await this.#readInstalledPlugins(epoch);
+      }
       return;
     }
     // A terminal non-success MUST surface here. Previously only `succeeded` was
@@ -920,7 +1003,8 @@ export class RendererController implements RendererActions {
         this.#update({ actionError: contractErrorForCode('INTERNAL_ERROR') });
         return;
       }
-      this.#update({ changeApplication: parsed, changePlan: null });
+      const actionKind = this.#state.changePlan?.action.kind ?? null;
+      this.#update({ changeApplication: parsed, changePlan: null, lastChangeAction: actionKind });
       return;
     }
     if (tracked.kind === 'inspect') {

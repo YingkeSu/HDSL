@@ -75,6 +75,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | `changes.apply` | 长时操作（事务） | `requestId`, `environmentId`, `expectedRevision`, `planId`, `buildAuthorization?` | `OperationRef` | 单环境 |
 | `generations.restore` | 长时操作 | `requestId`, `environmentId`, `expectedRevision`, `targetGenerationId` | `OperationRef` | 单环境 |
 | `generations.list` | 只读即时查询（无 `requestId`） | `environmentId` | `GenerationSummary[]` | 单环境 |
+| `plugins.installed` | 只读即时查询（无 `requestId`） | `environmentId` | `InstalledPluginsView`（活动代的组成插件 + 内置/启用/来源摘要 + revision/generationId 绑定；`plugins` 上界 128，超出为受控失败而非静默截断，见 D20） | 单环境 |
 
 - **返回风格规则**（解释语义一致性）：长时/网络/事务类 → `OperationRef` + 终态 `output`（D5）；只读即时查询 → 直接返回值。据此 `generations.list` 直接返回，而 `plugins.search`（网络 + 可取消）返回 `OperationRef`。
 - 预留名字 `changes.preview` / `changes.apply` / `generations.restore` 从"仅文档预留"提升为白名单成员；`pack.inspect` / `pack.import` / `pack.export` **继续预留**，不暴露（003 定义）。
@@ -197,14 +198,31 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 
 - **同包保留（预期）**：共享/传递依赖按 lock 保留，预览在 `retention` 中说明，不判为残留失败。
 - **启用层/配置破坏（拦截）**：`REFERENCED_BY_OTHER`，预览列出 `blockingReferences`（含引用来源），apply 复核（漂移 → `PLAN_STALE`）。
-- **用户 patch 引用（默认拦截 + 建议）**：`REFERENCED_BY_OTHER`（kind `userPatch`）；不改用户 patch 文件，不静默移除。
+- **用户 patch 引用（默认拦截 + 建议）**：`REFERENCED_BY_OTHER`（kind `userPatch`）；不改用户 patch 文件，不静默移除（**用户 patch 字节在预览与 apply 全程不被写回**）。
+- **"会被破坏"的可判定性（S3 实现 + 一处待决）**：rc.2 `cordis.patch.yml` 的根是**序列**，条目为 `- insert: [ {id, name, …} ]`（`name` = 包引用，`id` = profile 内的行身份）与 `- id: X` 行覆盖；`inject` 是 **Cordis 服务名**，不是包引用。
+  - **可静态判定并拦截**（已实现）：(i) 其它源 insert 的行 `name` == 被移除包；(ii) 其它源以 `- id: X` 行覆盖命中被移除插件 insert 的 `rowIds`；(iii) 其它源 insert 了与之一致的行 `id`（`last-write-wins` 语义下会改变该层解析）。
+  - **服务级耦合计口径：已裁决为 D21（HDSL 命名空间受限声明 + HDSL 核验；实现随完整 PR 评审）**，本 ADR 不再按“仅风险声明”弱化 AC。（某插件在**代码**中提供的 Cordis 服务被保留层的 `inject` 消费）。**固定 rc.2 不存在声明性 service provider/consumer 映射**（见下方"事实基线"），patch 只有消费侧服务名；把 `inject` 当包引用会假阳性并阻塞一切常规 patch（六个 in-box bundle 全部 inject 服务），而把"未发现引用"当作安全又会漏掉真实破坏。因此：(1) 预览 `riskItems` **必须**保留该事实限制（"无静态引用 ≠ 无影响"），UI 不得把"未发现引用"呈现为"安全"；(2) 在判定口径裁决前，**不得**声称本 AC 已满足，也**不得**把服务耦合默认可卸载。候选可实现子集与最小反例见 §9.5a；**判定口径按 D21（受限声明 + HDSL 核验）落地**。
+- **卸载验收必含**（非可选）：同 fixture **安装 → 卸载 → 重启**，以「活动代际记录 + 受管 DSH 离线解析组合树」判定启用集合不再包含该包；若配置解析被破坏，必须表现为**可见的受控失败**，不得静默通过。该验收**不能**替代服务耦合的判定口径（待决）。
 - **内置保护**：`isBuiltin` 必须由**当前受管 DSH 安装解析出的 in-box bundle 集合**判定（F12a，verified），不由客户端提供；命中 → `BUILTIN_BUNDLE_PROTECTED`。负控必须使用**当前安装的真实 in-box 名**，禁止用同名 profile 替身造假绿。F12b（解析顺序 / fail-loud）无仓库出处，**不作为本机制的论据，也不写入 issue 文案**（§9.5）。
-- **精确目标**：不做通配清理；只移除本次事务的直接依赖条目与启用引用。
+- **精确目标**：不做通配清理；只移除本次事务的直接依赖条目与启用引用。remove 计划 `sourceLock: null`；其 `planInputsDigest` 为内部组合摘要，绑定 pruned declaration + 目标精确 recorded commit/manifest + 受管 runtime 身份（不新增公开字段），composition/pruned lock 由 apply 时重解析逐字比对；阻塞计划 apply 返回 `REFERENCED_BY_OTHER`（不由 cache 缺失降级为 `PLAN_STALE`）。
 - **运行时生效观测**（QA §14.7）：文件检查**不构成**生效证据。生效判据由三面组合：
   1. 契约只读面：`generations.list` 返回活动代际、组成摘要与来源锁（HDSL 的权威记录）；
   2. 独立运行时解析：用受管 DSH 的**离线配置转储**（`--dump-config`/`--dump-default-config`，F14）得到**离线解析出的组合树**；它与"运行期实际加载集合"的等价性**待实证（E9）**，在实证前不得写成唯一生效 AC 或产品承诺；
   3. 时序门禁：运行中 apply → `ENVIRONMENT_BUSY`；停止并重启后加载集合与新代际记录一致，卸载后不再包含该包。
   该观测是**验证 seam**，本 MVP 不因此新增 `--dump-config` 类 IPC 方法。
+
+### D21（S3 增量，待评审）：HDSL 命名空间服务声明与核验边界
+
+**背景（固定 rc.2 事实，见 §9.5a）**：`package.json` 无服务端 service provider/consumer 声明；patch 只有消费侧服务名（`inject`）；提供方在**代码**里，故 patch 无法把服务名映射到包名。为在**不执行插件代码、不扫描任意 JS** 的前提下让卸载可用，采用 **(a) 受限声明 + HDSL 核验** 边界。
+
+1. **元数据来源（HDSL 命名空间，非上游字段）**：插件可**可选**声明 `hdsl.services.provides`（HDSL 自有命名空间；**不得**表述为 DSH/上游官方字段，也不得复用 `dsh.*` 命名空间冒充官方）。该声明**语义仅是 HDSL 卸载分析的声明范围**，**不是**运行时沙箱/隔离/安全保证。
+2. **可信边界**：自报列表**不构成证明**。只有 HDSL 生成并保存的**核验记录**才使声明成为 known：记录绑定 `{repository, exact commitSha, 声明内容摘要, 源 manifest 摘要, 核验来源与 SHA, 独立 review 出处}`。三态而非两态：**(i) 显式 `provides: []` + 独立核验记录 ⇒ `known empty`**（**不是 unknown**，否则受控 fixture 不可卸载）；(ii) 缺失声明、空字符串、或声明存在但**未核验/摘要不匹配** ⇒ **unknown**；(iii) 显式非空 `provides` + 核验 + 与保留 consumers 相交 ⇒ 拦截。**不得**把“无声明”一律当成有证空。
+3. **核验来源（MVP）**：受控 fixture 的已确认记录（known empty）见 [plugin-remove-service-verification.md](../development/plugin-remove-service-verification.md)（含精确源码 permalink、逐文件/manifest/tree 摘要与审查边界；换 commit 即失效）。受控、经独立 review 的**精确源码**（当前 fixture **不提供服务**，即其 provides 记录为空/无）；HDSL 记录出处与 SHA。**任何源码升级（新 commit/新摘要）使既有记录失效**。不建立远程市场、不自动扫描任意 JS、不做 JS 模式猜测。
+4. **卸载判定（(i) 有限支持边界，不建覆盖图）**：`knownProviders(被移除插件) ∩ 保留 patch consumers` → `REFERENCED_BY_OTHER`（安全来源标识，无本地路径）；**unknown ⇒ 一律明确阻塞**（与是否存在保留 consumer 无关：扫描未发现消费者不等于不存在代码级依赖；不默认可卸载）；**不阻塞** 仅限“**target 为 known 且与保留 consumers 不相交**”——**绝不**从“存在其它 provider”或“扫描为空”推出未知 target 安全；`known empty` 与 `known 不相交` ⇒ 放行。受限码映射见 D21 变更说明（在冻结错误码集内用 `REFERENCED_BY_OTHER` + 可解释 detail，不新增公开错误码）。
+5. **未知 UX**：UI 必须呈现“**无法验证服务依赖，暂不能卸载**”，**不得**呈现为“插件安全/无影响/无引用”；也不得把 unknown 静默当通过。
+6. **安装保留与卸载重验**：核验记录在安装期建立并保留（内部记录，尽量不新增公开契约字段；确需公开时再同步契约与 fixtures）；卸载时**按精确 commit + 摘要重验**，漂移 → `PLAN_STALE`/unknown 阻塞。
+7. **既有代兼容策略**：本边界之前安装的代/插件**没有记录** ⇒ 其服务轴为 unknown；这些代仍可运行，但其卸载在服务轴按 unknown 阻塞，除非可完成核验；不做“默认无服务”的静默放行、不造假 trust 恒真。
+8. **范围与诚实声明**：这是**当前 MVP 的支持边界**；#77/#73 必须写明“受限子集 + 上游无声明性服务元数据”的剩余限制，**不声称任意第三方插件均可无损卸载**。若受限记录引入新的重大产品复杂性（例如为收敛过报需要对“保留 consumer 是否已被其它 known provider 覆盖”做闭包判定），须先具体报告再决定范围。
 
 ### D16 离线、限流与缓存语义
 
@@ -265,8 +283,8 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 
 | 类别 | 项目 |
 | --- | --- |
-| 方法 | `plugins.search`、`plugins.inspect`、`changes.preview`、`changes.apply`、`generations.restore`（预留名提升）、`generations.list`（只读即时） |
-| DTO | `PluginSearchResult`、`PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan`、`ChangePlanAction`、`ChangeBlockingReference`、`BuildScriptEntry`、`BuildAuthorization`、`ChangeApplication`、`GenerationSummary` |
+| 方法 | `plugins.search`、`plugins.inspect`、`changes.preview`、`changes.apply`、`generations.restore`（预留名提升）、`generations.list`（只读即时）、`plugins.installed`（只读即时，S3 追加；本节记于 1.1 尚未打标签的差异面，`contracts-v1.0.0` 标签不动） |
+| DTO | `PluginSearchResult`、`PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan`、`ChangePlanAction`、`ChangeBlockingReference`、`BuildScriptEntry`、`BuildAuthorization`、`ChangeApplication`、`GenerationSummary`、`InstalledPlugin`/`InstalledPluginsView`（S3） |
 | 既有 DTO 的加可选字段 | `OperationSnapshot.output?`（逐 kind/state 必填规则见 D5）；`ContractError.retryAfterSeconds?`；`CompositionLock.pluginSources?`（非摘要，摘要字节不变见 D13） |
 | 枚举 | `operationKind` 新增 `search` / `inspect` / `preview` / `apply` / `restore` |
 | 错误码 | D11 的 15 个新码；`retryable` 集新增 2 项；复用既有 `DOWNLOAD_FAILED` 承载传输失败 |
@@ -419,6 +437,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 2. **#76 AC**："预览输出完整 commit SHA"需补一句来源语义：`link:`/`file:`/本地路径不是合法源（`INVALID_INPUT`），本地可控 Git remote 仅用于测试 adapter，产品源只有 GitHub 公开仓库。
 3. **#73/#76 受管执行器**："受管 pnpm 版本与显式调用"需注明版本为**待实证候选**（候选 `11.7.0`），不得以宿主 pnpm 作为锁定证据（对齐 E1）。
 4. **#76/#77 "重启生效/卸载后不再启用"（已按评审必修 2 降级）**：生效判据为**活动代际 + 受管 DSH 离线解析出的组合树**；该组合树与"运行期实际加载集合"的等价性待实证（E9），**文件检查不构成生效证据**，且不得先于实证写成唯一生效 AC。
+5a. **#77 服务耦合事实基线（只读实测，未执行插件代码）**：固定 rc.2 的 `package.json` 只暴露 `dsh.bundle`（bundle patch）、`dsh.client`（**client 侧**按**包名** inject，platform web）、`dsh.configTrees`、`dsh.sessionFormatMigration`；**没有**服务端 service provider/consumer 声明。patch 行只有消费侧服务名（`inject: [webStartup]` 等）。最小真实反例：`dsh-web-app`/`dsh-headless` 的行 `inject: [webStartup]`，而 `webStartup` 由 `dsh-cmdline` 的**代码**提供（`provideCmdline`），manifest 无任何链接 → 由此类 patch 无法把服务名映射到包名。候选可实现子集：(a) 第三方插件声明 `dsh.services.provides`（安装期校验，preview 可可靠映射；未声明且保留层有 inject → 明确 unknown 阻塞）；(b) 对已安装条目做**有界、文档化**的声明性模式提取（非执行，需限定例外）；(c) 无法证明安全时走授权门（S4 类，当前关闭）；(d) 一律 unknown 阻塞（满足 AC 但阻塞常规 patch，不推荐）。待 owner 裁决。
 5. **#77 内置保护（已按评审非阻断发现降级）**：内置集合按**当前受管 DSH 安装解析**（F12a）；负控必须使用当前安装的真实 in-box 名，不得用同名 profile 替身。**不引用**"启用列表出现未声明条目 → 加载失败"或"解析顺序"（F12b 无仓库出处）。
 6. **（可选新增）** 把插件事务的**相位名与故障注入形状**（QA §14.2/§14.3，对齐既有 `CreationFaults.failBeforeCommit`/`pauseBeforeCommit`）显式挂到 #76，便于 QA 在每个提交边界做抛错与 `SIGKILL` 注入。
 7. **（承接登记 + #76 硬门禁）**：(a) 002 规格动工时的差异清单迁移（§6）登记为 002 任务的一部分；(b) **#76 硬门禁**：#76 开工前必须完成 home 派生机制、含密文件处理、可变运行数据归属与旧代恢复语义的决策与实证（owner = **#76 实现设计**，见 D18/E10）；在决策与实证完成前 **#76 视为门禁未满足**，且本 P0 不宣称该保证已实现。本片不建 issue，登记由需求 owner 路由。
@@ -443,4 +462,5 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
   - rev 3 同时修正 §4.4 的 `tests/**` 行：`tests/e2e/support/desktop-ui.ts` 改为引用共享 `API_VERSION`，`sender-frame-*.html` 改为版本占位符并在 E2E 宿主注入（本片承接，避免留已知损坏的 opt-in harness）。
   - 网络硬超时（D12）覆盖 body 读取：GitHub 适配器把 `response.json()` 纳入同一 deadline 与调用方 abort，已补「响应头已到、body 停住」的超时与取消测试。
   - 未受信外部字段按 DTO 上界防护：自由文本 `description` 带省略号裁剪；结构性标识/URL 不裁剪，超界/非法时只丢弃该条命中并以 `incompleteResults` 暴露，不静默丢失、不改义。
+- **实现进度（rev 4）**：S2 **安装闭环**（`changes.preview`/`changes.apply`、计划存储与消费、受管执行器默认拒执行、target-profile cache 绑定、代际复用/发布/指针切换/journal/幂等/recover）已合入 #87；S3 **卸载**（remove 三分支、内置保护、合法保留、服务核验三态、`plugins.installed` 只读面、UI 列表选择）在本片落地，真实受控 Node 链（安装→卸载→重启，活动代记录 + 离线组合树 + 分阶段 marker + 负控）17/17 见 [plugin-remove-validation.md](../development/plugin-remove-validation.md)。`contracts-v1.1.0` 标签仍待编排者按精确 merge SHA 打，本片**不**提前打标签、**不**声明 #9/#8/#15 完成。完整联网桌面链与 E9 等价性仍开放。
 - **本 P0 合入不宣称 D18 的运行数据/旧代可用保证已实现**：该保证为条件性承诺，#76 硬门禁与 E10 见 D18/§9.7。

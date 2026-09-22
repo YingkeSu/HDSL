@@ -142,7 +142,7 @@ describe('changes.preview (core)', () => {
     }
   });
 
-  it('rejects an unknown environment and the unimplemented remove action', () => {
+  it('rejects an unknown environment, and a remove preview without a removal adapter is a controlled wiring failure', () => {
     const { service } = build();
     const unknown = service.previewChange({
       requestId: 'req-unknown',
@@ -160,10 +160,12 @@ describe('changes.preview (core)', () => {
       expectedRevision: 3,
       action: { kind: 'remove', pluginId: 'dsh-plugin-demo' },
     });
+    // The removal BRANCH is implemented in S3; this wiring has no removal adapter,
+    // so it is a controlled internal failure (never a fake plan and never a
+    // silent fall-through to the install path).
     expect(remove.ok).toBe(false);
     if (!remove.ok) {
-      // Remove belongs to S3: a controlled rejection, not an internal-error fake.
-      expect(remove.code).toBe('UNSUPPORTED_COMBINATION');
+      expect(remove.code).toBe('INTERNAL_ERROR');
     }
   });
 
