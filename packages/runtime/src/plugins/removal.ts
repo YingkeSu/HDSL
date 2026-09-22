@@ -110,8 +110,10 @@ export interface PluginReferenceSource {
   readonly kind: 'bundle' | 'config' | 'userPatch';
   /** Bounded, non-absolute description shown to the operator. */
   readonly detail: string;
-  /** Plugin ids this source references at rc.2 reference positions. */
+  /** Plugin package names this source references (`insert[].name`, row `name`). */
   readonly references: readonly string[];
+  /** Row ids this source overrides (`- id: X`): config-level references. */
+  readonly rowTargets?: readonly string[];
   /** True when the scanner could not classify the source (must fail closed). */
   readonly unresolved: boolean;
 }
@@ -127,6 +129,8 @@ export interface PluginRemovalInput {
   readonly inBoxBundles: readonly InBoxBundle[];
   /** Other places that may reference the plugin (patches, configs). */
   readonly referenceSources: readonly PluginReferenceSource[];
+  /** Row ids introduced by the removed plugin's own patch rows. */
+  readonly removedRowIds?: readonly string[];
 }
 
 export interface PluginRemovalResolution {
@@ -191,6 +195,15 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
     const detail = isSafeDetail(source.detail) ? source.detail : `unresolvable ${source.kind} reference source`;
     if (source.references.includes(input.pluginId)) {
       blockingReferences.push({ pluginId: input.pluginId, kind: source.kind, detail });
+      continue;
+    }
+    const removedRowIds = input.removedRowIds ?? [];
+    if (removedRowIds.length > 0 && (source.rowTargets ?? []).some((id) => removedRowIds.includes(id))) {
+      blockingReferences.push({
+        pluginId: input.pluginId,
+        kind: source.kind,
+        detail: `${detail} overrides a row this plugin inserts`,
+      });
       continue;
     }
     if (source.unresolved) {
