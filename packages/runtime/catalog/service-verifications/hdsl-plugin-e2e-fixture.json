@@ -49,11 +49,17 @@
       "side effect limited to writing <DSH_HOME>/hdsl-e2e-marker/applied (no DSH_HOME => no file); errors swallowed",
       "independent codeload fetch cross-checked byte-for-byte against the implementation-side fetch (5/5 files, manifest + tree digests equal)"
     ],
-    "boundary": "valid only for this exact commit AND this generation-managed cordis/loader semantics (a loader version change invalidates the dynamic-load conclusion); not a general plugin safety guarantee; runtime load/service resolution success was not executed or proven",
+    "boundary": "valid only for this exact commit AND the recorded managed runtime/loader identity (dsh 0.1.5-rc.2 + cordis 4.0.2 + cordis-plugin-loader 1.0.3); any commit, manifest digest or runtime/loader identity change invalidates it => unknown (no cross-version support this cycle); not a general plugin safety guarantee; runtime load/service resolution success was not executed or proven",
     "report": "/tmp/qa33/fixture-service-verify-e7825788.md (QA one-off, includes cordis 4.0.2 source semantics; the durable record above is authoritative)",
     "durableRecord": "docs/development/plugin-remove-service-verification.md"
   },
   "treeSha256": "a0336c83accebb1430d2f95f8bb12c8c7f5da808221765854547fc46296ebc2e",
   "treeSha256Coverage": "sha256 over sorted (relpath, file sha256) pairs",
-  "treeSha256Algorithm": "sha256 over sorted (relpath, fileSha256) pairs — do not mix with other tree digest algorithms"
+  "treeSha256Algorithm": "sha256 over sorted (relpath, fileSha256) pairs — do not mix with other tree digest algorithms",
+  "runtime": {
+    "dshVersion": "0.1.5-rc.2",
+    "dshSha256": "f4c54839d69e82bf1c3a5a41a910c3ce1405cd9e9d97d753c0c04f406c7d7480",
+    "loaderVersion": "1.0.3",
+    "cordisVersion": "4.0.2"
+  }
 }
