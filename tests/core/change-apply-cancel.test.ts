@@ -24,12 +24,13 @@ import {
   ensureLayout,
   generationPaths,
   resolveLayout,
-  type ChangePlan,
+  type ChangeFaults,
   type PluginApplyPort,
   type EnvironmentRecord,
 } from '@hdsl/core';
 import { computeCompositionDigest, sha256TreeDigestSync } from '@hdsl/runtime';
-import type { CompositionLock } from '@hdsl/contracts';
+import type { ChangePlan, CompositionLock } from '@hdsl/contracts';
+
 
 const roots: string[] = [];
 afterEach(() => {
@@ -102,7 +103,7 @@ const stagedPort = (): PluginApplyPort => ({
   },
 });
 
-const build = (port: PluginApplyPort) => {
+const build = (port: PluginApplyPort, faults?: ChangeFaults) => {
   const dataRoot = mkdtempSync(join(tmpdir(), 'hdsl-apply-cancel-'));
   roots.push(dataRoot);
   const layout = resolveLayout(dataRoot);
@@ -168,6 +169,7 @@ const build = (port: PluginApplyPort) => {
     port,
     verifyGenerationRuntime: () => true,
     now: () => new Date('2026-09-22T00:05:00.000Z'),
+    ...(faults === undefined ? {} : { faults }),
   });
   return { environments, plans, operations, service };
 };
@@ -211,7 +213,7 @@ describe('changes.apply cancellation at the commit boundary (S5 #79)', () => {
     expect(f.plans.read(PLAN)?.consumedBy).toBeNull();
   });
 
-  it('post-commit cancel: CANNOT_CANCEL, committed operation stays succeeded, new generation stays active', async () => {
+  it('terminal operation cannot be cancelled (isTerminalStatus): CANNOT_CANCEL and no regression', async () => {
     const f = build(stagedPort());
     const started = f.service.applyChange(command);
     expect(started.ok).toBe(true);
@@ -229,4 +231,31 @@ describe('changes.apply cancellation at the commit boundary (S5 #79)', () => {
     expect(after?.status).toBe('succeeded');
     expect(f.environments.read(ENV)?.activeGenerationId).toBe(committedGen);
   });
+
+  /**
+   * D1 (open defect, tracked by a QA issue): cancel DURING the commit window —
+   * after the pointer switched but before the operation reaches a terminal state —
+   * must return `CANNOT_CANCEL` (D10). Today `cancelOperation` only checks
+   * `isTerminalStatus`, so it accepts the cancel and the operation diverges from
+   * the committed pointer. Marked `it.fails` so default CI stays green while the
+   * defect is open; it flips red when the product is fixed and this test must be
+   * converted back to a normal expectation.
+   */
+  it.fails('commit-window cancel (pointer switched, op still running) must be refused — D1', async () => {
+    const f = build(stagedPort(), { pauseAt: 'committed' });
+    const started = f.service.applyChange(command);
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      const env = f.environments.read(ENV);
+      if (env?.activeGenerationId !== OLD_GEN) break;
+      if (Date.now() > deadline) throw new Error('pointer did not switch');
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    const cancel = f.service.cancelOperation(started.value.operationId);
+    // Contract D10: after the commit point the cancel must be refused.
+    expect(cancel?.ok).toBe(false);
+  });
+
 });
