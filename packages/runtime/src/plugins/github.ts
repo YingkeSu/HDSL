@@ -19,7 +19,6 @@
  * (DNS/offline/TLS/timeout) → `NETWORK_UNAVAILABLE`, any other established
  * HTTP/parse failure → `DOWNLOAD_FAILED`.
  */
-import { createHash } from 'node:crypto';
 import {
   buildPreviewResolution,
   type GitProvider,
@@ -41,18 +40,11 @@ import {
   type PluginSourceSelector,
   type PortOutcome,
   type Schema,
-  type BuildScriptEntry,
   type ExecutorIdentity,
-  type PluginSourceLock,
-  type ScriptAssessment,
 } from '@hdsl/contracts';
 
 
 
-const INSTALL_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
-const NO_SCRIPTS_RISK = 'no install-time scripts detected in the parsed manifest (dependency closure not enumerated)';
-const UNKNOWN_RISK = 'the dependency closure was not fully enumerated; install-time scripts may exist';
-const SCRIPT_RISK = 'the package declares install-time scripts; HDSL rejects them by default at apply';
 
 /** Narrow fetch seam; the global `fetch` is structurally compatible. */
 export type PluginFetchLike = (
@@ -455,84 +447,18 @@ export const createGitHubPluginSource = (
       if (manifestFile.kind === 'missing') {
         return portFail('SOURCE_MANIFEST_INVALID', 'the repository has no package.json at the resolved commit');
       }
-      let manifest: Record<string, unknown>;
-      try {
-        const parsed = JSON.parse(manifestFile.text);
-        manifest = asRecord(parsed) ?? {};
-      } catch {
-        return portFail('SOURCE_MANIFEST_INVALID', 'the repository package.json is not valid JSON');
-      }
-
-      const dsh = asRecord(manifest['dsh']);
-      const bundle = dsh === undefined ? undefined : asRecord(dsh['bundle']);
-      const declaresPatch = bundle !== undefined && bundle['patch'] !== undefined;
-      if (!declaresPatch) {
-        return portFail('NOT_A_PLUGIN', 'the repository does not declare dsh.bundle.patch');
-      }
-
       const lockFile = await readFile('pnpm-lock.yaml');
       if (lockFile.kind === 'failure') {
         return lockFile.outcome;
       }
-      const lockText = lockFile.kind === 'text' ? lockFile.text : null;
-
-      const scripts: BuildScriptEntry[] = [];
-      const manifestScripts = asRecord(manifest['scripts']) ?? {};
-      for (const name of INSTALL_SCRIPTS) {
-        if (typeof manifestScripts[name] === 'string') {
-          scripts.push({ packageName: asString(manifest['name']) ?? source.name, packageVersion: asString(manifest['version']) ?? '0.0.0', script: name, source: 'root' });
-        }
-      }
-      const dependencies = asRecord(manifest['dependencies']) ?? {};
-      const hasDependencies = Object.keys(dependencies).length > 0;
-
-      const scriptAssessment: ScriptAssessment =
-        scripts.length > 0 ? 'detected' : hasDependencies ? 'unknown' : 'none-detected';
-      const riskItems =
-        scripts.length > 0
-          ? [SCRIPT_RISK]
-          : scriptAssessment === 'unknown'
-            ? [UNKNOWN_RISK]
-            : [NO_SCRIPTS_RISK];
-
-      const manifestSha256 = createHash('sha256').update(manifestFile.text, 'utf8').digest('hex');
-      const closureLockSha256 = lockText === null ? null : createHash('sha256').update(lockText, 'utf8').digest('hex');
-      const executor = options.executor ?? null;
-
-      const sourceLock: PluginSourceLock = {
-        sourceKind: 'github',
-        repository: { owner: source.owner, name: source.name },
-        commitSha,
-        ref: source.ref ?? null,
-        packageName: asString(manifest['name']) ?? source.name,
-        packageVersion: asString(manifest['version']) ?? '0.0.0',
-        manifestSha256,
-        closureLockSha256,
-        isBuiltin: false,
-        buildAuthorization: null,
-        executor,
-      };
-      const planInputsDigest = createHash('sha256')
-        .update(
-          JSON.stringify({
-            commitSha,
-            manifestSha256,
-            closureLockSha256,
-            scripts,
-            executor,
-          }),
-          'utf8',
-        )
-        .digest('hex');
-
-      return portOk({
-        sourceLock,
-        scripts,
-        scriptAssessment,
-        requiresBuildAuthorization: scriptAssessment !== 'none-detected',
-        riskItems,
-        executor,
-        planInputsDigest,
+      return buildPreviewResolution({
+        source,
+        resolved: {
+          commitSha,
+          manifestText: manifestFile.text,
+          lockText: lockFile.kind === 'text' ? lockFile.text : null,
+        },
+        executor: options.executor ?? null,
       });
     },
 
