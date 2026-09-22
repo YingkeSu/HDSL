@@ -146,6 +146,32 @@ const LEADING_ZERO_PORT_SEED: ReferenceSeed = {
   ...FIXTURE_SEED,
   webUIOriginOverride: 'http://127.0.0.1:00080',
 };
+const PLUGIN_TRUNCATED_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  pluginSearch: {
+    result: {
+      query: 'topic:dsh-plugin',
+      hits: [],
+      totalCount: 4321,
+      incompleteResults: true,
+      hasMore: true,
+      fetchedAt: '2026-01-02T03:04:05Z',
+      fromCache: false,
+    },
+  },
+};
+const PLUGIN_RATE_LIMIT_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  pluginSearch: { failure: 'RATE_LIMITED', retryAfterSeconds: 60 },
+};
+const PLUGIN_NETWORK_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  pluginSearch: { failure: 'NETWORK_UNAVAILABLE' },
+};
+const PLUGIN_NOT_FOUND_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  pluginInspection: { failure: 'SOURCE_NOT_FOUND' },
+};
 
 export interface FixtureRuntime {
   readonly port: ReferenceContractPort;
@@ -203,7 +229,9 @@ export const ENVELOPE_FIXTURES: readonly ContractFixture[] = [
     method: null,
     kind: 'illegal',
     description: 'minor version mismatch is rejected (exact match only)',
-    request: { apiVersion: '1.1', method: 'catalog.list', input: {} },
+    // ADR 0005 §5.4: after the 1.0 -> 1.1 migration only this minor row moves;
+    // the major row stays 2.0 and the machine table keeps both red.
+    request: { apiVersion: '1.2', method: 'catalog.list', input: {} },
     expected: 'CONTRACT_VERSION_MISMATCH',
   },
   {
@@ -928,6 +956,122 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
         operationId: 'op-missing',
       }),
     ],
+  },
+
+  // plugins.search (global, GitHub read-only)
+  {
+    id: 'plugins-search-legal',
+    method: 'plugins.search',
+    kind: 'legal',
+    description: 'starts a global search and returns an operation reference',
+    request: request('plugins.search', {
+      requestId: 'req-plugin-search',
+      query: 'topic:dsh-plugin fork:false archived:false',
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'plugins-search-empty-query',
+    method: 'plugins.search',
+    kind: 'illegal',
+    description: 'an empty query is invalid',
+    request: request('plugins.search', { requestId: 'req-plugin-empty', query: '' }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'plugins-search-unknown-field',
+    method: 'plugins.search',
+    kind: 'illegal',
+    description: 'no credential or token field may be smuggled into the search input',
+    request: request('plugins.search', {
+      requestId: 'req-plugin-token',
+      query: 'topic:dsh-plugin',
+      token: 'canary-token',
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'plugins-search-truncated',
+    method: 'plugins.search',
+    kind: 'legal',
+    description: 'a totalCount above the 1000-result ceiling is reported, not silently cut',
+    request: request('plugins.search', {
+      requestId: 'req-plugin-truncated',
+      query: 'topic:dsh-plugin',
+    }),
+    expected: 'ok',
+    seed: PLUGIN_TRUNCATED_SEED,
+  },
+  {
+    id: 'plugins-search-rate-limited',
+    method: 'plugins.search',
+    kind: 'legal',
+    description: 'a rate-limited search still returns an operation reference for the terminal error',
+    request: request('plugins.search', {
+      requestId: 'req-plugin-rate',
+      query: 'topic:dsh-plugin',
+    }),
+    expected: 'ok',
+    seed: PLUGIN_RATE_LIMIT_SEED,
+  },
+  {
+    id: 'plugins-search-network-failure',
+    method: 'plugins.search',
+    kind: 'legal',
+    description: 'a network failure still returns an operation reference for the terminal error',
+    request: request('plugins.search', {
+      requestId: 'req-plugin-network',
+      query: 'topic:dsh-plugin',
+    }),
+    expected: 'ok',
+    seed: PLUGIN_NETWORK_SEED,
+  },
+
+  // plugins.inspect (global, GitHub read-only)
+  {
+    id: 'plugins-inspect-legal',
+    method: 'plugins.inspect',
+    kind: 'legal',
+    description: 'inspects a public GitHub owner/name source with an optional ref',
+    request: request('plugins.inspect', {
+      requestId: 'req-plugin-inspect',
+      source: { owner: 'octo', name: 'dsh-plugin-demo', ref: 'main' },
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'plugins-inspect-local-path',
+    method: 'plugins.inspect',
+    kind: 'illegal',
+    description: 'link:/file:/local paths are not valid sources',
+    request: request('plugins.inspect', {
+      requestId: 'req-plugin-local',
+      source: { owner: 'link:', name: 'plugin' },
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'plugins-inspect-unknown-field',
+    method: 'plugins.inspect',
+    kind: 'illegal',
+    description: 'an arbitrary URL/path field is rejected',
+    request: request('plugins.inspect', {
+      requestId: 'req-plugin-url',
+      source: { url: 'https://example.invalid/repo' },
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'plugins-inspect-not-found',
+    method: 'plugins.inspect',
+    kind: 'legal',
+    description: 'an unknown repository is a terminal SOURCE_NOT_FOUND on the operation',
+    request: request('plugins.inspect', {
+      requestId: 'req-plugin-missing',
+      source: { owner: 'octo', name: 'missing-repo' },
+    }),
+    expected: 'ok',
+    seed: PLUGIN_NOT_FOUND_SEED,
   },
 ];
 

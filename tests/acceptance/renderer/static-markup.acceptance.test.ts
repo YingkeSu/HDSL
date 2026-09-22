@@ -24,6 +24,12 @@ const actions: RendererActions = {
   openWebUI: () => undefined,
   exportDiagnostics: () => undefined,
   cancelTrackedOperation: () => undefined,
+  setPluginQuery: () => undefined,
+  resetPluginQuery: () => undefined,
+  runPluginSearch: () => undefined,
+  inspectSelectedPlugin: () => undefined,
+  selectPlugin: () => undefined,
+  cancelPluginSearch: () => undefined,
 };
 
 const state = (patch: Partial<RendererState>): RendererState => ({ ...INITIAL_STATE, ...patch });
@@ -63,6 +69,7 @@ describe('renderer static markup acceptance (DOM-free real React)', () => {
           sequence: 2,
           progress: 55,
           environmentId: FIXTURE_SEED.environments[1]?.id ?? null,
+          output: null,
           error: null,
         },
       }),
@@ -89,6 +96,7 @@ describe('renderer static markup acceptance (DOM-free real React)', () => {
           sequence: 1,
           progress: null,
           environmentId: null,
+          output: null,
           error: null,
         },
       }),

@@ -15,6 +15,8 @@ import type {
   EnvironmentCommand,
   IdempotencyRecord,
   OperationCommand,
+  PluginInspectCommand,
+  PluginSearchCommand,
   PortOutcome,
   RevisionCommand,
 } from '../context.js';
@@ -26,8 +28,11 @@ import type {
   OperationKind,
   OperationRef,
   OperationSnapshot,
+  PluginInspection,
+  PluginSearchResult,
   RuntimeCombination,
 } from '../dto.js';
+import { isRetryable, type ErrorCode } from '../errors.js';
 import type { HostPlatform } from '../platform.js';
 
 export interface ReferenceSeed {
@@ -41,6 +46,17 @@ export interface ReferenceSeed {
   readonly failExport?: boolean;
   /** Forces `openWebUI` to return a token-bearing URL, to prove main rejects it. */
   readonly webUIOriginOverride?: string;
+  /** Terminal payload (or controlled failure) for `plugins.search`. */
+  readonly pluginSearch?: {
+    readonly result?: PluginSearchResult;
+    readonly failure?: ErrorCode;
+    readonly retryAfterSeconds?: number;
+  };
+  /** Terminal payload (or controlled failure) for `plugins.inspect`. */
+  readonly pluginInspection?: {
+    readonly result?: PluginInspection;
+    readonly failure?: ErrorCode;
+  };
 }
 
 const DEFAULT_ENDPOINT = 'http://127.0.0.1:53123';
@@ -61,6 +77,8 @@ export class ReferenceContractPort implements ContractPort {
   readonly #endpoints = new Map<string, string>();
   readonly #failExport: boolean;
   readonly #webUIOriginOverride: string | undefined;
+  readonly #pluginSearch: ReferenceSeed['pluginSearch'];
+  readonly #pluginInspection: ReferenceSeed['pluginInspection'];
   #environmentCounter = 0;
   #operationCounter = 0;
   #exportCounter = 0;
@@ -81,6 +99,8 @@ export class ReferenceContractPort implements ContractPort {
     }
     this.#failExport = seed.failExport ?? false;
     this.#webUIOriginOverride = seed.webUIOriginOverride;
+    this.#pluginSearch = seed.pluginSearch;
+    this.#pluginInspection = seed.pluginInspection;
   }
 
   listCatalog(): PortOutcome<readonly RuntimeCombination[]> {
@@ -217,6 +237,43 @@ export class ReferenceContractPort implements ContractPort {
     });
   }
 
+  searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef> {
+    const config = this.#pluginSearch;
+    if (config?.failure !== undefined) {
+      const failed = this.#recordPluginOperation('search', {
+        status: 'failed',
+        error: config.failure,
+        ...(config.retryAfterSeconds === undefined
+          ? {}
+          : { retryAfterSeconds: config.retryAfterSeconds }),
+      });
+      this.effects.push(`searchPlugins:${failed.id}`);
+      return portOk({ operationId: failed.id });
+    }
+    const result = config?.result ?? defaultPluginSearchResult(command.query);
+    const operation = this.#recordPluginOperation('search', { status: 'succeeded', output: result });
+    this.effects.push(`searchPlugins:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
+  inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef> {
+    const config = this.#pluginInspection;
+    if (config?.failure !== undefined) {
+      const failed = this.#recordPluginOperation('inspect', {
+        status: 'failed',
+        error: config.failure,
+      });
+      this.effects.push(`inspectPluginSource:${failed.id}`);
+      return portOk({ operationId: failed.id });
+    }
+    const result =
+      config?.result ??
+      defaultPluginInspection(command.source.owner, command.source.name, command.source.ref);
+    const operation = this.#recordPluginOperation('inspect', { status: 'succeeded', output: result });
+    this.effects.push(`inspectPluginSource:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   readIdempotency(requestId: string): IdempotencyRecord | undefined {
     return this.#idempotency.get(requestId);
   }
@@ -241,4 +298,87 @@ export class ReferenceContractPort implements ContractPort {
     this.#operations.set(operation.id, operation);
     return operation;
   }
+
+  #recordPluginOperation(
+    kind: 'search' | 'inspect',
+    terminal: {
+      readonly status: 'succeeded' | 'failed';
+      readonly output?: unknown;
+      readonly error?: ErrorCode;
+      readonly retryAfterSeconds?: number;
+    },
+  ): OperationSnapshot {
+    const operation: OperationSnapshot = {
+      id: `op-${String((this.#operationCounter += 1))}`,
+      environmentId: null,
+      kind,
+      phase: terminal.status === 'succeeded' ? 'finished' : 'failed',
+      status: terminal.status,
+      sequence: 1,
+      ...(terminal.output === undefined ? {} : { output: terminal.output }),
+      ...(terminal.error === undefined
+        ? {}
+        : {
+            error: {
+              code: terminal.error,
+              message: `plugin fixture failure (${terminal.error})`,
+              retryable: isRetryable(terminal.error),
+              ...(terminal.retryAfterSeconds === undefined
+                ? {}
+                : { retryAfterSeconds: terminal.retryAfterSeconds }),
+            },
+          }),
+    };
+    this.#operations.set(operation.id, operation);
+    return operation;
+  }
 }
+
+/** Deterministic fixture payload used when a seed does not supply one. */
+export const defaultPluginSearchResult = (query: string): PluginSearchResult => ({
+  query,
+  hits: [
+    {
+      fullName: 'octo/dsh-plugin-demo',
+      owner: 'octo',
+      name: 'dsh-plugin-demo',
+      description: 'fixture repository',
+      htmlUrl: 'https://github.com/octo/dsh-plugin-demo',
+      stars: 12,
+      topics: ['dsh-plugin'],
+      defaultBranch: 'main',
+      updatedAt: '2026-01-02T03:04:05Z',
+      archived: false,
+      fork: false,
+      license: 'MIT',
+    },
+  ],
+  totalCount: 1,
+  incompleteResults: false,
+  hasMore: false,
+  fetchedAt: '2026-01-02T03:04:05Z',
+  fromCache: false,
+});
+
+export const defaultPluginInspection = (
+  owner: string,
+  name: string,
+  ref?: string,
+): PluginInspection => ({
+  source: { owner, name, ...(ref === undefined ? {} : { ref }) },
+  repository: {
+    fullName: `${owner}/${name}`,
+    description: 'fixture repository',
+    htmlUrl: `https://github.com/${owner}/${name}`,
+    stars: 12,
+    topics: ['dsh-plugin'],
+    defaultBranch: 'main',
+    updatedAt: '2026-01-02T03:04:05Z',
+    archived: false,
+    fork: false,
+    license: 'MIT',
+    homepage: null,
+  },
+  fetchedAt: '2026-01-02T03:04:05Z',
+  fromCache: false,
+});

@@ -28,6 +28,12 @@ export interface OperationRecord {
   readonly updatedAt: string;
   readonly progress?: number;
   readonly error?: ContractError;
+  /**
+   * Terminal result payload (ADR 0005 D5). It is only ever set on a
+   * `succeeded` plugin `search`/`inspect` operation; the contract dispatcher
+   * enforces the per-kind presence rule on the way out.
+   */
+  readonly output?: unknown;
 }
 
 const TERMINAL_STATUSES: ReadonlySet<OperationStatus> = new Set<OperationStatus>([
@@ -48,6 +54,7 @@ export const toOperationSnapshot = (record: OperationRecord): OperationSnapshot 
   sequence: record.sequence,
   ...(record.progress === undefined ? {} : { progress: record.progress }),
   ...(record.error === undefined ? {} : { error: record.error }),
+  ...(record.output === undefined ? {} : { output: record.output }),
 });
 
 export interface OperationUpdate {
@@ -55,6 +62,7 @@ export interface OperationUpdate {
   readonly status?: OperationStatus;
   readonly progress?: number;
   readonly error?: ContractError;
+  readonly output?: unknown;
 }
 
 export interface OperationCreate {
@@ -126,6 +134,7 @@ export class OperationStore {
     }
     const progress = update.progress ?? record.progress;
     const error = update.error ?? record.error;
+    const output = update.output ?? record.output;
     const next: OperationRecord = {
       schemaVersion: '1',
       id: record.id,
@@ -138,6 +147,7 @@ export class OperationStore {
       updatedAt: now,
       ...(progress === undefined ? {} : { progress }),
       ...(error === undefined ? {} : { error }),
+      ...(output === undefined ? {} : { output }),
     };
     this.write(next);
     return next;

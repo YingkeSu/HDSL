@@ -74,6 +74,22 @@ describe('fixture table coverage', () => {
       'CANNOT_CANCEL',
       'EXPORT_FAILED',
       'INTERNAL_ERROR',
+      // 1.1 plugin surface (ADR 0005 D11).
+      'RATE_LIMITED',
+      'NETWORK_UNAVAILABLE',
+      'SOURCE_NOT_FOUND',
+      'SOURCE_MANIFEST_INVALID',
+      'NOT_A_PLUGIN',
+      'PLAN_EXPIRED',
+      'PLAN_STALE',
+      'PLAN_CONSUMED',
+      'EXECUTOR_UNAVAILABLE',
+      'BUILD_NOT_AUTHORIZED',
+      'AUTHORIZATION_MISMATCH',
+      'UNAUTHORIZED_SCRIPT_EXECUTION',
+      'BUILTIN_BUNDLE_PROTECTED',
+      'REFERENCED_BY_OTHER',
+      'PLUGIN_INTEGRITY_MISMATCH',
     ];
     expect([...ERROR_CODES].sort()).toEqual([...documented].sort());
   });

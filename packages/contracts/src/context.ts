@@ -20,6 +20,8 @@ import type {
   OpenWebUIResult,
   OperationRef,
   OperationSnapshot,
+  PluginSearchResult,
+  PluginSourceSelector,
   RuntimeCombination,
 } from './dto.js';
 
@@ -33,14 +35,27 @@ import type {
  */
 export type PortOutcome<T> =
   | { readonly ok: true; readonly value: T }
-  | { readonly ok: false; readonly code: ErrorCode; readonly message: string };
+  | {
+      readonly ok: false;
+      readonly code: ErrorCode;
+      readonly message: string;
+      /** Machine-readable retry delay for `RATE_LIMITED` (ADR 0005 D11). */
+      readonly retryAfterSeconds?: number;
+    };
 
 export const portOk = <T>(value: T): PortOutcome<T> => ({ ok: true, value });
 
-export const portFail = (code: ErrorCode, message: string): PortOutcome<never> => ({
+export const portFail = (
+  code: ErrorCode,
+  message: string,
+  options: { readonly retryAfterSeconds?: number } = {},
+): PortOutcome<never> => ({
   ok: false,
   code,
   message,
+  ...(options.retryAfterSeconds === undefined
+    ? {}
+    : { retryAfterSeconds: options.retryAfterSeconds }),
 });
 
 export interface CreateEnvironmentCommand {
@@ -64,6 +79,24 @@ export interface OperationCommand {
   readonly requestId: string;
   readonly operationId: string;
 }
+
+export interface PluginSearchCommand {
+  readonly requestId: string;
+  /** The exact discovery query; the port must send it character for character. */
+  readonly query: string;
+}
+
+export interface PluginInspectCommand {
+  readonly requestId: string;
+  readonly source: PluginSourceSelector;
+}
+
+/**
+ * Terminal payload a plugin-source adapter returns for `plugins.search`.
+ * `PluginSearchResult` is the wire DTO; re-exported name keeps the port seam
+ * explicit without a second type.
+ */
+export type PluginSearchPayload = PluginSearchResult;
 
 /** Stored outcome of an executed idempotent call, replayed verbatim. */
 export type StoredOutcome =
@@ -113,6 +146,16 @@ export interface ContractPort {
   openWebUI(command: EnvironmentCommand): PortOutcome<OpenWebUIResult>;
   cancelOperation(command: OperationCommand): PortOutcome<OperationSnapshot>;
   exportDiagnostics(command: EnvironmentCommand): PortOutcome<ExportResult>;
+
+  /**
+   * Starts a cancellable, global (`environmentId = null`) GitHub read-only
+   * search. It is never blocked by an environment `ENVIRONMENT_BUSY`, needs no
+   * GitHub credential and must not change any environment composition
+   * (ADR 0005 D5/D16).
+   */
+  searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef>;
+  /** Starts a cancellable, global GitHub read-only repository inspection. */
+  inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef>;
 
   /** Subscription bookkeeping the contract delegates to the session registry. */
   readIdempotency(requestId: string): IdempotencyRecord | undefined;

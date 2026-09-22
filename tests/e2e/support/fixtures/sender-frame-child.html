@@ -14,7 +14,7 @@
         };
         const call = async (method, input) => {
           try {
-            return await window.hdsl.call({ apiVersion: '1.0', method, input });
+            return await window.hdsl.call({ apiVersion: '__HDSL_API_VERSION__', method, input });
           } catch (error) {
             return { thrown: String(error) };
           }

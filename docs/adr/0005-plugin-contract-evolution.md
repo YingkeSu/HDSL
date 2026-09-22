@@ -1,8 +1,8 @@
 # 0005：插件 MVP 的共享契约演进与兼容方案
 
-- 状态：**proposed**（独立复审中。本 ADR 只落设计：不改代码、不改 `version.ts`、不改冻结契约文件、不移动或新增契约标签）
-- 修订：rev 2（纳入独立审核 `202bd7b` 的 3 项必修、决策点 1–9 结论与非阻断发现；决策与未决清单见 §5.3、§8）
-- 日期：2026-09-21（rev 2：2026-09-22）
+- 状态：**accepted**（独立复审 `5770298091` 与编排确认，2026-09-22；rev 3 起实现切片按 §5.4 阶段 2 在未打标签的 `1.1` 内落地）
+- 修订：rev 3（状态转 `accepted`；修正 §3 D5 的字段白名单交叉引用 D19→D20；说明 #75 S1 子集的实现边界，见 §11）
+- 日期：2026-09-21（rev 2：2026-09-22；rev 3：2026-09-22）
 - 关联：#74（本任务，Parent #73）；`Refs #9`（M2 插件/事务路线）；`Related #8`（Windows x64 未测门禁）；`Related #15`（契约演进缺口）
 - 基线：HDSL main `78552ddf407238833d67848396345196361350a8`；上游固定 tag `dsh-v0.1.5-rc.2` = `fb2c4b9e698e30edb738bca4cf0618587db7d203`（不与 master 混用）
 - 依据（可直接核对）：
@@ -18,7 +18,7 @@
 
 **不在范围**：实现任何插件方法；修改 `version.ts`/`local-api.md`/`fixtures.ts`；新增、移动或重打契约标签；引入依赖；执行第三方代码或安装期脚本；真实 GitHub 或模型请求；`specs/002` 正文；`pack.*`/Registry/小程序接口。
 
-**证据等级**（SOP §7）：对 001 的事实陈述标 `verified`（文件与标签可核对）；对上游 DSH 行为的陈述标 `raw`（固定 tag 实测，未实现、未验收）；本文全部插件契约提案为 **spec change proposal**。**不得在评审通过前用于实现 #75**，任何 `raw` 结论不得写成产品承诺或 issue 验收断言。
+**证据等级**（SOP §7）：对 001 的事实陈述标 `verified`（文件与标签可核对）；对上游 DSH 行为的陈述标 `raw`（固定 tag 实测，未实现、未验收）；本文全部插件契约提案为 **spec change proposal**；评审与编排确认后（rev 3）实现切片按本文与 §5.4 阶段 2 落地，但任何 `raw` 结论不得写成产品承诺或 issue 验收断言。
 
 ## 1. 背景
 
@@ -59,7 +59,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 
 ### D2 版本号：评审接受 `1.1`（机制不受数字影响）
 
-本 ADR 固定**机制**（D1、D3、D5）。评审（`5770298091`）接受推荐值 `1.1`，理由见 §5.3；本 ADR 保持 `proposed`，待编排确认后转 `accepted` 并在 §5.3 固化。批准与打标签前，任何实现切片**不得**改 `version.ts`。
+本 ADR 固定**机制**（D1、D3、D5）。评审（`5770298091`）接受推荐值 `1.1`，理由见 §5.3；编排已确认，本 ADR 状态为 `accepted`，§5.3 即为固化结论。实现切片按 §5.4 阶段 2 修改 `version.ts`；**打标签仍只在阶段 3**（整个闭环验收后由编排者按精确 merge SHA 执行）。
 
 ### D3 冻结标签不可变
 
@@ -91,7 +91,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
   - 既有 kind（`create`/`start`/`stop`/`openWebUI`/`export`）→ `output` **必须缺席**（保持 001 行为）。
   - 任何违反 = main 边界出站校验失败 → `INTERNAL_ERROR`（不把畸形载荷透传）。
 - `operation.updated` **事件不携带** `output`：事件只带 `subscriptionId/operationId/sequence/phase/status/progress?`；结果只能通过 `operations.get` / `operations.cancel` 的终态快照读取。
-- 结构化载荷按 D19 的**字段白名单** schema 化并设条目/长度上界；脱敏规则与其它出站值一致（受控文案 + 本地上路径/token/cookie 不出现）。
+- 结构化载荷按 D20 的**字段白名单** schema 化并设条目/长度上界；脱敏规则与其它出站值一致（受控文案 + 本地上路径/token/cookie 不出现）。
 - **全局操作隔离**（评审决策点 3）：全局 `plugins.search` / `plugins.inspect` **不受任何环境 `ENVIRONMENT_BUSY` 影响**；某环境存在 in-progress 事务也不阻塞全局操作。环境级方法的 `ENVIRONMENT_BUSY` 语义不变。
 - 备选（评审可改）：用"仅返回不透明 id + 每种结果一个只读方法"替代 `output`。被否理由：需要 3 个额外只读方法与 3 个额外 id 域，且 `changes.apply` 的终态摘要仍无处放置。
 
@@ -306,7 +306,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | `specs/001-environment-lifecycle/contracts/local-api.md:97`（fixture 表） | `2.0` / `1.1` | **改**：按 §5.4 分支同步 |
 | `specs/001-environment-lifecycle/plan.md:19` | `"1.0"` | **留作历史 + 指针**：001 实施计划为历史记录，不改写；在该行追加指向本 ADR 与当前契约文件的指针 |
 | `docs/development/desktop-integration.md:186` | 示例 `apiVersion:'1.0'` | **改**：示例必须与当前 wire 版本一致（否则误导读者的可复制示例） |
-| `tests/**` | 使用 `API_VERSION` 常量 | **不改**：无需逐处改字面量 |
+| `tests/**` | 大多数测试使用 `API_VERSION` 常量；但 `tests/e2e/support/desktop-ui.ts` 与 `tests/e2e/support/fixtures/sender-frame-*.html` 曾硬编码 `'1.0'` | **改**（rev 3 修正）：`desktop-ui.ts` 改为引用共享 `API_VERSION`；两个 HTML fixture 改为 `__HDSL_API_VERSION__` 占位符，由 E2E 宿主在生成临时页时注入 `API_VERSION`，避免再次漂移 |
 
 历史保留清单：所有既有标签对象、001 spec/plan/research/tasks 的历史文本、旧 fixture 行的旧期望——通过标签 `contracts-v1.0.0` 与 Git 历史保留，不回填、不删除。
 
@@ -329,11 +329,11 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 - **明确规则（可审计）**：**既有 DTO 新增可选字段属于 `1.1` 允许类**；**消费者必须容忍字段缺席**（读取时按可选处理，不得因缺席报错或崩溃）。例：`OperationSnapshot.environmentId` 本就是 `sNullable`（F9），因此新增全局操作的 `environmentId: null` 不构成必填性变化。
 - 若评审改判以下任一项成立，则改 `2.0`：(a) 既有方法的输入/输出/守卫/错误码语义变化；(b) 既有 DTO 字段类型、必填性或含义变化；(c) 既有错误码含义扩大或重命名；(d) 校验顺序或幂等语义变化。
 - 标签约定：`contracts-v1.1.0` ↔ `API_VERSION = "1.1"`（先例 `contracts-v1.0.0` ↔ `"1.0"`）。
-- 本 ADR 保持 `proposed`；编排确认并转 `accepted` 后此节即为固化结论。
+- 编排已于 2026-09-22 确认，本 ADR 状态为 `accepted`；此节即为固化结论。
 
 ### 5.4 发布过渡与 fixture 迁移（按版本分支写清）
 
-1. **阶段 1（本 ADR）**：独立复审通过、状态 `accepted`、版本数字固化。
+1. **阶段 1（本 ADR）**：独立复审通过、状态 `accepted`、版本数字固化。（已完成）
 2. **阶段 2（S1–S4 实现）**：每个切片落地时一次性改 version + 文档 + fixture。**版本不匹配 fixture 的迁移按所选版本分支执行，两处必须同步**（`fixtures.ts` 可执行表 + `local-api.md` fixture 表；文档 rev 递增）：
 
    | 选 `1.1`（当前推荐） | 选 `2.0`（若改判） |
@@ -438,5 +438,9 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 - 实现：无（本 ADR 不落代码，不改 `version.ts`、不改 `local-api.md`、不改 `fixtures.ts`）。
 - 已验证（文档级）：仓库结构、文档链接与既有契约/标签事实可核对（`python3 scripts/check_repository.py`）；§2 的 verified 行逐条对回对应文件/标签；raw 行标注为未实机验收。
 - 未验证：§3 全部插件契约提案（spec change）、§8 全部待实证项（E1–E10）。
-- 本 ADR 状态 `proposed`：需独立复审（reviewer 针对精确 head SHA）后才能转 `accepted`；批准前不得据此实现 #75，也不得声明 #73/#79 完成。
+- 本 ADR 状态 `accepted`：独立复审（`5770298091`）与编排确认已完成，实现切片据此在未打标签的 `1.1` 内落地。
+- **实现进度（rev 3）**：#75 实现 **S1 子集**——`plugins.search`/`plugins.inspect`、`OperationSnapshot.output`（`search`/`inspect`）、D11 错误码与 `retryAfterSeconds`；`changes.preview`/`changes.apply`/`generations.restore`、`preview`/`apply`/`restore` kind、manifest/脚本解析与安装期授权仍属 S2+，本片**不**声明已实现，也不打 `contracts-v1.1.0` 标签。
+  - rev 3 同时修正 §4.4 的 `tests/**` 行：`tests/e2e/support/desktop-ui.ts` 改为引用共享 `API_VERSION`，`sender-frame-*.html` 改为版本占位符并在 E2E 宿主注入（本片承接，避免留已知损坏的 opt-in harness）。
+  - 网络硬超时（D12）覆盖 body 读取：GitHub 适配器把 `response.json()` 纳入同一 deadline 与调用方 abort，已补「响应头已到、body 停住」的超时与取消测试。
+  - 未受信外部字段按 DTO 上界防护：自由文本 `description` 带省略号裁剪；结构性标识/URL 不裁剪，超界/非法时只丢弃该条命中并以 `incompleteResults` 暴露，不静默丢失、不改义。
 - **本 P0 合入不宣称 D18 的运行数据/旧代可用保证已实现**：该保证为条件性承诺，#76 硬门禁与 E10 见 D18/§9.7。

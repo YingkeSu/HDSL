@@ -40,6 +40,7 @@ import {
   API_VERSION,
   contractErrorForCode,
   contractErrorSchema,
+  DEFAULT_PLUGIN_QUERY,
   environmentSummaryListSchema,
   exportResultSchema,
   isLoopbackOrigin,
@@ -47,6 +48,8 @@ import {
   openWebUIResultSchema,
   operationRefSchema,
   operationSnapshotSchema,
+  pluginInspectionSchema,
+  pluginSearchResultSchema,
   REQUEST_ID_PATTERN,
   runtimeCombinationListSchema,
   subscriptionRefSchema,
@@ -62,6 +65,7 @@ import {
   INITIAL_STATE,
   isOperationTerminal,
   selectedEnvironment,
+  selectedPluginHit,
   type RendererActions,
   type RendererState,
   type TrackedOperation,
@@ -113,7 +117,10 @@ const toTrackedOperation = (snapshot: OperationSnapshot): TrackedOperation => ({
   progress: snapshot.progress ?? null,
   environmentId: snapshot.environmentId,
   error: snapshot.error ?? null,
+  output: snapshot.output ?? null,
 });
+
+const PLUGIN_OPERATION_KINDS: ReadonlySet<string> = new Set(['search', 'inspect']);
 
 const DEFAULT_POLL_INTERVAL_MS = 400;
 const DEFAULT_MAX_POLL_RETRIES = 3;
@@ -337,6 +344,92 @@ export class RendererController implements RendererActions {
         notice: '诊断导出完成（已脱敏；结果不含本地路径）。',
       });
     });
+  }
+
+  setPluginQuery(query: string): void {
+    this.#update({ pluginQuery: query, actionError: null, pluginInspection: null });
+  }
+
+  resetPluginQuery(): void {
+    this.#update({
+      pluginQuery: DEFAULT_PLUGIN_QUERY,
+      actionError: null,
+      pluginInspection: null,
+    });
+  }
+
+  async runPluginSearch(): Promise<void> {
+    await this.#runCommand(async () => {
+      this.#update({
+        actionError: null,
+        notice: null,
+        pluginSearch: null,
+        pluginInspection: null,
+        selectedPluginFullName: null,
+      });
+      const result = await this.#call(
+        'plugins.search',
+        { requestId: this.#newRequestId(), query: this.#state.pluginQuery },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  /** Fetches authoritative repository detail for the selected hit. */
+  async inspectSelectedPlugin(): Promise<void> {
+    await this.#runCommand(async () => {
+      const hit = selectedPluginHit(this.#state);
+      if (hit === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, pluginInspection: null });
+      const result = await this.#call(
+        'plugins.inspect',
+        {
+          requestId: this.#newRequestId(),
+          source: { owner: hit.owner, name: hit.name },
+        },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  selectPlugin(fullName: string | null): void {
+    this.#update({ selectedPluginFullName: fullName, pluginInspection: null });
+  }
+
+  /**
+   * Cancels only an in-flight plugin discovery operation. Cancellation is a
+   * terminal state with no side effect (ADR 0005 D10); a finished search keeps
+   * its result and cannot be cancelled.
+   */
+  async cancelPluginSearch(): Promise<void> {
+    const tracked = this.#state.trackedOperation;
+    if (
+      tracked === null ||
+      !PLUGIN_OPERATION_KINDS.has(tracked.kind ?? '') ||
+      isOperationTerminal(tracked.status)
+    ) {
+      return;
+    }
+    await this.cancelTrackedOperation();
   }
 
   async cancelTrackedOperation(): Promise<void> {
@@ -643,7 +736,38 @@ export class RendererController implements RendererActions {
       }
     }
     if (tracked.status === 'succeeded') {
+      this.#applyPluginOutput(tracked);
       await this.#refreshEnvironments(epoch);
+    }
+  }
+
+  /**
+   * Re-validates a terminal plugin payload before it can reach the UI. The
+   * dispatcher already enforces the per-kind schema; this is defence in depth
+   * so a malformed value is an explicit `INTERNAL_ERROR`, never a partial list.
+   */
+  #applyPluginOutput(tracked: TrackedOperation): void {
+    if (tracked.kind === 'search') {
+      const issues: ValidationIssue[] = [];
+      const parsed = pluginSearchResultSchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ pluginSearch: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({
+        pluginSearch: parsed,
+        selectedPluginFullName: parsed.hits[0]?.fullName ?? null,
+      });
+      return;
+    }
+    if (tracked.kind === 'inspect') {
+      const issues: ValidationIssue[] = [];
+      const parsed = pluginInspectionSchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ pluginInspection: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ pluginInspection: parsed });
     }
   }
 

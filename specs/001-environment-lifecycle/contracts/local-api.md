@@ -1,6 +1,6 @@
 # 本地 API 契约 v0.2（草案）
 
-文档草案 rev = v0.2；wire 包络版本为 `API_VERSION = "1.0"`（见下节）。两者独立演进：文档 rev 记录草案修订，`API_VERSION` 是 preload 桥的运行时契约版本，T003 打标签时以 `API_VERSION` 为准。
+文档草案 rev = v0.3；wire 包络版本为 `API_VERSION = "1.1"`（见下节）。两者独立演进：文档 rev 记录草案修订，`API_VERSION` 是 preload 桥的运行时契约版本，打标签时以 `API_VERSION` 为准。`1.0` 是已冻结版本，保留为标签 `contracts-v1.0.0` 的历史注记，见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
 
 实现位置计划为 preload 白名单桥，非任意 HTTP 远程控制接口。main 必须校验发送方和所有输入；TypeScript 类型不替代运行时校验。DTO 的权威字段定义与修订语义见 [data-model.md](../data-model.md)，本文件只定义调用方法、幂等、错误与事件语义。
 
@@ -8,7 +8,7 @@
 
 ## 契约版本
 
-- 导出常量 `API_VERSION = "1.0"`（`major.minor`），位于 `packages/contracts/src`，renderer 与 main 共用同一构建产物。
+- 导出常量 `API_VERSION = "1.1"`（`major.minor`），位于 `packages/contracts/src`，renderer 与 main 共用同一构建产物。历史：`1.0` 冻结于标签 `contracts-v1.0.0`，不移动、不重打。
 - 每个请求与响应包络都携带 `apiVersion`。main 在产生任何副作用前**要求完全匹配**：任何 major 或 minor 不一致 → 拒绝，错误码 `CONTRACT_VERSION_MISMATCH`，不执行方法。
 - 采用完全匹配的理由：renderer 与 main 共用同一构建产物，且 main 对未知字段严格拒绝；若允诺 minor 兼容，更高 minor 的新增字段必然被拒，承诺不可执行。因此不提供 minor 向后兼容；升级必须是两侧同步的显式变更。
 - 版本升级是显式变更并更新本文件，同步更新 T003 的 fixture 表；不得静默放宽字段或错误语义。
@@ -95,7 +95,7 @@
 | --- | --- |
 | envelope-strict-ok | `ok` |
 | envelope-major-mismatch（`2.0`） | `CONTRACT_VERSION_MISMATCH` |
-| envelope-minor-mismatch（`1.1`） | `CONTRACT_VERSION_MISMATCH` |
+| envelope-minor-mismatch（`1.2`） | `CONTRACT_VERSION_MISMATCH` |
 | envelope-malformed-version / missing-version / non-string-version | `INVALID_INPUT` |
 | envelope-unknown-method / unknown-key / missing-input / not-an-object / input-not-object | `INVALID_INPUT` |
 
@@ -114,13 +114,19 @@
 | operations.subscribe | subscribe-legal-operation / subscribe-legal-all | illegal-id / unknown-field → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | operations.unsubscribe | unsubscribe-legal（先 subscribe 的 prelude） | illegal-id → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | diagnostics.export | export-legal | missing-request-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；failed → `EXPORT_FAILED` |
+| plugins.search | plugins-search-legal / plugins-search-truncated / plugins-search-rate-limited / plugins-search-network-failure | empty-query / unknown-field（含 token 字段） → `INVALID_INPUT` |
+| plugins.inspect | plugins-inspect-legal / plugins-inspect-not-found | local-path（`link:`/路径） / unknown-field → `INVALID_INPUT` |
 | idempotency-conflict | — | 同 `requestId` 不同 `name` → `IDEMPOTENCY_CONFLICT` |
 | idempotency-guard-retry | 先 `NOT_FOUND` 再修正参数 | 修正后同 `requestId` → `ok`（守卫拒绝不锁死参数） |
 
 补充行为测试（`tests/contracts/`，不在上表逐条列出）：重复 `requestId` 返回原 `ExportResult` 摘要且副作用计数为 1；参数键顺序不影响指纹；守卫拒绝不记录、`in-progress` 不重做；端口异常/畸形返回/非法出站 DTO/重复 sequence → 脱敏 `INTERNAL_ERROR`；`catalog.list` 过滤未核验组合；订阅/退订按 operationId 分组递增且严格单调、退订后重放重建同一 `subscriptionId`；错误文本长度上限；秘密与本地路径不进入错误与事件。
 
-契约版本标签（T003/T003.1）：`API_VERSION = "1.0"` 在审核合并冻结后由编排者按精确 merge SHA 打标签；本分支不提前 tag 未审 HEAD。
+契约版本标签：`contracts-v1.0.0` ↔ `API_VERSION = "1.0"`（已冻结，只读）；`1.1` 的标签在插件闭环（S1–S4）验收后由编排者按精确 merge SHA 打 `contracts-v1.1.0`，实现切片不提前 tag 未审 HEAD（ADR 0005 §5.4）。
+
+## 1.1 插件发现（S1 已实现）
+
+`plugins.search` 与 `plugins.inspect` 是**全局**（`environmentId = null`）只读检索/详情方法，返回 `OperationRef`；终态结果经 `OperationSnapshot.output` 读取。二者不使用任何 GitHub 凭据，不受环境 `ENVIRONMENT_BUSY` 影响，且不改变任何环境组成。错误映射见 ADR 0005 D11/D16（`RATE_LIMITED` + `retryAfterSeconds`、`NETWORK_UNAVAILABLE`、`SOURCE_NOT_FOUND` 等）。
 
 ## 后续接口预留
 
-插件与升级采用 changes.preview / changes.apply，恢复采用 generations.restore；pack.inspect / pack.import / pack.export 在 003 规格中定义。当前未定义输入结构，不将它们暴露为可调用 API。Registry 与小程序接口须另设版本化规格。
+`changes.preview` / `changes.apply` / `generations.restore` 与 `preview`/`apply`/`restore` operation kind 仍属 S2+，当前未实现，不暴露为可调用 API；设计见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md) 与 [002 规格](../../002-plugin-transactions/spec.md)。pack.inspect / pack.import / pack.export 在 003 规格中定义。Registry 与小程序接口须另设版本化规格。

@@ -9,6 +9,8 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
+import { API_VERSION } from '@hdsl/contracts';
+
 import type { CdpClient } from './cdp.js';
 import { sleep, waitFor } from './gates.js';
 
@@ -19,7 +21,13 @@ export interface ContractEnvelope {
   readonly error?: { readonly code: string; readonly message?: string; readonly retryable?: boolean };
 }
 
-export const CONTRACT_API_VERSION = '1.0';
+/**
+ * The wire version every real-Electron envelope is built with. It is the same
+ * shared constant main/preload/renderer use (never a copied literal), so an
+ * `API_VERSION` bump cannot silently strand this harness on the old exact-match
+ * value.
+ */
+export const CONTRACT_API_VERSION = API_VERSION;
 
 /** Waits until the React root has rendered non-empty content. */
 export const waitForRender = async (cdp: CdpClient, timeoutMs = 20_000): Promise<string> => {

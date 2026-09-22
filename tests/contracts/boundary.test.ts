@@ -8,6 +8,7 @@
  * These use a controlled `ContractPort` on top of the TEST-ONLY reference port.
  */
 import {
+  API_VERSION,
   containsSecret,
   createContractRuntime,
   isRetryable,
@@ -398,7 +399,7 @@ describe('#25 envelope plain-object and own-field rules', () => {
   it('rejects a prototype-inherited envelope', () => {
     const { runtime } = harness();
     const request: Record<string, unknown> = Object.create({
-      apiVersion: '1.0',
+      apiVersion: API_VERSION,
       method: 'catalog.list',
     });
     request['input'] = {};
@@ -418,7 +419,7 @@ describe('#25 envelope plain-object and own-field rules', () => {
   it('rejects an own "__proto__" key without polluting Object.prototype', () => {
     const { runtime } = harness();
     const request = JSON.parse(
-      '{"apiVersion":"1.0","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}',
+      `{"apiVersion":"${API_VERSION}","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}`,
     );
     expect(errorCode(runtime.dispatch(request))).toBe('INVALID_INPUT');
     expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
@@ -427,7 +428,7 @@ describe('#25 envelope plain-object and own-field rules', () => {
   it('accepts a null-prototype envelope and input', () => {
     const { runtime } = harness();
     const request = Object.create(null) as Record<string, unknown>;
-    request['apiVersion'] = '1.0';
+    request['apiVersion'] = API_VERSION;
     request['method'] = 'catalog.list';
     request['input'] = Object.create(null) as Record<string, unknown>;
     expect(runtime.dispatch(request).ok).toBe(true);

@@ -21,9 +21,11 @@
  * Only registered temp roots/processes are used: no DSH network, no keychain,
  * no user browser profile. Opt-in with `HDSL_E2E_SENDERFRAME=1`.
  */
-import { cpSync, existsSync, readdirSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+
+import { API_VERSION } from '@hdsl/contracts';
 
 import { appHarness, cleanupAllHarnesses } from './support/app-harness.js';
 import { REPO_ROOT } from './support/desktop-candidate.js';
@@ -33,6 +35,23 @@ import { waitFor } from './support/gates.js';
 const ENABLED = process.env['HDSL_E2E_SENDERFRAME'] === '1';
 const HOST_ENTRY = join(REPO_ROOT, 'tests', 'e2e', 'support', 'sender-frame-host.mjs');
 const FIXTURES = join(REPO_ROOT, 'tests', 'e2e', 'support', 'fixtures');
+const FIXTURE_NAMES = ['sender-frame-parent.html', 'sender-frame-child.html'] as const;
+const VERSION_TOKEN = '__HDSL_API_VERSION__';
+
+/**
+ * Copies the committed fixtures into a temp root, replacing the version token
+ * with the shared `API_VERSION`. The fixtures stay version-agnostic so a wire
+ * bump cannot strand them on an old exact-match literal.
+ */
+const materializeFixtures = (destination: string): void => {
+  mkdirSync(destination, { recursive: true });
+  for (const name of FIXTURE_NAMES) {
+    writeFileSync(
+      join(destination, name),
+      readFileSync(join(FIXTURES, name), 'utf8').split(VERSION_TOKEN).join(API_VERSION),
+    );
+  }
+};
 
 interface ChildReport {
   readonly bridgePresent: boolean;
@@ -41,9 +60,12 @@ interface ChildReport {
 
 describe('desktop sender-frame test host', () => {
   // Always-on sanity check for the committed fixtures used by the host.
-  it('E2E-SENDERFRAME-02: test-host fixtures exist and are self-contained', () => {
-    expect(existsSync(join(FIXTURES, 'sender-frame-parent.html'))).toBe(true);
-    expect(existsSync(join(FIXTURES, 'sender-frame-child.html'))).toBe(true);
+  it('E2E-SENDERFRAME-02: test-host fixtures exist, are self-contained and version-agnostic', () => {
+    for (const name of FIXTURE_NAMES) {
+      const content = readFileSync(join(FIXTURES, name), 'utf8');
+      expect(content, `${name} uses the shared version token`).toContain(VERSION_TOKEN);
+      expect(content, `${name} has no hardcoded 1.0 envelope`).not.toContain("apiVersion: '1.0'");
+    }
     expect(existsSync(HOST_ENTRY)).toBe(true);
   });
 
@@ -53,7 +75,7 @@ describe('desktop sender-frame test host', () => {
     it('E2E-SENDERFRAME-01: a real subframe with the production bridge is rejected before dispatch; main frame succeeds', async () => {
       const harness = appHarness();
       const fixtureRoot = harness.registry.registerTempRoot('senderframe');
-      cpSync(FIXTURES, fixtureRoot, { recursive: true });
+      materializeFixtures(fixtureRoot);
       const parentPage = join(fixtureRoot, 'sender-frame-parent.html');
 
       const app = await launchDesktopApp({

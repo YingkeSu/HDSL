@@ -20,7 +20,7 @@ describe('renderer/main/preload consume the same contract', () => {
   it('shares the exact same API version', () => {
     expect(MAIN_CONTRACT_API_VERSION).toBe(API_VERSION);
     expect(RENDERER_CONTRACT_API_VERSION).toBe(API_VERSION);
-    expect(API_VERSION).toBe('1.0');
+    expect(API_VERSION).toBe('1.1');
   });
 
   it('exposes exactly the frozen method whitelist through preload', () => {
@@ -37,6 +37,8 @@ describe('renderer/main/preload consume the same contract', () => {
       'operations.subscribe',
       'operations.unsubscribe',
       'diagnostics.export',
+      'plugins.search',
+      'plugins.inspect',
     ]);
   });
 

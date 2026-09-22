@@ -183,7 +183,7 @@ electron apps/desktop/dist/main/qa-entry.js \
 - 受控拒绝可观测形式：协议层一律是受控 envelope（`{ ok:false, apiVersion, error:{ code, … } }`），
   CDP 断言 `code`；单实例第二进程是**进程退出**（`requestSingleInstanceLock`）；dataRoot 被占用是
   原生错误框 + 退出（无 envelope），可用退出码/stderr 观测。失锁后的变更调用返回 `ENVIRONMENT_BUSY`。
-- 诊断导出：用测试入口 `--hdsl-qa-export-path <file>`，通过 `window.hdsl.call({apiVersion:'1.0',
+- 诊断导出：用测试入口 `--hdsl-qa-export-path <file>`，通过 `window.hdsl.call({apiVersion:'1.1',
   method:'diagnostics.export', input:{ requestId, environmentId }})` 触发，断言返回
   `{ exportId, exported:true, redacted:true }` 并检查文件内容。
 - 凭据导入：用测试入口 `--hdsl-qa-import-path`（+ `--hdsl-qa-import-environment` 走静默启动导入）；

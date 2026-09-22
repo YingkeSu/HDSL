@@ -88,6 +88,8 @@ const harness = (
     openWebUI: base.openWebUI.bind(base),
     cancelOperation: base.cancelOperation.bind(base),
     exportDiagnostics: base.exportDiagnostics.bind(base),
+    searchPlugins: base.searchPlugins.bind(base),
+    inspectPluginSource: base.inspectPluginSource.bind(base),
     readIdempotency: base.readIdempotency.bind(base),
     writeIdempotency: base.writeIdempotency.bind(base),
     ...overrides,
@@ -115,7 +117,7 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
       expect(base.effects).toEqual([]);
     });
 
-    it.each(['2.0', '1.1', '01.0'])('rejects apiVersion %s with CONTRACT_VERSION_MISMATCH', (v) => {
+    it.each(['2.0', '1.2', '01.0'])('rejects apiVersion %s with CONTRACT_VERSION_MISMATCH', (v) => {
       const { runtime } = harness();
       expect(
         errorCode(runtime.dispatch({ apiVersion: v, method: 'catalog.list', input: {} })),
@@ -184,7 +186,7 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
     it('rejects an own "__proto__" field and never pollutes Object.prototype', () => {
       const { runtime } = harness();
       const request = JSON.parse(
-        '{"apiVersion":"1.0","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}',
+        '{"apiVersion":"1.1","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}',
       );
       expect(errorCode(runtime.dispatch(request))).toBe('INVALID_INPUT');
       expect(({} as { polluted?: boolean }).polluted).toBeUndefined();
