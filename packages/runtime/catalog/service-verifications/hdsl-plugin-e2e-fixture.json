@@ -37,18 +37,20 @@
     "status": "confirmed",
     "verifier": "hdsl-33 (independent QA service-behavior review, limited read-only source review)",
     "verdict": "known empty providers (registers/provides no Cordis service)",
-    "reviewedAt": "2026-09-22",
+    "reviewedAt": "2026-09-22T14:09:27Z",
     "reviewMethod": "one bounded fetch of the exact public commit archive (codeload tar.gz, HTTP200, 1876B) into a temporary directory; no fixture execution, no model, no keychain, no repo changes",
     "scope": [
       "exact commit e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838 only; any commit/file change invalidates this record",
       "lib/index.mjs exports only name/apply/default; no Service class, no provide/ctx/inject/.set(",
       "apply() takes no arguments (no ctx) so it cannot register or claim a service",
       "cordis.patch.yml has one insert row (id hdsl-e2e-marker, name=package) with no provide/service/inject declaration",
+      "dynamic load boundary verified against the managed @deepseek-ai/cordis@4.0.2 source: plugin() uses resolve(plugin)->plugin.apply, name is only a runtime label, Inject.resolve(plugin.inject); service registration only via the Service constructor ctx.reflect.provide or explicit ctx.provide; cordis-plugin-loader _start imports insert.name as a module specifier and applies it as an ordinary plugin, so loading never derives services from name/default export",
       "no dynamic import()/require/eval/new Function; zero third-party dependencies; only node:fs/node:path",
-      "side effect limited to writing <DSH_HOME>/hdsl-e2e-marker/applied (no DSH_HOME => no file); errors swallowed"
+      "side effect limited to writing <DSH_HOME>/hdsl-e2e-marker/applied (no DSH_HOME => no file); errors swallowed",
+      "independent codeload fetch cross-checked byte-for-byte against the implementation-side fetch (5/5 files, manifest + tree digests equal)"
     ],
-    "boundary": "not a general plugin safety guarantee; runtime loading/service-resolution behavior was not executed or proven",
-    "report": "/tmp/qa33/fixture-cordis-review-e7825788.md (QA one-off; the durable record above is authoritative)",
+    "boundary": "valid only for this exact commit AND this generation-managed cordis/loader semantics (a loader version change invalidates the dynamic-load conclusion); not a general plugin safety guarantee; runtime load/service resolution success was not executed or proven",
+    "report": "/tmp/qa33/fixture-service-verify-e7825788.md (QA one-off, includes cordis 4.0.2 source semantics; the durable record above is authoritative)",
     "durableRecord": "docs/development/plugin-remove-service-verification.md"
   },
   "treeSha256": "a0336c83accebb1430d2f95f8bb12c8c7f5da808221765854547fc46296ebc2e",
