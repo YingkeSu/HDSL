@@ -217,6 +217,7 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
       ranDenyInstall = true;
       const dependencyScripts = enumerateInstallScriptsFromInstalledTree({
         nodeModulesDirectory: join(profileDirectory, 'node_modules'),
+        lockText: targetProfile.lockText,
         excludePackageName: resolution.sourceLock.packageName,
         readPackageJsonText: (path) => {
           try {
@@ -226,6 +227,12 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
           }
         },
       });
+      if (dependencyScripts === undefined) {
+        return portFail(
+          'BUILD_NOT_AUTHORIZED',
+          'the install-time dependency closure could not be fully verified against the pinned lock',
+        );
+      }
       const effectiveScripts = [...resolution.scripts, ...dependencyScripts];
       const final = decideBuildAuthorization({
         authorization: command.buildAuthorization,

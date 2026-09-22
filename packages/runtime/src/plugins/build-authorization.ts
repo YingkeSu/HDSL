@@ -22,9 +22,10 @@
  * never become a resident allowlist.
  */
 import { parse, stringify } from 'yaml';
-import { existsSync, readdirSync, statSync } from 'node:fs';
-import { join } from 'node:path';
+import { readdirSync, realpathSync } from 'node:fs';
+import { isAbsolute, join, relative } from 'node:path';
 import { isPlainRecord, type BuildAuthorization, type BuildScriptEntry, type ScriptAssessment } from '@hdsl/contracts';
+import { resolveLockClosure } from './lock-closure.js';
 
 /** Lifecycle hooks HDSL enumerates (frozen order). */
 export const BUILD_LIFECYCLE_SCRIPTS = ['preinstall', 'install', 'postinstall', 'prepare'] as const;
@@ -76,76 +77,213 @@ const asRecord = (value: unknown): Record<string, unknown> | undefined =>
 /** Maximum dependency package directories inspected (bounded, non-executing). */
 const INSTALLED_SCAN_MAX = 4_000;
 
-/**
- * Non-executing enumeration of install-time scripts from a materialised
- * `node_modules` tree (produced by a default-deny install). It reads each
- * dependency's `package.json` and NEVER runs a script. The authorized source's
- * own package is excluded so its hooks are not double-counted (they are already
- * reported as `source: 'root'` from the source manifest).
- */
-export const enumerateInstallScriptsFromInstalledTree = (input: {
-  readonly nodeModulesDirectory: string;
-  /** Package name of the authorized source (excluded: counted as `root`). */
-  readonly excludePackageName: string;
-  readonly readPackageJsonText: (path: string) => string | undefined;
-}): readonly BuildScriptEntry[] => {
-  const collected: BuildScriptEntry[] = [];
-  const pending: string[] = [input.nodeModulesDirectory];
-  let inspected = 0;
-  while (pending.length > 0 && inspected < INSTALLED_SCAN_MAX) {
-    const directory = pending.shift()!;
-    let names: string[];
-    try {
-      if (!existsSync(directory) || !statSync(directory).isDirectory()) {
+interface InstalledManifest {
+  readonly name: string;
+  readonly version: string;
+  readonly scripts: Record<string, unknown>;
+}
+
+/** Package directories in a `node_modules`-like dir (handles `@scope/name`). */
+const packageDirsIn = (nodeModulesDirectory: string): readonly string[] => {
+  const result: string[] = [];
+  let names: string[];
+  try {
+    names = readdirSync(nodeModulesDirectory);
+  } catch {
+    return result;
+  }
+  for (const name of names) {
+    if (name.startsWith('.')) {
+      continue; // .bin, .pnpm, .modules.yaml
+    }
+    const entry = join(nodeModulesDirectory, name);
+    if (name.startsWith('@')) {
+      let scoped: string[];
+      try {
+        scoped = readdirSync(entry);
+      } catch {
         continue;
       }
-      names = readdirSync(directory);
+      for (const child of scoped) {
+        if (!child.startsWith('.')) {
+          result.push(join(entry, child));
+        }
+      }
+      continue;
+    }
+    result.push(entry);
+  }
+  return result;
+};
+
+/**
+ * Collects the manifests of a materialised pnpm tree: the top-level links AND
+ * the `.pnpm` virtual store (where transitive dependencies live). Directories are
+ * deduplicated by REAL path, so a top-level symlink and its store target are one
+ * package. Returns `undefined` when the bounded scan is exceeded (fail closed).
+ */
+const collectInstalledManifests = (
+  nodeModulesDirectory: string,
+  readPackageJsonText: (path: string) => string | undefined,
+): readonly InstalledManifest[] | undefined => {
+  const directories = new Set<string>();
+  let nodeModulesReal: string;
+  try {
+    nodeModulesReal = realpathSync(nodeModulesDirectory);
+  } catch {
+    nodeModulesReal = nodeModulesDirectory;
+  }
+  const escapes = (candidate: string): boolean => {
+    const rel = relative(nodeModulesReal, candidate);
+    return rel !== '' && (rel.startsWith('..') || isAbsolute(rel));
+  };
+  let escaped = false;
+  const addDirectory = (directory: string): void => {
+    let real = directory;
+    try {
+      real = realpathSync(directory);
+    } catch {
+      // Keep the raw path; the manifest read below will fail closed.
+    }
+    if (escapes(real)) {
+      escaped = true;
+      return;
+    }
+    directories.add(real);
+  };
+  for (const directory of packageDirsIn(nodeModulesDirectory)) {
+    addDirectory(directory);
+  }
+  const virtualStore = join(nodeModulesDirectory, '.pnpm');
+  let storeEntries: string[];
+  try {
+    storeEntries = readdirSync(virtualStore);
+  } catch {
+    storeEntries = [];
+  }
+  for (const storeEntry of storeEntries) {
+    if (storeEntry.startsWith('.')) {
+      continue;
+    }
+    for (const directory of packageDirsIn(join(virtualStore, storeEntry, 'node_modules'))) {
+      addDirectory(directory);
+    }
+  }
+  if (directories.size > INSTALLED_SCAN_MAX) {
+    return undefined;
+  }
+  if (escaped) {
+    // A symlink target outside the materialised tree is an unsupported shape.
+    return undefined;
+  }
+  const manifests: InstalledManifest[] = [];
+  for (const directory of directories) {
+    const text = readPackageJsonText(join(directory, 'package.json'));
+    if (text === undefined) {
+      continue;
+    }
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = asRecord(JSON.parse(text)) ?? {};
     } catch {
       continue;
     }
-    for (const name of names) {
-      if (name === '.bin' || name === '.pnpm') {
+    const name = typeof parsed['name'] === 'string' ? parsed['name'] : undefined;
+    const version = typeof parsed['version'] === 'string' ? parsed['version'] : undefined;
+    if (name === undefined || version === undefined) {
+      continue;
+    }
+    manifests.push({ name, version, scripts: asRecord(parsed['scripts']) ?? {} });
+  }
+  return manifests;
+};
+
+/**
+ * Pinned-lock-guided, non-executing enumeration of install-time scripts from a
+ * materialised `node_modules` tree (produced by a default-deny install).
+ *
+ * The authority is the REACHABLE `packages`/`snapshots` identity set of the
+ * plan-bound fully-pinned lock (root importer closure), not a directory walk:
+ * every reachable identity must resolve to a manifest addressable from the
+ * materialised tree (top-level link or the `.pnpm` virtual store), with an exact
+ * identity count per `(name, version)` (no silent merge of peer/git identities).
+ * A missing/duplicate/unreadable manifest, an escaping symlink target, an
+ * uninterpretable lock or an unsupported shape is `undefined` (the caller keeps
+ * `unknown`, never authorizable). The source package's own hooks are excluded
+ * (they are `root` entries from the source manifest). NEVER runs a script.
+ */
+export const enumerateInstallScriptsFromInstalledTree = (input: {
+  readonly nodeModulesDirectory: string;
+  /** The plan-bound, fully-pinned lock that defines the authoritative package set. */
+  readonly lockText: string;
+  /** Package name of the authorized source (its hooks are `root`, not `dependency`). */
+  readonly excludePackageName: string;
+  readonly readPackageJsonText: (path: string) => string | undefined;
+}): readonly BuildScriptEntry[] | undefined => {
+  // The REACHABLE closure of the root importer is the authoritative identity set.
+  const closure = resolveLockClosure(input.lockText);
+  if (closure.status !== 'ok' || closure.reachable.length === 0) {
+    return undefined;
+  }
+  const identityVersion = new Map<string, string | undefined>();
+  for (const identity of readLockedIdentities(input.lockText)) {
+    identityVersion.set(identity.depPath, identity.version);
+  }
+  // Expected reachable (name, version) multiset. An identity whose version cannot
+  // be established is an unsupported shape.
+  const expectedCounts = new Map<string, number>();
+  for (const depPath of closure.reachable) {
+    const at = depPath.lastIndexOf('@');
+    if (at <= 0) {
+      return undefined;
+    }
+    const name = depPath.slice(0, at);
+    const version = identityVersion.get(depPath);
+    if (version === undefined) {
+      return undefined; // cannot bind the identity to a concrete package
+    }
+    const key = `${name}\u0000${version}`;
+    expectedCounts.set(key, (expectedCounts.get(key) ?? 0) + 1);
+  }
+  const manifests = collectInstalledManifests(input.nodeModulesDirectory, input.readPackageJsonText);
+  if (manifests === undefined) {
+    return undefined;
+  }
+  const manifestsByKey = new Map<string, InstalledManifest[]>();
+  for (const manifest of manifests) {
+    const key = `${manifest.name}\u0000${manifest.version}`;
+    const existing = manifestsByKey.get(key);
+    if (existing === undefined) {
+      manifestsByKey.set(key, [manifest]);
+    } else {
+      existing.push(manifest);
+    }
+  }
+  // Exact count per identity key: a missing package, or a name-only merge of two
+  // distinct (peer/git) identities, fails closed.
+  for (const [key, expected] of expectedCounts) {
+    const found = manifestsByKey.get(key)?.length ?? 0;
+    if (found !== expected) {
+      return undefined;
+    }
+  }
+  const entries: BuildScriptEntry[] = [];
+  for (const [key, group] of manifestsByKey) {
+    if (!expectedCounts.has(key)) {
+      continue; // an unreachable/extra manifest is not authorized here
+    }
+    for (const manifest of group) {
+      if (manifest.name === input.excludePackageName) {
         continue;
       }
-      const entry = join(directory, name);
-      let isDirectory = false;
-      try {
-        isDirectory = statSync(entry).isDirectory();
-      } catch {
-        continue;
-      }
-      if (!isDirectory) {
-        continue;
-      }
-      if (name.startsWith('@')) {
-        pending.push(entry);
-        continue;
-      }
-      inspected += 1;
-      const manifestText = input.readPackageJsonText(join(entry, 'package.json'));
-      if (manifestText === undefined) {
-        continue;
-      }
-      let manifest: Record<string, unknown>;
-      try {
-        manifest = asRecord(JSON.parse(manifestText)) ?? {};
-      } catch {
-        continue;
-      }
-      const packageName = typeof manifest['name'] === 'string' ? manifest['name'] : name;
-      if (packageName === input.excludePackageName) {
-        continue;
-      }
-      const packageVersion = typeof manifest['version'] === 'string' ? manifest['version'] : '0.0.0';
-      const scripts = asRecord(manifest['scripts']) ?? {};
       for (const script of BUILD_LIFECYCLE_SCRIPTS) {
-        if (typeof scripts[script] === 'string') {
-          collected.push({ packageName, packageVersion, script, source: 'dependency' });
+        if (typeof manifest.scripts[script] === 'string') {
+          entries.push({ packageName: manifest.name, packageVersion: manifest.version, script, source: 'dependency' });
         }
       }
     }
   }
-  return collected;
+  return entries;
 };
 
 export interface LockedIdentity {

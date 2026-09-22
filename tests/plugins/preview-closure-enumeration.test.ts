@@ -33,13 +33,16 @@ const LOCK_TEXT = [
   '  .:',
   '    dependencies:',
   '      hdsl-plugin-demo:',
-  `        version: hdsl-plugin-demo@https://codeload.github.com/octo/hdsl-plugin-demo/tar.gz/${COMMIT}`,
+  `        version: https://codeload.github.com/octo/hdsl-plugin-demo/tar.gz/${COMMIT}`,
   'packages:',
   `  hdsl-plugin-demo@https://codeload.github.com/octo/hdsl-plugin-demo/tar.gz/${COMMIT}:`,
   '    version: 1.0.0',
   '  shared-dep@1.2.3:',
   '    version: 1.2.3',
   'snapshots:',
+  `  hdsl-plugin-demo@https://codeload.github.com/octo/hdsl-plugin-demo/tar.gz/${COMMIT}:`,
+  '    dependencies:',
+  '      shared-dep: 1.2.3',
   '  shared-dep@1.2.3: {}',
 ].join('\n');
 const MANIFEST = JSON.stringify({
@@ -88,6 +91,11 @@ const harness = (options: { failMaterialize?: boolean } = {}) => {
       writeFileSync(
         join(request.cwd, 'node_modules', 'shared-dep', 'package.json'),
         JSON.stringify({ name: 'shared-dep', version: '1.2.3', scripts: { postinstall: 'node dep.js' } }),
+      );
+      mkdirSync(join(request.cwd, 'node_modules', 'hdsl-plugin-demo'), { recursive: true });
+      writeFileSync(
+        join(request.cwd, 'node_modules', 'hdsl-plugin-demo', 'package.json'),
+        JSON.stringify({ name: 'hdsl-plugin-demo', version: '1.0.0', scripts: JSON.parse(MANIFEST).scripts }),
       );
       const workspacePath = join(request.cwd, 'pnpm-workspace.yaml');
       materializeWorkspace = existsSync(workspacePath) ? readFileSync(workspacePath, 'utf8') : null;

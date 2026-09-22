@@ -49,6 +49,9 @@ const LOCK_TEXT = [
   '  shared-dep@1.2.3:',
   '    version: 1.2.3',
   'snapshots:',
+  `  ${PLUGIN_KEY}:`,
+  '    dependencies:',
+  '      shared-dep: 1.2.3',
   '  shared-dep@1.2.3: {}',
 ].join('\n');
 const LOCK_SHA = createHash('sha256').update(LOCK_TEXT, 'utf8').digest('hex');

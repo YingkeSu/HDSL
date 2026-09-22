@@ -183,35 +183,149 @@ describe('composeAuthorizedWorkspace', () => {
   });
 });
 
-describe('enumerateInstallScriptsFromInstalledTree', () => {
-  it('reads dependency scripts non-executing and excludes the authorized source package', () => {
+const GITHUB_DEP_PATH =
+  'hdsl-s4-gh-fixture-root@https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80';
+// Authentic `github:`-form lock captured from the real production transport
+// (probe cb265920): the packages entry carries the codeload tarball key AND the
+// package version; the snapshot repeats the key without a version.
+const GITHUB_LOCK = [
+  "lockfileVersion: '9.0'",
+  'settings:',
+  '  autoInstallPeers: true',
+  'importers:',
+  '  .:',
+  '    dependencies:',
+  '      hdsl-s4-gh-fixture-root:',
+  '        specifier: github:YingkeSu/hdsl-s4-gh-fixture#cb265920d7b0d0d5f3616417cd4053176b998f80',
+  '        version: https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80',
+  'packages:',
+  `  ${GITHUB_DEP_PATH}:`,
+  '    resolution: {gitHosted: true, tarball: https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80}',
+  '    version: 0.0.1',
+  'snapshots:',
+  `  ${GITHUB_DEP_PATH}: {}`,
+].join('\n');
+
+const CLOSURE_LOCK = [
+  "lockfileVersion: '9.0'",
+  'importers:',
+  '  .:',
+  '    dependencies:',
+  '      shared-dep:',
+  '        specifier: 1.2.3',
+  '        version: 1.2.3',
+  "      '@scope/scoped-dep':",
+  '        specifier: 2.0.0',
+  '        version: 2.0.0',
+  'packages:',
+  '  shared-dep@1.2.3:',
+  '    version: 1.2.3',
+  '  transitive@3.0.0:',
+  '    version: 3.0.0',
+  "  '@scope/scoped-dep@2.0.0':",
+  '    version: 2.0.0',
+  'snapshots:',
+  '  shared-dep@1.2.3:',
+  '    dependencies:',
+  '      transitive: 3.0.0',
+  '  transitive@3.0.0: {}',
+  "  '@scope/scoped-dep@2.0.0': {}",
+].join('\n');
+
+describe('github-form pinned-lock identity derivation (matches the production probe)', () => {
+  it('derives the exact codeload depPath byte-for-byte with a unique name/version match', () => {
+    const identities = readLockedIdentities(GITHUB_LOCK);
+    expect(identities).toEqual([
+      { depPath: GITHUB_DEP_PATH, name: 'hdsl-s4-gh-fixture-root', version: '0.0.1' },
+    ]);
+    const bound = bindAuthorizedScriptsToLock(GITHUB_LOCK, [
+      { packageName: 'hdsl-s4-gh-fixture-root', packageVersion: '0.0.1', script: 'postinstall', source: 'dependency' },
+    ]);
+    expect(bound.ok).toBe(true);
+    if (bound.ok) expect(bound.depPaths).toEqual([GITHUB_DEP_PATH]);
+  });
+});
+
+describe('enumerateInstallScriptsFromInstalledTree (pinned-lock guided, .pnpm layout)', () => {
+  const readPackageJsonText = (path: string): string | undefined => {
+    try {
+      return readFileSync(path, 'utf8');
+    } catch {
+      return undefined;
+    }
+  };
+
+  const buildTree = (options: { omitTransitive?: boolean; sourcePackage?: boolean } = {}) => {
     const root = mkdtempSync(join(tmpdir(), 'hdsl-enum-'));
     roots.push(root);
     const nodeModules = join(root, 'node_modules');
+    // Direct dependency at the top level (as pnpm links it).
     mkdirSync(join(nodeModules, 'shared-dep'), { recursive: true });
-    mkdirSync(join(nodeModules, '@scope', 'scoped-dep'), { recursive: true });
-    mkdirSync(join(nodeModules, 'hdsl-plugin-demo'), { recursive: true });
-    writeFileSync(join(nodeModules, 'shared-dep', 'package.json'), JSON.stringify({ name: 'shared-dep', version: '1.2.3', scripts: { postinstall: 'node x.js' } }));
-    writeFileSync(join(nodeModules, '@scope', 'scoped-dep', 'package.json'), JSON.stringify({ name: '@scope/scoped-dep', version: '2.0.0', scripts: { prepare: 'node y.js' } }));
-    writeFileSync(join(nodeModules, 'hdsl-plugin-demo', 'package.json'), JSON.stringify({ name: 'hdsl-plugin-demo', version: '1.0.0', scripts: { prepare: 'node z.js' } }));
+    writeFileSync(
+      join(nodeModules, 'shared-dep', 'package.json'),
+      JSON.stringify({ name: 'shared-dep', version: '1.2.3', scripts: { postinstall: 'node x.js' } }),
+    );
+    // TRANSITIVE dependency only inside the .pnpm virtual store (not top-level).
+    if (options.omitTransitive !== true) {
+      mkdirSync(join(nodeModules, '.pnpm', 'transitive@3.0.0', 'node_modules', 'transitive'), { recursive: true });
+      writeFileSync(
+        join(nodeModules, '.pnpm', 'transitive@3.0.0', 'node_modules', 'transitive', 'package.json'),
+        JSON.stringify({ name: 'transitive', version: '3.0.0', scripts: { prepare: 'node y.js' } }),
+      );
+    }
+    // Scoped direct dependency, no scripts.
+    mkdirSync(join(nodeModules, '.pnpm', '@scope+scoped-dep@2.0.0', 'node_modules', '@scope', 'scoped-dep'), { recursive: true });
+    writeFileSync(
+      join(nodeModules, '.pnpm', '@scope+scoped-dep@2.0.0', 'node_modules', '@scope', 'scoped-dep', 'package.json'),
+      JSON.stringify({ name: '@scope/scoped-dep', version: '2.0.0' }),
+    );
+    if (options.sourcePackage === true) {
+      mkdirSync(join(nodeModules, '.pnpm', 'hdsl-plugin-demo@1.0.0', 'node_modules', 'hdsl-plugin-demo'), { recursive: true });
+      writeFileSync(
+        join(nodeModules, '.pnpm', 'hdsl-plugin-demo@1.0.0', 'node_modules', 'hdsl-plugin-demo', 'package.json'),
+        JSON.stringify({ name: 'hdsl-plugin-demo', version: '1.0.0', scripts: { prepare: 'node z.js' } }),
+      );
+    }
+    return { nodeModules };
+  };
 
+  it('enumerates a transitive dependency that only exists in the .pnpm virtual store', () => {
+    const { nodeModules } = buildTree();
     const scripts = enumerateInstallScriptsFromInstalledTree({
       nodeModulesDirectory: nodeModules,
+      lockText: CLOSURE_LOCK,
       excludePackageName: 'hdsl-plugin-demo',
-      readPackageJsonText: (path) => {
-        try {
-          return readFileSync(path, 'utf8');
-        } catch {
-          return undefined;
-        }
-      },
+      readPackageJsonText,
     });
     expect(scripts).toEqual(
       expect.arrayContaining([
         { packageName: 'shared-dep', packageVersion: '1.2.3', script: 'postinstall', source: 'dependency' },
-        { packageName: '@scope/scoped-dep', packageVersion: '2.0.0', script: 'prepare', source: 'dependency' },
+        { packageName: 'transitive', packageVersion: '3.0.0', script: 'prepare', source: 'dependency' },
       ]),
     );
-    expect(scripts.some((script) => script.packageName === 'hdsl-plugin-demo')).toBe(false);
+    expect(scripts).toHaveLength(2);
+  });
+
+  it('excludes the authorized source package from the dependency set (counted as root)', () => {
+    const { nodeModules } = buildTree({ sourcePackage: true });
+    const lock = `${CLOSURE_LOCK}\n  hdsl-plugin-demo@1.0.0:\n    version: 1.0.0\n`;
+    const scripts = enumerateInstallScriptsFromInstalledTree({
+      nodeModulesDirectory: nodeModules,
+      lockText: lock,
+      excludePackageName: 'hdsl-plugin-demo',
+      readPackageJsonText,
+    });
+    expect(scripts?.some((script) => script.packageName === 'hdsl-plugin-demo')).toBe(false);
+  });
+
+  it('returns undefined (unknown) when a reachable locked package has no readable manifest', () => {
+    const { nodeModules } = buildTree({ omitTransitive: true });
+    const scripts = enumerateInstallScriptsFromInstalledTree({
+      nodeModulesDirectory: nodeModules,
+      lockText: CLOSURE_LOCK,
+      excludePackageName: 'hdsl-plugin-demo',
+      readPackageJsonText,
+    });
+    expect(scripts).toBeUndefined();
   });
 });

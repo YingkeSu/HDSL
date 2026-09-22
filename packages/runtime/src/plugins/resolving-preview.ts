@@ -179,6 +179,7 @@ const enumerateClosureScripts = async (
     }
     return enumerateInstallScriptsFromInstalledTree({
       nodeModulesDirectory: join(staging, 'node_modules'),
+      lockText: input.lockText,
       excludePackageName: input.excludePackageName,
       readPackageJsonText: (path) => {
         try {
