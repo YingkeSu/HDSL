@@ -77,6 +77,9 @@ const TARGET_LOCK = [
   '  shared-dep@1.2.3:',
   '    version: 1.2.3',
   'snapshots:',
+  `  ${PLUGIN_KEY}:`,
+  '    dependencies:',
+  '      shared-dep: 1.2.3',
   '  shared-dep@1.2.3: {}',
 ].join('\n');
 const TARGET_LOCK_SHA = sha256(TARGET_LOCK);

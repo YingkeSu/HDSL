@@ -171,7 +171,8 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
               <div role="alert">
                 <p>
                   <strong>安装期将在你的机器上执行下列包代码，且不受 DSH 或 HDSL 沙箱保护。</strong>
-                  该授权仅绑定本次预览的精确 commit <code>{plan.sourceLock.commitSha}</code> 与下列完整脚本集合；
+                  该授权仅绑定本次预览的精确 commit <code>{plan.sourceLock.commitSha}</code> 与下列
+                  已枚举脚本集合（依据本次预览绑定的依赖闭包；若闭包未能与计划锁定的包集合核对，则为 unknown，不提供授权）。
                   源码、脚本、闭包或执行器一旦变化，旧授权即失效，必须重新预览并重新确认。
                   未授权时默认拒绝执行。
                 </p>

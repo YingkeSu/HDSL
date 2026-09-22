@@ -37,12 +37,27 @@
   `github:YingkeSu/hdsl-s4-gh-fixture#a5438460723df91701aca3464af3a0db7f55eaa0`（drift）。
 - 无 workflow、无分支保护、无 `.npmrc`/`pnpm-workspace.yaml`/凭据；未 publish npm。
 
-## `github:` allowBuilds 键实测（待受控 probe）
+## `github:` allowBuilds 键实测（已完成）
 
-- 由 runtime 子任务在冻结受管 pnpm 11.7.0 上执行**单次有界** probe：默认拒执行运行中捕获 pinned-lock key（codeload/tarball 形态）与 pnpm 阻断提示 depPath 原文；用该 depPath **逐字节**构成单次 `allowBuilds` 键（禁 name-only、禁工作区级/全局列表、禁 `onlyBuiltDependencies`、禁 `dangerouslyAllowAllBuilds`），提交前清除。
-- allow 断言：仅 4 个 `gh-root-*` marker 出现且 `exit 0`；负控：键不精确 + `--ignore-scripts=false` 仍阻断且 marker=0。
-- 无法构造匹配键 ⇒ **blocked**，不放宽为全局放行。
-- 结果（pinned-lock key / depPath / exact key / 出处）：**待实测追加**。
+由 runtime 子任务在冻结受管 pnpm 11.7.0 + 受管 Node 上执行**单次有界** probe（`scripts/research/a4-github-key-probe.mjs`，opt-in，不进默认 CI），受审 PUBLIC fixture `YingkeSu/hdsl-s4-gh-fixture@base cb265920d7b0d0d5f3616417cd4053176b998f80`，**13/13 PASS**：
+
+- default deny：`install --ignore-scripts` exit 0，markers=0。
+- 阻断提示 depPath 原文：`hdsl-s4-gh-fixture-root@https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80`。
+- **pinned-lock key 与 depPath 逐字节相同**（`keyEqualsLock=true`）。
+- 无 allow 时 `--ignore-scripts=false`：`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED` exit 1，markers=0。
+- 用该 depPath 逐字节构造单次 `allowBuilds`：exit 0，**恰好 4 个 `gh-root-*` marker**（preinstall/install/postinstall/prepare），无多余。
+- 负控：name-only 错 key ⇒ 阻断 exit 1、markers=0；用 base key 套 drift commit（`a5438460…`）⇒ 阻断 exit 1、markers=0。
+- 未放宽 `blockExoticSubdeps`；未用工作区级/全局 `allowBuilds` 列表、`onlyBuiltDependencies`、`dangerouslyAllowAllBuilds`。probe 结束时其临时 workspace 被移除（**这是 probe 自身的清理，不等价于生产保证**）；生产端口的“授权只在单次安装期间存在、发布前声明/config 无持久授权”由默认 CI 的 `tests/plugins/apply-authorization.test.ts` 与 `tests/core/change-apply-authorized.test.ts` 单独断言（发布前 `pnpm-workspace.yaml` 不存在）。
+
+**结论**：生产 `github:` shorthand 的 `allowBuilds` depPath == pinned-lock key（codeload tarball 形态），可作为最终 exact key；本地 `git+file://` 结论与之分栏。
+
+### exact key（最终 MANIFEST）
+
+```text
+hdsl-s4-gh-fixture-root@https://codeload.github.com/YingkeSu/hdsl-s4-gh-fixture/tar.gz/cb265920d7b0d0d5f3616417cd4053176b998f80
+```
+
+非阻塞：默认分支 `main` 指向 `drift`（`a5438460…`），与冻结批准一致；该 probe 只针对 `base` 的 deny/allow，drift 由负控（base key 套 drift commit 应阻断）覆盖。
 
 ## 边界
 

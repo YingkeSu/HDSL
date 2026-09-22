@@ -1,6 +1,6 @@
 # 显式构建授权（#78 S4）验证边界
 
-状态：**实现于本片（core/contracts/desktop 侧）**；runtime 侧执行复核与真实受控链证据由独立 runtime 子任务提供，尚未在本集成完成时点对全部 opt-in 证据复跑。本文只固定本片的行为边界、错误映射与证据分层，不把未跑的检查写成已通过。
+状态：**实现于本片（core/contracts/desktop + 已整合 runtime）**；runtime 侧执行复核与真实受控链证据由独立 runtime 子任务提供。本文固定本片的行为边界、错误映射与证据分层；未跑的检查不写成已通过。
 
 ## 目标与默认拒执行边界
 
@@ -43,7 +43,7 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 
 ## UI 口径（renderer）
 
-- 预览展示精确 commit、完整脚本清单（含 `root`/`dependency` 来源）。
+- 预览展示精确 commit、已枚举脚本清单（含 `root`/`dependency` 来源；依据计划锁定的依赖闭包，未能完整核对时为 `unknown`，不提供授权）。
 - 授权前必须勾选明确确认，文案包含“安装期将在你的机器上执行该包代码，且不受 DSH 或 HDSL 沙箱保护”。
 - `unknown` 集合：只显示“无法完整枚举……不能授权”，不提供授权按钮。
 - 未确认时点击安装不会发送 `buildAuthorization`；确认后发送的授权**只从该计划自身的 commit 与脚本集合派生**，UI 不能放宽。
@@ -52,8 +52,10 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 ## 已知机制限制（受控、不绕过）
 
 - **git 插件含 git 子依赖不受支持**：受管 pnpm 11.7.0 默认 `blockExoticSubdeps` 会在“插件本身以 git 依赖安装、且它又依赖另一个 git 包”时以 `ERR_PNPM_EXOTIC_SUBDEP` 受控拒绝（受控实测原文：`Exotic dependency "<pkg>" (resolved via git-repository) is not allowed in subdependencies when blockExoticSubdeps is enabled`）。产品裁决为**保留该默认策略**，不为测试关闭或改全局设置；此类来源的预览/失败文案须说明“该来源包含受控不支持的 git 子依赖”，不得说成 S4 授权问题或静默绕过。注册表子依赖不受影响。
-- **预览侧闭包枚举**：生产预览端口在解析 target lock 后，以受管 executor 运行 `install --frozen-lockfile --ignore-scripts`（默认拒执行）物化到隔离 staging，再只读枚举 `node_modules` 中的 lifecycle 脚本（排除源包自身），合并为 root + dependency 完整集合；staging 清理、不写 `allowBuilds`、不执行任何脚本。枚举失败则保持 `unknown`、不可授权。
-- **`github:` shorthand 的 allowBuilds 键未实测**：`git+` 形态已逐字节验证；`github:` shorthand 的 pinned-lock key（codeload tarball URL）是否等于 pnpm build depPath 需真实受控 GitHub fixture 实证（见 [最小发布方案](plugin-build-authorization-github-fixture-proposal.md)），不等时 fail closed（不得改用裸包名/全局放行）。
+- **预览侧闭包枚举（以 pinned lock 可达身份为权威）**：生产预览端口在解析 target lock 后，以受管 executor 运行 `install --frozen-lockfile --ignore-scripts`（默认拒执行）物化到隔离 staging；再以 `resolveLockClosure(lockText).reachable` 的**可达精确身份**为权威集合，从顶层链接与 `.pnpm` 虚拟存储（按 realpath 去重）读取每个可达包的 manifest，逐 `(name, version)` **严格计数相等**；源包自身按 `root` 排除。任一可达包缺失/多余/不可解析、同 `(name,version)` 对应两个不同 depPath、符号链接逃逸或超界 ⇒ 保持 `unknown`（不可授权）。staging 清理、不写 `allowBuilds`、不执行任何脚本。“扫完目录”不等于完整枚举。
+- **依赖条目陈述边界**：`BuildScriptEntry` 只带 `(packageName, packageVersion, script, source)`，不含 commit/tarball key。对同版本不同 commit/peer 的依赖，清单陈述弱于 `root`（root 绑定 commit）；安全由 frozen-lockfile 完整性 + 严格计数 + 绑定歧义拒绝兜住，不放行。
+- **可达但未物料化**：`resolveLockClosure` 会跟随 optional/peer 边，平台不适用的可选包可能“可达但未物料化” ⇒ 计数不符 ⇒ `unknown`（多拒，fail-closed），属能力限制而非放行。
+- **`github:` shorthand 的 `allowBuilds` 键已实测**：在冻结受管 pnpm 11.7.0 上，pinned-lock key（codeload tarball URL）与 pnpm 要求的 build depPath **逐字节相等**；exact key 见 [发布/实测记录](plugin-build-authorization-github-fixture-publication.md)。不等时应 fail closed（不得改用裸包名/全局放行）。
 
 ## 与其它轴的正交性
 
@@ -67,12 +69,14 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 | 契约 fixture / core 守卫 | authorize/deny/commit 漂移/集合不等/`unknown`/none-detected 夹带授权的单测；假执行器不执行任何脚本 | 本片默认 CI |
 | renderer | 勾选前不发送授权、勾选后发送精确绑定、输入变化重置确认、`unknown` 不提供按钮 | 本片默认 CI |
 | runtime 执行复核 | 受控 executor seam 断言两阶段流程（默认拒执行物化 → 只读枚举 → 单次精确 `allowBuilds` + `--ignore-scripts=false`）、发布前清除 `allowBuilds`、拒绝路径不执行 | 本片默认 CI（`tests/plugins/*` 与 `tests/core/change-apply-authorized.test.ts`，假执行器，不执行任何脚本） |
-| opt-in 真实受控 node 链 | 复用/扩展 S2 sentinel（外部 marker）证明 deny=0 marker；精确授权下**恰好**授权集合产生 marker；漂移/子集拒绝 | 受控 fixture v2 已通过独立静态审（30 APPROVED，归档 `7f206792…`）；runtime 子任务在冻结受管 pnpm 11.7.0 上跑 `scripts/research/a4-build-authorization-probe.mjs` 16/16（deny=0 marker；离线枚举 root 4 + dep 4；allow 8 hook 实际触发；子集/漂移拒绝；仅精确 `allowBuilds`）。本整合分支未复跑该 probe |
+| opt-in 真实受控 node 链（git+file://，v2 fixture） | 外部 marker 证明 deny=0 marker；精确授权下**恰好**授权集合产生 marker；漂移/子集拒绝 | 受控 fixture v2 已通过独立静态审（30 APPROVED，归档 `7f206792…`）；runtime 子任务在冻结受管 pnpm 11.7.0 上跑 `scripts/research/a4-build-authorization-probe.mjs` 16/16（deny=0；枚举 root 4 + dep 4；allow 8 hook 实际触发；子集/漂移拒绝）。本整合分支未复跑 |
+| opt-in 真实 `.pnpm` 传递布局 | 本地最小 registry + 受管 pnpm 生成 `profile→plugin→传递依赖(.pnpm)` 真实树；默认拒执行 marker=0；生产枚举函数读到传递包 4 hook；删真实 manifest ⇒ `unknown` | `scripts/research/a4-pnpm-transitive-layout-probe.mjs` 7/7（受管 pnpm 11.7.0；未放宽 `blockExoticSubdeps`；不执行脚本）。未 publish；手工 mkdir 的 `.pnpm` 用例仅为单元逻辑证据 |
+| opt-in 生产 GitHub 外部键 | 真实 `github:` shorthand 的 pinned-lock key vs depPath 逐字节、exact allow 4 marker、错 key 零 marker | `scripts/research/a4-github-key-probe.mjs` 13/13（受审 PUBLIC fixture `YingkeSu/hdsl-s4-gh-fixture@cb265920…`）；30 只读复核接受为外部键形态证据；真实 HDSL 锁→key 推导有默认 CI 回归 |
 | opt-in 真实 desktop | 本地受控 git+file:// 传输（仅测试 adapter）走完整预览→授权→apply→重启 | **未跑** |
 | 生产 GitHub 全链 | 受控公开 GitHub 脚本 fixture 的真实 HTTPS 全链 | **未跑**，需先给最小发布方案与精确审查内容 |
 
 - `executor.executedInstallScripts` 是观测报告，**不作为**默认拒执行或“仅执行授权集合”的正控证据；权威证据是受控链上的外部 marker 正控/负控。
 - **`UNAUTHORIZED_SCRIPT_EXECUTION` 尚未接线**：受管 pnpm 无可靠的进程内“实际执行集合”信号，因此当前执行期保证是**构造性的**——“默认拒执行 + 仅写精确 `allowBuilds` 键”。若无法获得可靠的观测信号，不得臆造该码的触发证据；该码保留给未来可用的确定性观测。
-- **`allowBuilds` 键来源**：目前取 plan 绑定 pinned lock 的 `packages`/`snapshots` key（`git+file://`/`git+` 形态已实测与 pnpm depPath 逐字节相等）；`github:` shorthand 的 lock key 是否等于 pnpm 的 build depPath **未实测**，不等时 0/多匹配会 fail closed。生产 GitHub 脚本源的 allow 需真实受控 GitHub fixture 才能闭环。
+- **`allowBuilds` 键来源**：取 plan 绑定 pinned lock 的 `packages`/`snapshots` key；`git+`/`git+file://` 与生产 `github:` shorthand（codeload tarball）均已实测与 pnpm depPath 逐字节相等；注册表 `name@version` 在 lock 无 `version` 字段时从 key 后缀回退（URL 后缀不误判），0/多匹配 fail closed。
 - 本地 `git+file://` 仅测试传输，**不等于**生产 GitHub 源全链；桌面证据必须分栏。
 - 真实受控链与桌面链未跑完前，不得宣称“授权安装已端到端验收”。
