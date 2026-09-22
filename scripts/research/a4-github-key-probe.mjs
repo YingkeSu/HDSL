@@ -30,8 +30,8 @@ if (NODE === undefined || PNPM === undefined || !existsSync(NODE) || !existsSync
   process.exit(0);
 }
 const REPO = 'YingkeSu/hdsl-s4-gh-fixture';
-const BASE_COMMIT = 'cb265920d7b0d0d5f3616417cd4053176b998f80';
-const DRIFT_COMMIT = 'a5438460723df91701aca3464af3a0db7f55eaa0';
+const BASE_COMMIT = '71f9a972d068cb00ffcfd085f631ff3bc2c23c03';
+const DRIFT_COMMIT = 'a5d3e7e2597cbe3736bab3abf81148637f74faea';
 const PACKAGE_NAME = 'hdsl-s4-gh-fixture-root';
 const AUTHORIZED_MARKERS = ['gh-root-preinstall', 'gh-root-install', 'gh-root-postinstall', 'gh-root-prepare'];
 
@@ -46,15 +46,26 @@ const keep = process.env['KEEP'] === '1';
 console.log(`work=${work}`);
 const profile = join(work, 'profile');
 const home = join(work, 'home');
-const markers = join(work, 'markers');
+// The fixture marker path is derived from the EXISTING TMPDIR environment (no
+// S4_MARKER_DIR injection): `<TMPDIR>/hdsl-s4-fixture-markers/`. This matches the
+// real desktop apply path (`<env home>/.tmp/hdsl-s4-fixture-markers`).
+const markerTmpRoot = join(home, '.tmp');
+const markers = join(markerTmpRoot, 'hdsl-s4-fixture-markers');
 mkdirSync(profile, { recursive: true });
-mkdirSync(home, { recursive: true });
+mkdirSync(markerTmpRoot, { recursive: true });
 mkdirSync(markers, { recursive: true });
+const injectMarkerDir = process.env['HDSL_S4_INJECT_MARKER_DIR'] === '1';
 
 const runPnpm = (args) => {
   const result = spawnSync(NODE, [PNPM, ...args], {
     cwd: profile,
-    env: { HOME: home, DSH_HOME: home, TMPDIR: join(home, '.tmp'), PATH: `${dirname(NODE)}:/usr/bin:/bin`, S4_MARKER_DIR: markers },
+    env: {
+      HOME: home,
+      DSH_HOME: home,
+      TMPDIR: markerTmpRoot,
+      PATH: `${dirname(NODE)}:/usr/bin:/bin`,
+      ...(injectMarkerDir ? { S4_MARKER_DIR: markers } : {}),
+    },
     encoding: 'utf8',
     maxBuffer: 32 * 1024 * 1024,
     timeout: 5 * 60_000,
@@ -98,6 +109,7 @@ const clearAllow = () => rmSync(join(profile, 'pnpm-workspace.yaml'), { force: t
 
 try {
   // --- base commit: default deny ---
+  check('marker directory is the existing-TMPDIR path, not an injected S4_MARKER_DIR', !injectMarkerDir && markers === join(markerTmpRoot, 'hdsl-s4-fixture-markers'));
   writeProfile(BASE_COMMIT);
   const deny = runPnpm(['install', '--ignore-scripts']);
   check('github: base default-deny materialisation exits 0', deny.status === 0, `status=${String(deny.status)}`);
