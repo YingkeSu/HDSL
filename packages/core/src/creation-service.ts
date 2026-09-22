@@ -28,6 +28,7 @@ import {
   type CreateEnvironmentCommand,
   type EnvironmentState,
   type EnvironmentSummary,
+  type GenerationSummary,
   type HostPlatform,
   type OperationRef,
   type OperationSnapshot,
@@ -40,6 +41,7 @@ import { join } from 'node:path';
 import {
   ensureDirectory,
   isSpaceError,
+  readDirectoryNames,
   readJsonFile,
   removePath,
   tryReadJsonFile,
@@ -48,6 +50,7 @@ import {
 import { newEnvironmentId, newGenerationId, newOperationId, newTransactionId } from './ids.js';
 import {
   generationPaths,
+  generationsDirectory,
   ensureLayout,
   resolveLayout,
   type AppDataLayout,
@@ -395,6 +398,46 @@ export class EnvironmentService {
     return record === undefined
       ? notFound('environment was not found')
       : portOk(toEnvironmentSummary(record));
+  }
+
+  /**
+   * Read-only generation summaries for an environment (ADR 0005 D4/D6). Reads
+   * only durable generation records; it never rebuilds identity from the live
+   * profile (ADR 0006). Unknown/malformed records are skipped, not fabricated.
+   */
+  listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]> {
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    const directory = generationsDirectory(this.#layout, environmentId);
+    const summaries: GenerationSummary[] = [];
+    for (const name of readDirectoryNames(directory)) {
+      const record = tryReadJsonFile<{
+        id?: string;
+        compositionDigest?: string;
+        createdAt?: string;
+        profileName?: string;
+      }>(join(directory, name, 'generation.json'));
+      if (
+        record === undefined ||
+        typeof record.id !== 'string' ||
+        typeof record.compositionDigest !== 'string' ||
+        typeof record.createdAt !== 'string'
+      ) {
+        continue;
+      }
+      summaries.push({
+        generationId: record.id,
+        environmentId,
+        compositionDigest: record.compositionDigest,
+        profileName: typeof record.profileName === 'string' ? record.profileName : null,
+        active: environment.activeGenerationId === record.id,
+        createdAt: record.createdAt,
+      });
+    }
+    summaries.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    return portOk(summaries);
   }
 
   findOperation(operationId: string): PortOutcome<OperationSnapshot> {

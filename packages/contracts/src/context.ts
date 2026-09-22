@@ -17,6 +17,7 @@ import type { HostPlatform } from './platform.js';
 import type {
   EnvironmentSummary,
   ExportResult,
+  GenerationSummary,
   OpenWebUIResult,
   OperationRef,
   OperationSnapshot,
@@ -156,6 +157,14 @@ export interface ContractPort {
   searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef>;
   /** Starts a cancellable, global GitHub read-only repository inspection. */
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Read-only generation summaries for an environment (ADR 0005 D4). Returns
+   * immediately; it carries no `requestId` and is never deduplicated. It reads
+   * only the durable generation records; it never rebuilds identity from the
+   * live profile (ADR 0006).
+   */
+  listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]>;
 
   /** Subscription bookkeeping the contract delegates to the session registry. */
   readIdempotency(requestId: string): IdempotencyRecord | undefined;

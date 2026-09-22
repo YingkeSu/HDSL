@@ -511,3 +511,6 @@ export const generationSummarySchema = sObject({
   createdAt: sString({ minLength: 1, maxLength: 64 }),
 });
 export type GenerationSummary = Infer<typeof generationSummarySchema>;
+
+/** Read-only list returned by `generations.list` (bounded by generations). */
+export const generationSummaryListSchema = sArray(generationSummarySchema, { maxLength: 64 });

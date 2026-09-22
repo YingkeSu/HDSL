@@ -42,6 +42,7 @@ import { API_VERSION, isWellFormedApiVersion } from './version.js';
 import type { ContractPort, StoredOutcome } from './context.js';
 import {
   environmentSummaryListSchema,
+  generationSummaryListSchema,
   exportResultSchema,
   openWebUIResultSchema,
   operationRefSchema,
@@ -265,6 +266,20 @@ const execute = (
             response: contractOk(
               API_VERSION,
               validatePortValue(environmentSummaryListSchema, outcome.value, 'environments.list'),
+            ),
+            executed: true,
+          }
+        : executedFailure(outcome);
+    }
+    case 'generations.list': {
+      const outcome = runtime.port.listGenerations(
+        (input as MethodInputs['generations.list']).environmentId,
+      );
+      return outcome.ok
+        ? {
+            response: contractOk(
+              API_VERSION,
+              validatePortValue(generationSummaryListSchema, outcome.value, 'generations.list'),
             ),
             executed: true,
           }

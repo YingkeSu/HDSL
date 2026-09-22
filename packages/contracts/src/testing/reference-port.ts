@@ -24,6 +24,7 @@ import { portFail, portOk } from '../context.js';
 import type {
   EnvironmentSummary,
   ExportResult,
+  GenerationSummary,
   OpenWebUIResult,
   OperationKind,
   OperationRef,
@@ -109,6 +110,10 @@ export class ReferenceContractPort implements ContractPort {
 
   listEnvironments(): PortOutcome<readonly EnvironmentSummary[]> {
     return portOk([...this.#environments.values()]);
+  }
+
+  listGenerations(_environmentId: string): PortOutcome<readonly GenerationSummary[]> {
+    return portOk([]);
   }
 
   findEnvironment(environmentId: string): PortOutcome<EnvironmentSummary> {

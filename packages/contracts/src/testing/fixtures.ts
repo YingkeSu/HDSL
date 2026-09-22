@@ -1072,7 +1072,24 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     }),
     expected: 'ok',
     seed: PLUGIN_NOT_FOUND_SEED,
+  },  // generations.list (read-only, no requestId)
+  {
+    id: 'generations-list-legal',
+    method: 'generations.list',
+    kind: 'legal',
+    description: 'reads generation summaries for a well-formed environment id',
+    request: request('generations.list', { environmentId: 'env-0000000000000001' }),
+    expected: 'ok',
   },
+  {
+    id: 'generations-list-missing-environment',
+    method: 'generations.list',
+    kind: 'illegal',
+    description: 'a generations.list request without environmentId is rejected',
+    request: request('generations.list', {}),
+    expected: 'INVALID_INPUT',
+  },
+
 ];
 
 export const ALL_CONTRACT_FIXTURES: readonly ContractFixture[] = [

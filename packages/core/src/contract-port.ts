@@ -13,6 +13,7 @@ import {
   type CreateEnvironmentCommand,
   type EnvironmentCommand,
   type EnvironmentSummary,
+  type GenerationSummary,
   type HostPlatform,
   type OpenWebUIResult,
   type OperationCommand,
@@ -60,6 +61,10 @@ export const createEnvironmentContractPort = (
 
     listEnvironments(): PortOutcome<readonly EnvironmentSummary[]> {
       return service.listEnvironments();
+    },
+
+    listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]> {
+      return service.listGenerations(environmentId);
     },
 
     findEnvironment(environmentId: string): PortOutcome<EnvironmentSummary> {

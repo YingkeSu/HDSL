@@ -811,3 +811,41 @@ describe('generation profile init adapter seam (A2)', () => {
     await harness.managed.close();
   });
 });
+
+describe('generations.list (read-only generation surface)', () => {
+  it('lists durable generation summaries, marks the active one, and rejects unknown environments', async () => {
+    const harness = await buildHarness();
+    const operationId = await createEnvironment(harness, combinationA.id, 'req-gen-list');
+    const snapshot = await harness.managed.waitForOperation(operationId, { timeoutMs: 15_000 });
+    expect(snapshot.status).toBe('succeeded');
+
+    const listed = harness.managed.service.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined || environment.activeGenerationId === null) {
+      return;
+    }
+
+    const generations = harness.managed.service.listGenerations(environment.id);
+    expect(generations.ok).toBe(true);
+    if (generations.ok) {
+      expect(generations.value).toHaveLength(1);
+      expect(generations.value[0]?.generationId).toBe(environment.activeGenerationId);
+      expect(generations.value[0]?.active).toBe(true);
+      expect(generations.value[0]?.profileName).toBeNull();
+      expect(generations.value[0]?.compositionDigest).toBe(environment.compositionDigest);
+    }
+
+    const unknown = harness.managed.service.listGenerations('env-ffffffffffffffff');
+    expect(unknown.ok).toBe(false);
+    if (!unknown.ok) {
+      expect(unknown.code).toBe('NOT_FOUND');
+    }
+
+    await harness.managed.close();
+  });
+});
