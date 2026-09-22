@@ -202,12 +202,14 @@ const build = () => {
       idempotency.write(requestId, record);
     },
     applyChange: (command: ApplyChangeCommand) => service.applyChange(command),
+    findOperation: (operationId: string) => service.findOperation(operationId),
   } as unknown as ContractPort;
   const contract = createContractRuntime({ port });
   const dispatch = (input: unknown): ContractResponse<unknown> =>
     contract.dispatch({ apiVersion: API_VERSION, method: 'changes.apply', input });
   return {
     environments,
+    plans,
     operations,
     idempotency,
     dispatch,
@@ -231,13 +233,17 @@ describe('changes.apply retryable failure: same-id replay vs new-id retry (real 
   it('retryable DOWNLOAD_FAILED: same requestId replays the terminal without repeating the effect; new id retries to success', async () => {
     const h = build();
     const first = h.dispatch(applyInput('req-install-replay'));
-    if (!first.ok) { console.log('FIRST_ERR=' + JSON.stringify(first)); return; }
+    // Hard assertion first: a failed dispatch must turn this test RED, never be
+    // swallowed by a log-and-return early exit (the previous vacuous-pass bug).
     expect(first.ok).toBe(true);
+    if (!first.ok) throw new Error('changes.apply did not start: ' + JSON.stringify(first));
     const opId = (first.value as { operationId: string }).operationId;
     const terminal = await waitTerminal(h.operations, opId);
     expect(terminal.status).toBe('failed');
     expect(terminal.error?.code).toBe('DOWNLOAD_FAILED');
     expect(h.environments.read(ENV)?.activeGenerationId).toBe(OLD_GEN);
+    expect(h.plans.read(PLAN)?.consumedBy).toBeNull(); // no commit: plan untouched
+    expect(h.idempotency.read('req-install-replay')?.state).toBe('completed'); // ledger entry exists
     expect(h.stageCalls()).toBe(1);
 
     // Same requestId replay: original terminal is returned, effect NOT repeated.
@@ -245,15 +251,19 @@ describe('changes.apply retryable failure: same-id replay vs new-id retry (real 
     expect(replay).toEqual(first);
     expect(h.stageCalls()).toBe(1);
     expect(h.operations.read(opId)?.status).toBe('failed');
+    expect(h.environments.read(ENV)?.activeGenerationId).toBe(OLD_GEN);
 
     // A NEW requestId is required to retry, and it succeeds.
     const retry = h.dispatch(applyInput('req-install-retry'));
     expect(retry.ok).toBe(true);
-    if (!retry.ok) return;
+    if (!retry.ok) throw new Error('retry did not start: ' + JSON.stringify(retry));
     const retryOpId = (retry.value as { operationId: string }).operationId;
+    expect(retryOpId).not.toBe(opId);
     const retryTerminal = await waitTerminal(h.operations, retryOpId);
     expect(retryTerminal.status).toBe('succeeded');
     expect(h.stageCalls()).toBe(2);
+    expect(h.plans.read(PLAN)?.consumedBy).toBe('req-install-retry');
+    expect(h.idempotency.read('req-install-retry')?.state).toBe('completed');
     expect(h.environments.read(ENV)?.activeGenerationId).not.toBe(OLD_GEN);
   });
 });

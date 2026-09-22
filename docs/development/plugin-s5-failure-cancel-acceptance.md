@@ -1,6 +1,6 @@
 # S5（#79）失败/取消/网络 + 幂等 验收矩阵（QA owner=33）
 
-- 基线：main `18a5d65197a25e95914e8bd23d54d756d6177d4b`（= S4 #90 merge）。自有 checkout `/tmp/qa33/checkout`；**本片只读产品、仅新增 QA 测试/报告**。
+- 基线：main `18a5d65197a25e95914e8bd23d54d756d6177d4b`（= S4 #90 merge）；本 PR 已并入 main `0e45186e30a86ace84ac7c6e5b20223c86e0258d`（#96 / #94 合并）。自有 checkout `/tmp/qa33/checkout`；**本片只读产品、仅新增 QA 测试/报告**。
 - 方法：复用既有确定性/真实证据优先；风险驱动补缺；只新增默认 CI 确定性测试；真实 desktop 仅必要时自有副本有界执行。事务边界（SIGKILL/recover/journal 对账）由 30 独立审计，本文件不重复。
 - 网络面分栏：**GitHub API**（search/preview/install 解析）｜**codeload/registry 取包**（install/remove）｜**受管 pnpm**。不把不同面的失败混称。
 
@@ -23,12 +23,12 @@
 | remove | codeload/registry **连接前**失败 → NETWORK_UNAVAILABLE（retryable） | **PASS** | `tests/core/removal-apply.test.ts`、`tests/plugins/removal-port.test.ts` |
 | remove | codeload/registry **传输/完整性**失败 → DOWNLOAD_FAILED（未提交） | **PASS** | removal-apply「registry transfer/integrity failure → DOWNLOAD_FAILED and no commit」 |
 | remove | 不可识别失败 → 脱敏、非重试 INTERNAL_ERROR | **PASS** | removal-apply「unidentifiable install failure → sanitized non-retryable INTERNAL_ERROR」 |
-| **install** | 上述三类网络/传输分类在**插件安装**侧是否成立 | **未验证 / 能力缺口（不记 PASS）** | `apply-port.ts` 对所有托管安装失败一律非重试 `INTERNAL_ERROR`（`:215`/`:273`/`:285`）；`classifyManagedInstallFailure` 仅 `removal-port` 使用；跟踪 **issue #94**（产品修复后由 QA 独立验证）。注：`change-apply-*` 中的 `DOWNLOAD_FAILED` 为**假 port 注入**，**不是**真实安装适配器分类证据 |
+| **install** | 上述三类网络/传输分类在**插件安装**侧成立（三阶段复用同一分类） | **PASS（#94 已修并合并）** | 修复 PR #96，**merge SHA `0e45186e30a86ace84ac7c6e5b20223c86e0258d`**（#94 已关闭）。证据：`tests/plugins/apply-install-failure-classification.test.ts`（真实 `createPluginApplyPort`、仅注入 executor；3 阶段 × 9 类，逐例断言 code + 无 stderr/canary 泄漏）＋ `tests/core/change-apply-authorized.test.ts` 新用例（真 core+runtime port、注入 executor 非零 ⇒ op failed/`NETWORK_UNAVAILABLE`、旧代/revision/plan 不变、staged 清理、新 id 重试成功）。QA 独立复核 @`d85d2e72`：作者用例 32 passed、removal 回归 27 passed、key-negative 探针（403/429/unknown → 非重试 `INTERNAL_ERROR`，无 `RATE_LIMITED`/`retryAfter`，无 canary/主机名泄漏）3 passed；30 核对 `d85d2e72…0e45186e` 逐字节空 diff |
 | remove | preview/apply 取消（preview 终态无 plan；pre-commit 取消旧代不变） | **PASS** | removal-apply「cancels a removal preview…」「cancels a removal apply before the commit point…」 |
 | remove | **提交窗口内取消**（同源 `cancelOperation`） | **PASS（#92 已修）** | 与 install 同代码路径；**已合并 `3457769f`** 且 QA 已独立验证（`removal-apply` 窗口用例） |
 | 幂等 | 同 requestId 重放返原记录、不重复副作用 | **PASS（30 边界审计范围；本片只在网络/取消面引用）** | `tests/core/apply-idempotency-recovery.test.ts`、`tests/contracts/idempotency.test.ts` |
 | 幂等 | `retryable` 失败用新 requestId 重试成功（remove） | **PASS** | removal-apply「lets a new requestId retry a pre-commit removal apply failure to success」 |
-| 幂等 | **install apply**：真 dispatcher + 真 core，受控 `DOWNLOAD_FAILED` → 同 requestId 重放原终态且**不重复副作用** → **新 id 才重试成功** | **PASS（本片新增）** | `tests/core/change-apply-retryable-replay.test.ts`（`createContractRuntime` + 真 `ChangeApplyService`；stage 调用计数 1→1→2） |
+| 幂等 | **install apply**：真 dispatcher + 真 core，受控 `DOWNLOAD_FAILED` → 同 requestId 重放原终态且**不重复副作用** → **新 id 才重试成功** | **PASS（本片新增；修正后重新验证）** | `tests/core/change-apply-retryable-replay.test.ts`（`createContractRuntime` + 真 `ChangeApplyService`；harness 补 `findOperation`；`expect(first.ok)` **硬断言**、无吞失败早退；`expect(replay).toEqual(first)`、stage 计数 1→1→2、op 终态 `DOWNLOAD_FAILED`、旧代/revision/plan（`consumedBy=null`→`req-install-retry`）/ledger（`completed`）精确断言）。**更正**：该行早前曾以**空洞早退**版本记 PASS，已**撤回**（30 独立复现）；临时移除 `findOperation` 与破坏 ledger 重放的两次红检确认修正后会 **FAIL** |
 | 输出/秘密 | 受控错误不泄漏 canary/路径 | **PASS** | `tests/core/plugin-operation-canary.test.ts`、`tests/contracts/plugin-output.test.ts` |
 
 ## 本片新增测试（默认 CI、确定性、无产品改动）
@@ -45,7 +45,7 @@
 
 ## 实质缺口 / 待编排裁决（未记 PASS）
 
-**已修缺陷**：`#92`（提交窗口内取消/恢复分叉）由 PR #93 修复并 merge（`3457769f`）；旧红→新绿见上表。
+**已修缺陷**：`#92`（提交窗口内取消/恢复分叉）由 PR #93 修复并 merge（`3457769f`）；旧红→新绿见上表。`#94`（install 侧托管安装失败未复用网络/传输分类）由 PR #96 修复并 merge（`0e45186e`），QA 独立复核 @`d85d2e72` 并已记入上表 install 行。
 
 1. **403 区分能力（F1，已裁决 → 跟踪 issue #95）**：`packages/runtime/src/plugins/github.ts:300` 把**任意** `403||429` 映射为 `RATE_LIMITED`（retryable）。可识别限流（带 `x-ratelimit-reset`/`retry-after`）有执行证据；**无 rate-limit 头部的 403/429 负控已存在且已执行**（`tests/plugins/github-403-precision.test.ts`：D11 现状 `RATE_LIMITED` 且**不臆造** `retryAfterSeconds`）。**编排已裁决**：按 D11 现状验证、**不改 D11**；剩余**权限/认证类 403 与限流 403 不可区分**的精度差异转 **issue #95** 跟踪（契约文本 vs 行为精度，由契约 owner/编排评估）。
 2. **pnpm/registry 429 不可识别**：受管 pnpm 取包失败分类（`removal-port`/`classifyManagedInstallFailure`）只产出 `NETWORK_UNAVAILABLE`/`DOWNLOAD_FAILED`/`INTERNAL_ERROR`，**无可靠 429 token，不臆造**（与 34/35 结论一致）⇒ 矩阵中「install/remove 429」**未验证为 RATE_LIMITED**，记为**能力限制/AC 覆盖差异**。
@@ -58,7 +58,7 @@
 
 ## 覆盖边界（记录，不自动扩产品范围）
 
-- **journal `planned`/`staged` 恢复**：现有 **pre-pointer 边界映射** = `pauseAt/failAt: 'verified'`（提交点前）→ `recover()` 判 rolled-back、删 stage、旧代可用、plan 未消费；真实 `SIGKILL` 证据见 `tests/core/apply-window-kill.test.ts`，守卫/回滚见 `tests/core/change-apply-guards.test.ts`。**显式的 `planned`/`staged` 单独注入未在本片执行**，记为覆盖边界（不扩产品范围）。
+- **journal `planned`/`staged` 恢复**：现有 **pre-pointer 边界映射** = `pauseAt/failAt: 'verified'`（提交点前）→ `recover()` 判 rolled-back、旧代可用、plan 未消费；**删 stage 属代码路径** `#rollbackJournal`→`removePath`（install 侧由 `tests/core/change-apply-authorized.test.ts` 新用例断言 staged 代已清理；remove 侧由 `tests/core/removal-apply.test.ts:803` 断言只剩旧代），`tests/core/change-apply-guards.test.ts` 断言旧代/revision/plan 不变。真实 `SIGKILL` 证据见 `tests/core/apply-window-kill.test.ts`。**显式的 `planned`/`staged` 单独注入未在本片执行**，记为覆盖边界（不扩产品范围）。
 - **损坏/不可解析 journal**：属**扩展健壮性**，非 S5 明列 AC；记录为覆盖边界，不自动加入产品范围。
 - **recovery 自身中断**：`ChangeFaults` 的 `pauseAt`/`failAt`（planned/staged/verified/committed/finalized）seam 已存在，**可定向复用**；是否留下提交状态分叉**未执行**，记为覆盖边界（若缺 seam 则只报告、不改产品）。
 - **remove 提交窗口内取消**：与 install 同源（缺陷 #92）；**已随 #93 合并（`3457769f`）并由 QA 独立验证**（install 侧 4 项含四元账本 + `removal-apply` 窗口用例）。
