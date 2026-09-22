@@ -29,6 +29,11 @@ const noopActions: RendererActions = {
   exportDiagnostics: () => undefined,
   cancelTrackedOperation: () => undefined,
   retryTracking: () => undefined,
+  setPluginQuery: () => undefined,
+  resetPluginQuery: () => undefined,
+  runPluginSearch: () => undefined,
+  selectPlugin: () => undefined,
+  cancelPluginSearch: () => undefined,
 };
 
 const environment = (
@@ -134,6 +139,7 @@ describe('AppView state matrix', () => {
           sequence: 3,
           progress: 40,
           environmentId: 'env-1',
+          output: null,
           error: null,
         },
       }),
@@ -154,6 +160,7 @@ describe('AppView state matrix', () => {
           sequence: 1,
           progress: null,
           environmentId: 'env-1',
+          output: null,
           error: null,
         },
       }),
@@ -174,6 +181,7 @@ describe('AppView state matrix', () => {
           sequence: 4,
           progress: null,
           environmentId: 'env-1',
+          output: null,
           error: { code: 'START_TIMEOUT', message: 'the managed process did not become ready in time', retryable: true },
         },
       }),
@@ -194,6 +202,7 @@ describe('AppView state matrix', () => {
           sequence: 1,
           progress: null,
           environmentId: 'env-1',
+          output: null,
           error: null,
         },
         trackingError: {
@@ -249,6 +258,7 @@ describe('AppView state matrix', () => {
           sequence: 1,
           progress: null,
           environmentId: 'env-1',
+          output: null,
           error: null,
         },
         trackingError: {
