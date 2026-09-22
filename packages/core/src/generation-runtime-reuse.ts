@@ -179,6 +179,19 @@ export const reuseGenerationRuntime = (
     return linkedBack;
   }
 
+  // A generation created before runtime identity recording cannot be verified;
+  // refuse with an actionable message (normal start is unaffected) instead of a
+  // generic error, and never silently accept it.
+  const manifestRecord = manifest.value as { node?: { treeDigest?: unknown }; dsh?: { treeDigest?: unknown } };
+  if (
+    typeof manifestRecord.node?.treeDigest !== 'string' ||
+    typeof manifestRecord.dsh?.treeDigest !== 'string'
+  ) {
+    return portFail(
+      'INTERNAL_ERROR',
+      'the generation runtime identity is not recorded yet; repair the environment (re-verify the managed artifacts) before applying plugin changes',
+    );
+  }
   const identityVerified =
     options.verify === undefined
       ? false
