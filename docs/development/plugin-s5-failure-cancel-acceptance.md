@@ -48,3 +48,11 @@
 
 - 真实 desktop 全链（本片默认 CI 确定性优先）；Windows 未测；E9 未证；事务崩溃边界的 SIGKILL/recover 证据由 30 审计，本片未重复执行。
 - 未改产品代码；未使用个人凭据/模型；历史样本未动。
+
+## 覆盖边界（记录，不自动扩产品范围）
+
+- **journal `planned`/`staged` 恢复**：pre-pointer 回滚已有真实 `SIGKILL` 证据（`tests/core/apply-window-kill.test.ts`）；**显式的 `planned`/`staged` 阶段映射用例**属 30 覆盖清单缺口，先记录阶段映射、再决定最少补例（未在本 PR 添加）。
+- **损坏/不可解析 journal**：属**扩展健壮性**，非 S5 明列 AC；记录为覆盖边界，不自动加入产品范围。
+- **recovery 自身中断**：`ChangeFaults` 的 `pauseAt`/`failAt`（planned/staged/verified/committed/finalized）seam 已存在，**可定向复用**；是否留下提交状态分叉需专门用例，记为待办（若缺 seam 则只报告、不改产品）。
+- **remove 提交窗口内取消**：与 install 同源（缺陷 #92）；**修复候选审过后由 QA 独立验窗口/幂等**。
+- **真实 desktop 全链**：本 PR 走默认 CI 确定性优先，未跑；Windows 未测；E9 未证。
