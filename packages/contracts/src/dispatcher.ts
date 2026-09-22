@@ -42,6 +42,7 @@ import { API_VERSION, isWellFormedApiVersion } from './version.js';
 import type { ContractPort, StoredOutcome } from './context.js';
 import {
   changePlanSchema,
+  changeApplicationSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
   exportResultSchema,
@@ -154,6 +155,7 @@ const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> 
   search: pluginSearchResultSchema,
   inspect: pluginInspectionSchema,
   preview: changePlanSchema,
+  apply: changeApplicationSchema,
 };
 
 /**
@@ -280,6 +282,21 @@ const execute = (
         environmentId: typed.environmentId,
         expectedRevision: typed.expectedRevision,
         action: typed.action,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      publishIfKnown(runtime, outcome.value.operationId);
+      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+    }
+    case 'changes.apply': {
+      const typed = input as MethodInputs['changes.apply'];
+      const outcome = runtime.port.applyChange({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        planId: typed.planId,
+        buildAuthorization: typed.buildAuthorization ?? null,
       });
       if (!outcome.ok) {
         return executedFailure(outcome);

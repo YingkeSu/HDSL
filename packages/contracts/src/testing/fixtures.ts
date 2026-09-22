@@ -1116,6 +1116,32 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     }),
     expected: 'INVALID_INPUT',
   },
+  // changes.apply (environment-scoped transaction)
+  {
+    id: 'changes-apply-legal',
+    method: 'changes.apply',
+    kind: 'legal',
+    description: 'applies a plan for an environment at its revision',
+    request: request('changes.apply', {
+      requestId: 'req-apply-legal',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      planId: 'plan-0000000000000001',
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'changes-apply-missing-plan',
+    method: 'changes.apply',
+    kind: 'illegal',
+    description: 'an apply without a planId is rejected',
+    request: request('changes.apply', {
+      requestId: 'req-apply-bad',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+    }),
+    expected: 'INVALID_INPUT',
+  },
 
 ];
 

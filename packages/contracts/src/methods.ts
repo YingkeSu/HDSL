@@ -11,11 +11,13 @@ import {
   environmentIdSchema,
   nameSchema,
   operationIdSchema,
+  planIdSchema,
   requestIdSchema,
   revisionSchema,
   subscriptionIdSchema,
 } from './ids.js';
 import {
+  buildAuthorizationSchema,
   changePlanActionSchema,
   pluginSourceSelectorSchema,
   PLUGIN_QUERY_MAX_LENGTH,
@@ -40,6 +42,7 @@ export const CONTRACT_METHODS = [
   'plugins.inspect',
   // 1.1 plugin transactions (ADR 0005 D4).
   'changes.preview',
+  'changes.apply',
   // 1.1 read-only generation read (ADR 0005 D4).
   'generations.list',
 ] as const;
@@ -106,6 +109,13 @@ export const methodInputSchemas = {
     expectedRevision: revisionSchema,
     action: changePlanActionSchema,
   }),
+  'changes.apply': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    planId: planIdSchema,
+    buildAuthorization: sOptional(buildAuthorizationSchema),
+  }),
   'generations.list': sObject({
     environmentId: environmentIdSchema,
   }),
@@ -152,6 +162,7 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'plugins.search': define('plugins.search', { readOnly: false, idempotent: true }),
   'plugins.inspect': define('plugins.inspect', { readOnly: false, idempotent: true }),
   'changes.preview': define('changes.preview', { readOnly: false, idempotent: true }),
+  'changes.apply': define('changes.apply', { readOnly: false, idempotent: true }),
   'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
 };
 

@@ -15,6 +15,7 @@ import type {
   EnvironmentCommand,
   IdempotencyRecord,
   OperationCommand,
+  ApplyChangeCommand,
   PluginInspectCommand,
   PreviewChangeCommand,
   PluginSearchCommand,
@@ -308,6 +309,27 @@ export class ReferenceContractPort implements ContractPort {
     return portOk({ operationId: operation.id });
   }
 
+  applyChange(command: ApplyChangeCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    const application = {
+      planId: command.planId,
+      environmentId: command.environmentId,
+      generationId: 'gen-0000000000000002',
+      compositionDigest: 'a'.repeat(64),
+      sourceLock: null,
+      committedAt: '2026-09-20T00:00:00.000Z',
+    };
+    const operation = this.#recordPluginOperation('apply', { status: 'succeeded', output: application });
+    this.effects.push(`applyChange:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef> {
     const config = this.#pluginInspection;
     if (config?.failure !== undefined) {
@@ -352,7 +374,7 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect' | 'preview',
+    kind: 'search' | 'inspect' | 'preview' | 'apply',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;

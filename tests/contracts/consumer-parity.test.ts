@@ -40,6 +40,7 @@ describe('renderer/main/preload consume the same contract', () => {
       'plugins.search',
       'plugins.inspect',
       'changes.preview',
+      'changes.apply',
       'generations.list',
     ]);
   });

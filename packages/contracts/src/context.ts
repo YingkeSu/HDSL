@@ -15,6 +15,7 @@ import type { ContractError, ErrorCode } from './errors.js';
 import type { ContractMethod } from './methods.js';
 import type { HostPlatform } from './platform.js';
 import type {
+  BuildAuthorization,
   ChangePlanAction,
   EnvironmentSummary,
   ExportResult,
@@ -139,6 +140,14 @@ export interface PreviewChangeCommand {
   readonly action: ChangePlanAction;
 }
 
+export interface ApplyChangeCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly planId: string;
+  readonly buildAuthorization: BuildAuthorization | null;
+}
+
 export interface ContractPort {
   readonly host: HostPlatform;
 
@@ -171,6 +180,12 @@ export interface ContractPort {
    * `ChangePlan` is read only from `OperationSnapshot.output` (ADR 0005 D5).
    */
   previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable `changes.apply` transaction. The terminal
+   * `ChangeApplication` is read only from `OperationSnapshot.output` (D5).
+   */
+  applyChange(command: ApplyChangeCommand): PortOutcome<OperationRef>;
 
   /**
    * Read-only generation summaries for an environment (ADR 0005 D4). Returns

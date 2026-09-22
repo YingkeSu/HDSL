@@ -36,7 +36,7 @@ import {
 import { join } from 'node:path';
 import { ChangePlanStore } from './change-plan-store.js';
 import { EnvironmentStore, type EnvironmentRecord } from './environment-store.js';
-import { OperationStore, isTerminalStatus } from './operation-store.js';
+import { OperationStore, isTerminalStatus, toOperationSnapshot } from './operation-store.js';
 import { managedProfileName, publishGenerationProfile } from './generation-profile.js';
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
 import { reuseGenerationRuntime } from './generation-runtime-reuse.js';
@@ -145,6 +145,7 @@ export class ChangeApplyService {
   readonly #verifyGenerationRuntime:
     | ((input: { readonly manifestPath: string; readonly nodeDirectory: string; readonly dshDirectory: string }) => boolean)
     | undefined;
+  readonly #controllers = new Map<string, AbortController>();
   readonly #inFlight = new Set<string>();
 
   constructor(options: ChangeApplyServiceOptions) {
@@ -221,7 +222,9 @@ export class ChangeApplyService {
       createdAt: this.#now().toISOString(),
     });
     this.#inFlight.add(command.environmentId);
-    void this.#run(command, guarded.value, { operationId, generationId, transactionId });
+    const controller = new AbortController();
+    this.#controllers.set(operationId, controller);
+    void this.#run(command, guarded.value, { operationId, generationId, transactionId }, controller.signal);
     return portOk({ operationId });
   }
 
@@ -248,6 +251,7 @@ export class ChangeApplyService {
     command: ApplyChangeCommand,
     plan: ChangePlan,
     ids: { readonly operationId: string; readonly generationId: string; readonly transactionId: string },
+    signal: AbortSignal,
   ): Promise<void> {
     const environment = this.#environments.read(command.environmentId);
     if (environment === undefined) {
@@ -337,6 +341,11 @@ export class ChangeApplyService {
         return;
       }
 
+      if (signal.aborted) {
+        // Cancelled before the commit point: no pointer switch, no consumption.
+        this.#cancelJournal(ids);
+        return;
+      }
       const published = publishGenerationProfile({
         layout: this.#layout,
         environmentId: command.environmentId,
@@ -378,7 +387,50 @@ export class ChangeApplyService {
     } catch {
       this.#rollbackJournal(ids, 'INTERNAL_ERROR', 'the apply transaction failed');
     } finally {
+      this.#controllers.delete(ids.operationId);
       this.#inFlight.delete(command.environmentId);
+    }
+  }
+
+  owns(operationId: string): boolean {
+    return this.#operations.read(operationId)?.kind === 'apply';
+  }
+
+  findOperation(operationId: string): PortOutcome<OperationSnapshot> | undefined {
+    if (!this.owns(operationId)) {
+      return undefined;
+    }
+    const record = this.#operations.read(operationId);
+    return record === undefined
+      ? portFail('NOT_FOUND', 'operation was not found')
+      : portOk(toOperationSnapshot(record));
+  }
+
+  cancelOperation(operationId: string): PortOutcome<OperationSnapshot> | undefined {
+    if (!this.owns(operationId)) {
+      return undefined;
+    }
+    const record = this.#operations.read(operationId);
+    if (record === undefined) {
+      return portFail('NOT_FOUND', 'operation was not found');
+    }
+    if (isTerminalStatus(record.status)) {
+      return portFail('CANNOT_CANCEL', 'operation already reached a final state');
+    }
+    this.#controllers.get(operationId)?.abort();
+    const updated = this.#operations.update(
+      record,
+      { status: 'cancelled', phase: 'cancelled' },
+      this.#now().toISOString(),
+    );
+    return portOk(toOperationSnapshot(updated));
+  }
+
+  #cancelJournal(ids: { readonly operationId: string; readonly generationId: string; readonly transactionId: string }): void {
+    const journal = this.#readJournal(ids.transactionId);
+    if (journal !== undefined) {
+      removePath(generationPaths(this.#layout, journal.environmentId, journal.generationId).generationDirectory);
+      this.#removeJournal(journal.transactionId);
     }
   }
 
