@@ -673,6 +673,48 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
   });
 
+  it('rejects cancel after a removal commits and finalizes operation/plan/ledger consistently', async () => {
+    const fixture = build();
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    const service = new ChangeApplyService({
+      layout: fixture.layout,
+      plans: fixture.preview.plans,
+      environments: fixture.environments,
+      operations: fixture.operations,
+      compositionDigest: computeCompositionDigest,
+      removalPort: fixture.removalPort,
+      verifyGenerationRuntime: createGenerationRuntimeVerifier(),
+      now: () => new Date('2026-09-22T00:05:00.000Z'),
+      faults: { pauseAt: 'committed' },
+    });
+    const started = service.applyChange({
+      requestId: 'req-remove-committed',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: 3,
+      planId: plan.planId,
+      buildAuthorization: null,
+    });
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const deadline = Date.now() + 5_000;
+    while (fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId === OLD_GENERATION) {
+      if (Date.now() > deadline) throw new Error('the removal pointer did not switch');
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    const cancel = service.cancelOperation(started.value.operationId);
+    expect(cancel?.ok).toBe(false);
+    if (cancel !== undefined && !cancel.ok) expect(cancel.code).toBe('CANNOT_CANCEL');
+    expect(fixture.operations.read(started.value.operationId)?.status).toBe('running');
+
+    const recovery = service.recover();
+    expect(recovery.finalized).toBe(1);
+    expect(fixture.operations.read(started.value.operationId)?.status).toBe('succeeded');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBe('req-remove-committed');
+  });
+
   it('fails a removal preview controllably when the managed executor is unavailable (no plan, no effect)', async () => {
     const fixture = build();
     const failingPort: PluginRemovalPort = {

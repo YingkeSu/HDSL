@@ -10,6 +10,7 @@ import {
   ChangeApplyService,
   ChangePlanStore,
   EnvironmentStore,
+  IdempotencyStore,
   OperationStore,
   ensureLayout,
   generationPaths,
@@ -147,7 +148,7 @@ const build = (options: { state?: EnvironmentRecord['state']; faults?: ChangeFau
     now: () => new Date('2026-09-22T00:05:00.000Z'),
     ...(options.faults === undefined ? {} : { faults: options.faults }),
   });
-  return { layout, environments, plans, operations, service };
+  return { layout, environments, plans, operations, service, ledger: new IdempotencyStore(layout) };
 };
 
 const command = (
@@ -398,5 +399,86 @@ describe('changes.apply explicit build authorization (S4, ADR 0005 D8/D14)', () 
     );
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.code).toBe('AUTHORIZATION_MISMATCH');
+  });
+});
+
+describe('changes.apply cancellation at the commit point (D1 regression)', () => {
+  const waitForSwitch = async (environments: EnvironmentStore): Promise<void> => {
+    const deadline = Date.now() + 5_000;
+    for (;;) {
+      if (environments.read(ENVIRONMENT_ID)?.activeGenerationId !== OLD_GENERATION) {
+        return;
+      }
+      if (Date.now() > deadline) {
+        throw new Error('the active-generation pointer did not switch');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  };
+
+  it('rejects cancel after the pointer switch and rolls operation/plan/ledger forward consistently', async () => {
+    const harnessed = build({ faults: { pauseAt: 'committed' } });
+    // Simulate the dispatcher's `in-progress` marker written before the effect.
+    harnessed.ledger.write('req-apply', { state: 'in-progress', method: 'changes.apply', fingerprint: 'fp' });
+    const started = harnessed.service.applyChange(command());
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const operationId = started.value.operationId;
+
+    await waitForSwitch(harnessed.environments);
+    const switchedGeneration = harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId;
+
+    // A cancel in the real "pointer switched, operation still running" window must
+    // be refused by the COMMIT POINT, not by the operation status.
+    const cancel = harnessed.service.cancelOperation(operationId);
+    expect(cancel?.ok).toBe(false);
+    if (cancel !== undefined && !cancel.ok) {
+      expect(cancel.code).toBe('CANNOT_CANCEL');
+    }
+    // No state change from the refused cancel.
+    expect(harnessed.operations.read(operationId)?.status).toBe('running');
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(switchedGeneration);
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.revision).toBe(4);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBeNull();
+
+    // Recovery is pointer-authoritative: the committed fact must be finalized in
+    // all four places (environment, operation+output, plan, ledger), never left
+    // as a `cancelled` operation over a committed generation.
+    const recovery = harnessed.service.recover();
+    expect(recovery.finalized).toBe(1);
+    expect(recovery.rolledBack).toBe(0);
+    const operation = harnessed.operations.read(operationId);
+    expect(operation?.status).toBe('succeeded');
+    expect(operation?.output).toBeDefined();
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(switchedGeneration);
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.revision).toBe(4);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBe('req-apply');
+    expect(harnessed.ledger.read('req-apply')?.state).toBe('completed');
+  });
+
+  it('still cancels before the commit point and leaves the old generation, plan and ledger consistent', async () => {
+    const harnessed = build({ faults: { pauseAt: 'verified' } });
+    const started = harnessed.service.applyChange(command());
+    expect(started.ok).toBe(true);
+    if (!started.ok) return;
+    const operationId = started.value.operationId;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    const before = harnessed.environments.read(ENVIRONMENT_ID);
+    const cancel = harnessed.service.cancelOperation(operationId);
+    expect(cancel?.ok).toBe(true);
+    expect(harnessed.operations.read(operationId)?.status).toBe('cancelled');
+    // Pre-commit cancel is terminal and must not touch the environment.
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.revision).toBe(before?.revision);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBeNull();
+
+    // The leftover pre-commit journal rolls back without consuming the plan.
+    const recovery = harnessed.service.recover();
+    expect(recovery.rolledBack).toBe(1);
+    expect(harnessed.operations.read(operationId)?.status).toBe('cancelled');
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(harnessed.environments.read(ENVIRONMENT_ID)?.revision).toBe(before?.revision);
+    expect(harnessed.plans.read(PLAN_ID)?.consumedBy).toBeNull();
   });
 });

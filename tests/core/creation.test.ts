@@ -21,6 +21,7 @@ import {
 } from '@hdsl/contracts';
 import {
   EnvironmentStore,
+  IdempotencyStore,
   createManagedInstall,
   environmentPaths,
   generationPaths,
@@ -612,6 +613,51 @@ describe('journal recovery', () => {
 
 
 describe('production pointer/journal recovery window (A2)', () => {
+  it('rejects cancel when the pointer already switched and finalizes operation/ledger consistently (D1 same pattern)', async () => {
+    const dataRoot = freshRoot('hdsl-pointer-cancel-');
+    const paused = await buildHarness({ dataRoot, faults: { pauseAfterPointerSwitch: true } });
+    const operationId = await createEnvironment(paused, combinationA.id, 'req-pointer-cancel');
+    const deadline = Date.now() + 10_000;
+    let environment: { id: string; activeGenerationId: string | null } | undefined;
+    for (;;) {
+      const listed = paused.managed.service.listEnvironments();
+      environment = listed.ok ? listed.value[0] : undefined;
+      if (environment !== undefined && environment.activeGenerationId !== null) {
+        break;
+      }
+      if (Date.now() > deadline) {
+        throw new Error('the active generation pointer was never switched');
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+    const cancel = paused.managed.service.cancelOperation(operationId);
+    expect(cancel?.ok).toBe(false);
+    if (cancel !== undefined && !cancel.ok) {
+      expect(cancel.code).toBe('CANNOT_CANCEL');
+    }
+    const afterCancel = paused.managed.service.findOperation(operationId);
+    expect(afterCancel.ok ? afterCancel.value.status : undefined).toBe('running');
+    await paused.managed.close();
+
+    // Simulate a crash that left the request `in-progress` at the commit boundary.
+    const layout = resolveLayout(dataRoot);
+    new IdempotencyStore(layout).write('req-pointer-cancel', {
+      state: 'in-progress',
+      method: 'environments.create',
+      fingerprint: 'fp',
+    });
+
+    const restarted = await buildHarness({ dataRoot });
+    const report = await restarted.managed.recover();
+    expect(report.finalized).toBeGreaterThanOrEqual(1);
+    const operation = restarted.managed.service.findOperation(operationId);
+    expect(operation.ok ? operation.value.status : undefined).toBe('succeeded');
+    expect(new IdempotencyStore(layout).read('req-pointer-cancel')?.state).toBe('completed');
+    const after = restarted.managed.service.listEnvironments();
+    expect(after.ok ? after.value[0]?.activeGenerationId : undefined).toBe(environment.activeGenerationId);
+    await restarted.managed.close();
+  });
+
   it('rolls forward when the pointer switched but the journal was not committed', async () => {
     const dataRoot = freshRoot('hdsl-pointer-window-');
     const paused = await buildHarness({ dataRoot, faults: { pauseAfterPointerSwitch: true } });
