@@ -2,12 +2,11 @@
  * A2 slice: generation-scoped managed profile publication, declaration-source
  * identity, and namespace-confined orphan GC (ADR 0006 §2.3 / S2 §1).
  */
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
-  collectOrphanProfiles,
   environmentPaths,
   managedProfileName,
   profileDeclarationFingerprint,
@@ -61,11 +60,12 @@ describe('generation profile identity and publication', () => {
     expect(profileDeclarationFingerprint(staged)).not.toBe(before);
   });
 
-  it('publishes a staged profile into the managed namespace', () => {
+  it('publishes a staged profile into the managed namespace and preserves the immutable source', () => {
     const { layout, env } = build();
     const staged = join(layout.tmp, 'staged-profile');
     writeDeclaration(staged, ['@deepseek-ai/dsh-base']);
     const fingerprint = profileDeclarationFingerprint(staged);
+    const sourceBytes = readFileSync(join(staged, 'package.json'), 'utf8');
 
     const result = publishGenerationProfile({
       layout,
@@ -76,16 +76,21 @@ describe('generation profile identity and publication', () => {
     const target = join(env.profilesDirectory, managedProfileName(GENERATION_ID));
     expect(result.fingerprint).toBe(fingerprint);
     expect(existsSync(target)).toBe(true);
-    expect(existsSync(staged)).toBe(false);
     expect(profileDeclarationFingerprint(target)).toBe(fingerprint);
+    // MF2: the staged immutable declaration source is preserved byte-for-byte.
+    expect(existsSync(staged)).toBe(true);
+    expect(readFileSync(join(staged, 'package.json'), 'utf8')).toBe(sourceBytes);
+    expect(profileDeclarationFingerprint(staged)).toBe(fingerprint);
   });
 
-  it('refuses to overwrite a mismatching published profile', () => {
+  it('leaves the staged source unchanged when publication fails on a mismatching target', () => {
     const { layout, env } = build();
     const target = join(env.profilesDirectory, managedProfileName(GENERATION_ID));
     writeDeclaration(target, ['@deepseek-ai/dsh-base']);
     const staged = join(layout.tmp, 'staged-profile');
     writeDeclaration(staged, ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app']);
+    const sourceBytes = readFileSync(join(staged, 'package.json'), 'utf8');
+    const sourceFingerprint = profileDeclarationFingerprint(staged);
 
     expect(() =>
       publishGenerationProfile({
@@ -95,27 +100,35 @@ describe('generation profile identity and publication', () => {
         stagedDirectory: staged,
       }),
     ).toThrow(/mismatching published profile/);
-    // The published profile is untouched.
-    expect(profileDeclarationFingerprint(target)).not.toBe(profileDeclarationFingerprint(staged));
+    // Target untouched and the staged source is intact and unchanged.
+    expect(profileDeclarationFingerprint(target)).not.toBe(sourceFingerprint);
     expect(existsSync(staged)).toBe(true);
+    expect(readFileSync(join(staged, 'package.json'), 'utf8')).toBe(sourceBytes);
+    expect(profileDeclarationFingerprint(staged)).toBe(sourceFingerprint);
   });
 
-  it('collects only managed-namespace orphans and retains referenced profiles', () => {
-    const { layout, env } = build();
-    mkdirSync(env.profilesDirectory, { recursive: true });
-    for (const name of ['hdsl-genA', 'hdsl-genB', 'hdsl-genC', 'web']) {
-      writeDeclaration(join(env.profilesDirectory, name), ['@deepseek-ai/dsh-base']);
-    }
-    const removed = collectOrphanProfiles({
-      layout,
-      environmentId: ENVIRONMENT_ID,
-      retain: new Set(['hdsl-genA', 'hdsl-genB']),
-    });
-    expect(removed).toEqual(['hdsl-genC']);
-    expect(existsSync(join(env.profilesDirectory, 'hdsl-genA'))).toBe(true);
-    expect(existsSync(join(env.profilesDirectory, 'hdsl-genB'))).toBe(true);
-    expect(existsSync(join(env.profilesDirectory, 'hdsl-genC'))).toBe(false);
-    // User/default profiles are never collected.
-    expect(existsSync(join(env.profilesDirectory, 'web'))).toBe(true);
+  it('fails closed when a declaration file is missing or is not a regular file (MF3)', () => {
+    const { layout } = build();
+    // Missing required package.json => no identity (never an empty digest).
+    const bare = join(layout.tmp, 'bare-profile');
+    mkdirSync(bare, { recursive: true });
+    writeFileSync(join(bare, 'cordis.patch.yml'), '# patch\n');
+    expect(profileDeclarationFingerprint(bare)).toBeUndefined();
+
+    // Symlinked package.json must not be silently followed/hashed.
+    const symlinked = join(layout.tmp, 'symlinked-profile');
+    writeDeclaration(symlinked, ['@deepseek-ai/dsh-base']);
+    const real = join(layout.tmp, 'real-package.json');
+    writeFileSync(real, '{"name":"elsewhere"}');
+    rmSync(join(symlinked, 'package.json'));
+    symlinkSync(real, join(symlinked, 'package.json'));
+    expect(lstatSync(join(symlinked, 'package.json')).isSymbolicLink()).toBe(true);
+    expect(() => profileDeclarationFingerprint(symlinked)).toThrow(/not a regular file/);
+
+    // A directory where a declaration file is expected also fails closed.
+    const directory = join(layout.tmp, 'dir-profile');
+    writeDeclaration(directory, ['@deepseek-ai/dsh-base']);
+    mkdirSync(join(directory, 'pnpm-lock.yaml'), { recursive: true });
+    expect(() => profileDeclarationFingerprint(directory)).toThrow(/not a regular file/);
   });
 });

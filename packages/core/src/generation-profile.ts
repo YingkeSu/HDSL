@@ -17,10 +17,10 @@
  *
  * Fingerprints hash file contents for integrity but are never logged.
  */
-import { closeSync, fsyncSync, openSync, readdirSync, renameSync, lstatSync, readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { closeSync, cpSync, fsyncSync, lstatSync, openSync, readFileSync, readdirSync, renameSync } from 'node:fs';
+import { createHash, randomUUID } from 'node:crypto';
 import { join } from 'node:path';
-import { ensureDirectory, pathExists, readJsonFile, removePath } from './fsx.js';
+import { ensureDirectory, readJsonFile, removePath } from './fsx.js';
 import { environmentPaths, generationPaths, type AppDataLayout } from './layout.js';
 
 /** Files that constitute a profile's immutable declaration source, in order. */
@@ -39,23 +39,42 @@ export const managedProfileName = (generationId: string): string => `${PROFILE_N
 const sha256 = (data: string | Buffer): string => createHash('sha256').update(data).digest('hex');
 
 /**
- * Fingerprint of the declaration source of a profile directory. Returns
- * `undefined` when the directory or its `package.json` is missing. Live derived
- * files (`cordis.yml`, `node_modules`) are excluded by construction.
+ * Fingerprint of the declaration source of a profile directory.
+ *
+ * - Returns `undefined` when the directory or its `package.json` is absent (no
+ *   profile / no identity).
+ * - **Fails closed** (throws) when `package.json` or any present declaration file
+ *   is not a regular file (symlink, directory, special file): a non-regular
+ *   declaration must never collapse into an empty/constant digest.
+ * - Live derived files (`cordis.yml`, `node_modules`) are excluded by construction
+ *   and are never a source of identity. `pnpm-lock.yaml` is optional: when absent
+ *   the identity covers the present declaration files only; it is never rebuilt
+ *   from the live install.
  */
 export const profileDeclarationFingerprint = (directory: string): string | undefined => {
-  if (!pathExists(join(directory, 'package.json'))) {
+  const packageJsonPath = join(directory, 'package.json');
+  let packageStats: ReturnType<typeof lstatSync>;
+  try {
+    packageStats = lstatSync(packageJsonPath);
+  } catch {
     return undefined;
+  }
+  if (!packageStats.isFile()) {
+    throw new Error('the profile declaration source package.json is not a regular file');
   }
   const entries: string[] = [];
   for (const name of PROFILE_DECLARATION_FILES) {
     const path = join(directory, name);
-    if (!pathExists(path)) {
+    let stats: ReturnType<typeof lstatSync>;
+    try {
+      stats = lstatSync(path);
+    } catch {
+      // Optional declaration files may be absent; the required package.json is
+      // already proven present and regular above.
       continue;
     }
-    const stats = lstatSync(path);
     if (!stats.isFile()) {
-      continue;
+      throw new Error(`the profile declaration file ${name} is not a regular file`);
     }
     entries.push(`${name}\u0000${String(stats.size)}\u0000${sha256(readFileSync(path))}`);
   }
@@ -75,6 +94,27 @@ const fsyncDirectory = (path: string): void => {
   }
 };
 
+const fsyncTree = (root: string): void => {
+  for (const name of readdirSync(root)) {
+    const full = join(root, name);
+    const stats = lstatSync(full);
+    if (stats.isSymbolicLink()) {
+      continue;
+    }
+    if (stats.isDirectory()) {
+      fsyncTree(full);
+    } else if (stats.isFile()) {
+      const descriptor = openSync(full, 'r');
+      try {
+        fsyncSync(descriptor);
+      } finally {
+        closeSync(descriptor);
+      }
+    }
+  }
+  fsyncDirectory(root);
+};
+
 export interface PublishProfileResult {
   readonly published: boolean;
   readonly fingerprint: string;
@@ -91,8 +131,13 @@ export interface PublishProfileOptions {
 
 /**
  * Publishes the staged profile into `$DSH_HOME/profiles/hdsl-<gen>` (resolved as
- * `<env>/home/profiles/...`). Idempotent when the published copy already matches
- * the staged source. Never overwrites a mismatching published profile.
+ * `<env>/home/profiles/...`).
+ *
+ * The staged directory is an **immutable declaration source** and is preserved:
+ * publication COPIES it to an own temporary directory, verifies the copied
+ * declaration source, fsyncs, then atomically renames it into place. A crash or
+ * failure never destroys or mutates the staged source; a mismatching published
+ * profile is never overwritten (fail-closed).
  */
 export const publishGenerationProfile = (options: PublishProfileOptions): PublishProfileResult => {
   const profileName = managedProfileName(options.generationId);
@@ -110,43 +155,40 @@ export const publishGenerationProfile = (options: PublishProfileOptions): Publis
     throw new Error('a mismatching published profile already exists');
   }
   ensureDirectory(profilesRoot);
-  // Publish the whole profile directory (declaration source + derived scaffolding)
-  // by renaming the staged directory into place, then fsync the parent.
-  renameSync(options.stagedDirectory, target);
+  const temporary = join(profilesRoot, `.publish-${profileName}-${randomUUID()}`);
+  removePath(temporary);
+  cpSync(options.stagedDirectory, temporary, {
+    recursive: true,
+    dereference: false,
+    verbatimSymlinks: true,
+  });
+  fsyncTree(temporary);
+  const copiedFingerprint = profileDeclarationFingerprint(temporary);
+  if (copiedFingerprint !== stagedFingerprint) {
+    removePath(temporary);
+    throw new Error('the copied profile does not match the staged declaration source');
+  }
+  renameSync(temporary, target);
   fsyncDirectory(profilesRoot);
   const fingerprint = profileDeclarationFingerprint(target);
   if (fingerprint !== stagedFingerprint) {
-    throw new Error('published profile does not match the staged declaration source');
+    throw new Error('the published profile does not match the staged declaration source');
+  }
+  // The staged immutable source must survive publication unchanged. If it did
+  // not, the environment would have no provenance for `restore`. Leave the
+  // published profile but surface a controlled failure.
+  if (profileDeclarationFingerprint(options.stagedDirectory) !== stagedFingerprint) {
+    throw new Error('the staged declaration source changed during publication');
   }
   return { published: true, fingerprint, actions: [`published profile ${profileName}`] };
 };
 
-export interface CollectOrphanProfilesOptions {
-  readonly layout: AppDataLayout;
-  readonly environmentId: string;
-  /** Profile names that must be retained (active + all retained generations). */
-  readonly retain: ReadonlySet<string>;
-}
-
-/**
- * Removes managed-namespace profiles that are not retained. Never touches
- * non-managed names (e.g. `web` or user profiles) and never a retained profile.
- */
-export const collectOrphanProfiles = (options: CollectOrphanProfilesOptions): readonly string[] => {
-  const profilesRoot = environmentPaths(options.layout, options.environmentId).profilesDirectory;
-  if (!pathExists(profilesRoot)) {
-    return [];
-  }
-  const removed: string[] = [];
-  for (const name of readdirSync(profilesRoot)) {
-    if (!name.startsWith(PROFILE_NAMESPACE_PREFIX) || options.retain.has(name)) {
-      continue;
-    }
-    removePath(join(profilesRoot, name));
-    removed.push(name);
-  }
-  return removed;
-};
+// NOTE (MF1): there is intentionally NO automatic orphan-profile GC here. A
+// namespace-prefix + retain scan cannot prove provenance and could delete
+// unrelated `hdsl-*` profiles or a just-published generation when the retain set
+// is momentarily empty. Journal-keyed GC (only profiles a pending, uncommitted
+// transaction published and that no retained/active generation references) is
+// deferred to the full transaction wiring.
 
 /** Reads the published profile name recorded for a generation, if any. */
 export const readGenerationProfileName = (

@@ -41,7 +41,6 @@ import {
   ensureDirectory,
   isSpaceError,
   pathExists,
-  readDirectoryNames,
   readJsonFile,
   removePath,
   tryReadJsonFile,
@@ -50,7 +49,6 @@ import {
 import { newEnvironmentId, newGenerationId, newOperationId, newTransactionId } from './ids.js';
 import {
   generationPaths,
-  generationsDirectory,
   ensureLayout,
   resolveLayout,
   type AppDataLayout,
@@ -58,12 +56,10 @@ import {
 } from './layout.js';
 import { migrateEnvironmentHome, HomeMigrationStore } from './home-migration.js';
 import {
-  collectOrphanProfiles,
   managedProfileName,
   publishGenerationProfile,
   readGenerationProfileName,
-} from './generation-profile.js';
-import {
+} from './generation-profile.js';import {
   CredentialStore,
   type CredentialBinding,
   type LaunchCredentialRequest,
@@ -1129,23 +1125,11 @@ tryReadInstallManifest(
       });
     }
 
-    // GC: remove this environment's own managed-namespace orphan profiles that
-    // are not referenced by the active generation or any retained generation
-    // directory. Never touches `web`/user profiles or retained generations.
-    for (const environment of this.#environments.list()) {
-      const retain = new Set<string>();
-      if (environment.activeGenerationId !== null) {
-        retain.add(managedProfileName(environment.activeGenerationId));
-      }
-      for (const generationId of readDirectoryNames(generationsDirectory(this.#layout, environment.id))) {
-        retain.add(managedProfileName(generationId));
-      }
-      try {
-        collectOrphanProfiles({ layout: this.#layout, environmentId: environment.id, retain });
-      } catch {
-        // Best-effort; GC must never abort reconciliation.
-      }
-    }
+    // NOTE (MF1): no automatic orphan-profile GC runs here. Namespace-prefix + a
+    // retain set derived from generation directories cannot prove provenance and
+    // could delete unrelated `hdsl-*` profiles or a just-published generation
+    // when the retain set is momentarily empty. Journal-keyed GC ships with the
+    // full transaction wiring (pending, uncommitted transaction + no reference).
 
     return {
       reconciled: details.length,
