@@ -193,8 +193,14 @@ export class ChangeApplyService {
     if (record.consumedBy !== null && record.consumedBy !== command.requestId) {
       return portFail('PLAN_CONSUMED', 'the change plan was consumed by another request');
     }
-    if (plan.requiresBuildAuthorization && command.buildAuthorization === null) {
-      return portFail('BUILD_NOT_AUTHORIZED', 'the source requires an explicit build authorization');
+    // S4 (build authorization) is not available in this slice. A source that
+    // needs build scripts is refused, and any supplied authorization is refused
+    // too: a non-null value is never treated as an unlock.
+    if (plan.requiresBuildAuthorization || command.buildAuthorization !== null) {
+      return portFail(
+        'BUILD_NOT_AUTHORIZED',
+        'install-time build scripts are refused by default; build authorization (S4) is not available in this slice',
+      );
     }
     return portOk(plan);
   }

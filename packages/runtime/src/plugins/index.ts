@@ -4,3 +4,4 @@ export * from './preview-resolution.js';
 export * from './executor.js';
 export * from './apply-port.js';
 export * from './runtime-verifier.js';
+export * from './runtime-repair.js';

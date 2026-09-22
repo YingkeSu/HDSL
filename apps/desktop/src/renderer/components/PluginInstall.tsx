@@ -19,6 +19,12 @@ const SCRIPT_LABEL: Record<ChangePlan['scriptAssessment'], string> = {
 };
 
 const errorHint = (error: ContractError): string => {
+  // An old generation without a recorded runtime identity cannot be reused
+  // safely. There is no automatic repair entry in production yet, so guide a
+  // safe rebuild rather than implying a one-click fix.
+  if (error.code === 'INTERNAL_ERROR' && error.message.includes('not recorded')) {
+    return '该环境代际缺少运行时身份记录，无法安全复用。请安全重建该环境（重新安装受管运行时）；本版本不提供自动修复。';
+  }
   switch (error.code) {
     case 'REVISION_CONFLICT':
       return '环境组成已变化。请重新预览以获取新的变更计划。';

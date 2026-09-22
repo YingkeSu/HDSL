@@ -272,7 +272,7 @@ export class ReferenceContractPort implements ContractPort {
       return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
     }
     if (command.action.kind !== 'install') {
-      return portFail('INTERNAL_ERROR', 'remove preview is not implemented in this slice');
+      return portFail('UNSUPPORTED_COMBINATION', 'remove preview is not supported in this slice (S3)');
     }
     const plan = {
       planId: 'plan-0000000000000001',

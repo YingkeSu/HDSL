@@ -65,6 +65,10 @@ describe('generation runtime identity migration', () => {
       layout,
       environmentId: ENVIRONMENT_ID,
       generationId: FROM,
+      trusted: {
+        nodeTreeDigest: sha256TreeDigestSync(paths.nodeDirectory),
+        dshTreeDigest: sha256TreeDigestSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')),
+      },
       computeNodeTreeDigest: sha256TreeDigestSync,
       computeDshTreeDigest: (dshDirectory) => sha256TreeDigestSync(join(dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')),
     });
@@ -85,24 +89,31 @@ describe('generation runtime identity migration', () => {
     }
   });
 
-  it('does not overwrite a recorded digest (a later tamper still fails)', () => {
+  it('refuses to record a drifted tree from live digests (trusted artifact binding)', () => {
     const { layout, paths } = build();
+    const trusted = {
+      nodeTreeDigest: sha256TreeDigestSync(paths.nodeDirectory),
+      dshTreeDigest: sha256TreeDigestSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')),
+    };
     recordGenerationRuntimeIdentity({
       layout,
       environmentId: ENVIRONMENT_ID,
       generationId: FROM,
+      trusted,
       computeNodeTreeDigest: sha256TreeDigestSync,
       computeDshTreeDigest: (dshDirectory) => sha256TreeDigestSync(join(dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')),
     });
-    // A second repair must not re-bless a tampered tree.
+    // A tampered tree must NOT be recorded: the trusted digest no longer matches.
     writeFileSync(join(paths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\necho tampered\n');
-    recordGenerationRuntimeIdentity({
+    const refusedRepair = recordGenerationRuntimeIdentity({
       layout,
       environmentId: ENVIRONMENT_ID,
       generationId: FROM,
+      trusted,
       computeNodeTreeDigest: sha256TreeDigestSync,
       computeDshTreeDigest: (dshDirectory) => sha256TreeDigestSync(join(dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')),
     });
+    expect(refusedRepair.ok).toBe(false);
     const refused = reuseGenerationRuntime({
       layout,
       environmentId: ENVIRONMENT_ID,

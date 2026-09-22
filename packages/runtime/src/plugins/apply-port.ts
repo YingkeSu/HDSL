@@ -9,7 +9,8 @@
  *
  * It never loads plugin code in-process and never receives a credential.
  */
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   portFail,
@@ -68,21 +69,58 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     if (!resolved.ok) {
       return resolved;
     }
-    const built = buildPreviewResolution({ source, resolved: resolved.value, executor: null });
+    // 2) Re-verify the managed executor identity BEFORE any plan comparison; the
+    //    plan's executor identity must match the real one exactly.
+    const identity = await options.executor.identity(signal);
+    if (!identity.ok) {
+      return identity;
+    }
+    const built = buildPreviewResolution({ source, resolved: resolved.value, executor: identity.value });
     if (!built.ok) {
       return built;
     }
     const resolution = built.value;
 
-    // 2) Default deny: a source that needs install-time scripts requires S4.
-    if (resolution.requiresBuildAuthorization && command.buildAuthorization === null) {
-      return portFail('BUILD_NOT_AUTHORIZED', 'the source requires an explicit build authorization');
+    // 3) S4 is NOT open in this slice. A source that needs install-time scripts
+    //    is refused, and a supplied authorization must never be treated as an
+    //    unlock: any non-null buildAuthorization is also refused.
+    if (resolution.requiresBuildAuthorization || command.buildAuthorization !== null) {
+      return portFail(
+        'BUILD_NOT_AUTHORIZED',
+        'install-time build scripts are refused by default; build authorization (S4) is not available in this slice',
+      );
     }
 
-    // 3) Re-verify the managed executor identity (not the preview's self-report).
-    const identity = await options.executor.identity(signal);
-    if (!identity.ok) {
-      return identity;
+    // 4) Bind to the PREVIEWED exact commit and closure. A branch that moved, a
+    //    different closure lock, or an unrecorded/unpinned closure is drift, not
+    //    a silent new composition.
+    const planLock = command.plan.sourceLock;
+    if (planLock === null) {
+      return portFail('PLAN_STALE', 'the plan has no source lock to bind against');
+    }
+    if (planLock.commitSha !== resolution.sourceLock.commitSha) {
+      return portFail('PLAN_STALE', 'the previewed commit is no longer what the ref resolves to');
+    }
+    if (planLock.manifestSha256 !== resolution.sourceLock.manifestSha256) {
+      return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the manifest at the previewed commit has changed');
+    }
+    if (planLock.closureLockSha256 === null || resolution.sourceLock.closureLockSha256 === null) {
+      return portFail('PLAN_STALE', 'the dependency closure is not fully pinned; refusing to install a non-deterministic composition');
+    }
+    if (planLock.closureLockSha256 !== resolution.sourceLock.closureLockSha256) {
+      return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the dependency closure has changed since the preview');
+    }
+    if (
+      command.plan.executor === null ||
+      command.plan.executor.sha256 !== identity.value.sha256 ||
+      command.plan.executor.entrySha256 !== identity.value.entrySha256 ||
+      command.plan.executor.treeSha256 !== identity.value.treeSha256 ||
+      command.plan.executor.version !== identity.value.version
+    ) {
+      return portFail('EXECUTOR_UNAVAILABLE', 'the managed executor identity does not match the plan');
+    }
+    if (command.plan.planInputsDigest !== resolution.planInputsDigest) {
+      return portFail('PLAN_STALE', 'the plan inputs digest does not match the re-resolved source');
     }
 
     // 4) Materialise the profile declaration source (pinned to the exact commit)
@@ -115,12 +153,42 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
     if (run.value.exitCode !== 0) {
       return portFail('INTERNAL_ERROR', 'the managed pnpm install failed for the new generation');
     }
+    // The install must not silently rewrite the pinned lock: if it did, the
+    // composition is no longer what the plan bound.
+    if (resolved.value.lockText !== null) {
+      const lockPath = join(profileDirectory, 'pnpm-lock.yaml');
+      try {
+        const after = createHash('sha256').update(readFileSync(lockPath)).digest('hex');
+        const expected = createHash('sha256').update(resolved.value.lockText, 'utf8').digest('hex');
+        if (after !== expected) {
+          return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the managed install rewrote the pinned lockfile');
+        }
+      } catch {
+        return portFail('PLUGIN_INTEGRITY_MISMATCH', 'the pinned lockfile is missing after the managed install');
+      }
+    }
 
     // 5) Compose the new lock from the reused runtime lock + resolved plugin.
+    // Composition identity binds the plugin's CODE identity together with its
+    // resolved closure: the exact commit and manifest digest are part of the
+    // identity, so two sources that happen to share a lockfile (e.g. a fixture
+    // whose two commits differ only in source) still produce DIFFERENT
+    // composition identities. The closure lock digest is included too, so the
+    // resolved dependency closure is covered.
+    const pluginDigest = createHash('sha256')
+      .update(
+        JSON.stringify({
+          commitSha: resolution.sourceLock.commitSha,
+          manifestSha256: resolution.sourceLock.manifestSha256,
+          closureLockSha256: resolution.sourceLock.closureLockSha256,
+        }),
+        'utf8',
+      )
+      .digest('hex');
     const plugin: PluginLock = {
       id: resolution.sourceLock.packageName,
       version: resolution.sourceLock.packageVersion,
-      sha256: resolution.sourceLock.manifestSha256,
+      sha256: pluginDigest,
     };
     const compositionLock: CompositionLock = {
       ...command.currentLock,

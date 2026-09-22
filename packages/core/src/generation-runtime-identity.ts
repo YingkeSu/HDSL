@@ -4,11 +4,12 @@
  * New installs record the Node and DSH tree digests in the install manifest. A
  * generation created before that field existed cannot be verified for reuse and
  * is refused with an actionable, non-destructive message (normal start is
- * unaffected). This module provides the controlled repair: after the caller
- * re-verifies the installed artifacts through the managed-install chain, the
- * digests are computed from the current tree and written into the manifest. The
- * digests are supplied by the caller's trusted computation, never taken from the
- * manifest being repaired.
+ * unaffected). This module provides the controlled repair: the caller must first
+ * RE-VERIFY the installed runtime against the TRUSTED managed artifact (for
+ * example by re-extracting the pinned tarball) and pass the trusted digests. The
+ * installed tree is then compared to those trusted digests; only an exact match
+ * is recorded. Digests are never computed from the live tree as the source of
+ * truth, so a tampered tree cannot be self-blessed.
  */
 import { readFileSync } from 'node:fs';
 import { isPlainRecord, portFail, portOk, type PortOutcome } from '@hdsl/contracts';
@@ -24,9 +25,13 @@ export interface RecordRuntimeIdentityOptions {
   readonly layout: AppDataLayout;
   readonly environmentId: string;
   readonly generationId: string;
-  /** Trusted computation over the installed Node tree (e.g. after artifact re-verification). */
+  /**
+   * Digests derived from the TRUSTED managed artifact (re-extracted and verified
+   * against the pinned source), never from the live installed tree.
+   */
+  readonly trusted: { readonly nodeTreeDigest: string; readonly dshTreeDigest: string };
+  /** Live computations used only to compare the installed tree to `trusted`. */
   readonly computeNodeTreeDigest: (nodeDirectory: string) => string;
-  /** Trusted computation over the installed DSH package tree. */
   readonly computeDshTreeDigest: (dshDirectory: string) => string;
 }
 
@@ -68,9 +73,20 @@ export const recordGenerationRuntimeIdentity = (
     return portFail('INTERNAL_ERROR', 'the generation install manifest is malformed and cannot be repaired');
   }
   const existing = readGenerationRuntimeIdentity(options.layout, options.environmentId, options.generationId);
-  const nodeTreeDigest =
-    existing.nodeTreeDigest ?? options.computeNodeTreeDigest(paths.nodeDirectory);
-  const dshTreeDigest = existing.dshTreeDigest ?? options.computeDshTreeDigest(paths.dshDirectory);
+  const trusted = options.trusted;
+  if (trusted.nodeTreeDigest.length !== 64 || trusted.dshTreeDigest.length !== 64) {
+    return portFail('INTERNAL_ERROR', 'the trusted artifact digests are missing or malformed');
+  }
+  const liveNode = options.computeNodeTreeDigest(paths.nodeDirectory);
+  const liveDsh = options.computeDshTreeDigest(paths.dshDirectory);
+  if (liveNode !== trusted.nodeTreeDigest || liveDsh !== trusted.dshTreeDigest) {
+    return portFail(
+      'INTERNAL_ERROR',
+      'the installed runtime does not match the trusted artifact; refusing to record a drifted identity',
+    );
+  }
+  const nodeTreeDigest = existing.nodeTreeDigest ?? trusted.nodeTreeDigest;
+  const dshTreeDigest = existing.dshTreeDigest ?? trusted.dshTreeDigest;
   const manifest = {
     ...parsed,
     node: { ...(parsed['node'] as Record<string, unknown>), treeDigest: nodeTreeDigest },

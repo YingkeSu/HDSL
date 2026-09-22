@@ -122,8 +122,12 @@ export class ChangePreviewService {
       return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
     }
     if (command.action.kind !== 'install') {
-      // Remove preview belongs to S3; keep the DTO but do not fake success.
-      return portFail('INTERNAL_ERROR', 'remove preview is not implemented in this slice');
+      // Remove preview belongs to S3. This is an explicit, controlled rejection
+      // of a valid-but-unsupported action, not an internal-error fake.
+      return portFail(
+        'UNSUPPORTED_COMBINATION',
+        'remove preview is not supported in this slice (S3)',
+      );
     }
     const operationId = newOperationId();
     const controller = new AbortController();

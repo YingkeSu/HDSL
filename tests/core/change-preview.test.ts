@@ -157,7 +157,8 @@ describe('changes.preview (core)', () => {
     });
     expect(remove.ok).toBe(false);
     if (!remove.ok) {
-      expect(remove.code).toBe('INTERNAL_ERROR');
+      // Remove belongs to S3: a controlled rejection, not an internal-error fake.
+      expect(remove.code).toBe('UNSUPPORTED_COMBINATION');
     }
   });
 
