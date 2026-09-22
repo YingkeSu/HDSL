@@ -35,5 +35,6 @@
 | 插件发现与详情（S1） | [验证记录](development/plugin-discovery-validation.md)（含 opt-in 真实 GitHub 只读探针） |
 | 插件代际 home 派生与回滚（#76 前置） | [实证记录](development/plugin-home-derivation-validation.md)（合成运行时 + 真实事务/恢复代码） |
 | 插件 profile 接线（#76 A2） | [验证记录](development/plugin-a2-profile-validation.md)（适配器/进程夹具 + opt-in 真实 npm-ci 全链） |
+| 受管 pnpm 默认拒执行哨兵（#76 E1） | [验证记录](development/plugin-executor-sentinel-validation.md)（冻结 pnpm 链 + 外部 marker） |
 
 验证记录保留历史结果与未测项；其中的计数和 SHA 不是当前版本的自动更新状态。

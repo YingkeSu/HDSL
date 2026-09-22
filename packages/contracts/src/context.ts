@@ -15,8 +15,11 @@ import type { ContractError, ErrorCode } from './errors.js';
 import type { ContractMethod } from './methods.js';
 import type { HostPlatform } from './platform.js';
 import type {
+  BuildAuthorization,
+  ChangePlanAction,
   EnvironmentSummary,
   ExportResult,
+  GenerationSummary,
   OpenWebUIResult,
   OperationRef,
   OperationSnapshot,
@@ -130,6 +133,28 @@ export type IdempotencyRecord =
       readonly outcome: StoredOutcome;
     };
 
+export interface PreviewChangeCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly action: ChangePlanAction;
+}
+
+export interface ApplyChangeCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly planId: string;
+  readonly buildAuthorization: BuildAuthorization | null;
+}
+
+export interface RestoreGenerationCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly targetGenerationId: string;
+}
+
 export interface ContractPort {
   readonly host: HostPlatform;
 
@@ -156,6 +181,34 @@ export interface ContractPort {
   searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef>;
   /** Starts a cancellable, global GitHub read-only repository inspection. */
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable `changes.preview` for one environment. The terminal
+   * `ChangePlan` is read only from `OperationSnapshot.output` (ADR 0005 D5).
+   */
+  previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable `changes.apply` transaction. The terminal
+   * `ChangeApplication` is read only from `OperationSnapshot.output` (D5).
+   */
+  applyChange(command: ApplyChangeCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Read-only generation summaries for an environment (ADR 0005 D4). Returns
+   * immediately; it carries no `requestId` and is never deduplicated. It reads
+   * only the durable generation records; it never rebuilds identity from the
+   * live profile (ADR 0006).
+   */
+  listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]>;
+
+  /**
+   * Restores a previous generation as the active one (ADR 0005 D4/D10). This
+   * switches the pointer only: the generation's composition identity and the
+   * shared environment home/data are preserved and no retained generation is
+   * deleted.
+   */
+  restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef>;
 
   /** Subscription bookkeeping the contract delegates to the session registry. */
   readIdempotency(requestId: string): IdempotencyRecord | undefined;

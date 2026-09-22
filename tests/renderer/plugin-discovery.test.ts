@@ -45,6 +45,12 @@ const noopActions: RendererActions = {
   inspectSelectedPlugin: () => undefined,
   selectPlugin: () => undefined,
   cancelPluginSearch: () => undefined,
+    setInstallSource: () => undefined,
+    previewPluginChange: () => undefined,
+    applyPluginChange: () => undefined,
+    cancelInstallOperation: () => undefined,
+    loadGenerations: () => undefined,
+    restoreGeneration: () => undefined,
 };
 
 const flush = (): Promise<void> =>

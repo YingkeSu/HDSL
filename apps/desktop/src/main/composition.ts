@@ -23,11 +23,17 @@ import {
   type PortOutcome,
   type RuntimeCombination,
 } from '@hdsl/contracts';
+import { join } from 'node:path';
 import {
   createEnvironmentContractPort,
   EnvironmentService,
   OperationStore,
   PluginDiscoveryService,
+  ChangePreviewService,
+  ChangeApplyService,
+  ChangePlanStore,
+  EnvironmentStore,
+  type PluginPreviewPort,
   type CloseReport,
   type DataRootLockSnapshot,
   type DiagnosticsExporter,
@@ -38,6 +44,12 @@ import {
 } from '@hdsl/core';
 import {
   createGitHubPluginSource,
+  createPluginApplyPort,
+  createManagedPnpmExecutor,
+  createGenerationRuntimeVerifier,
+  createResolvingPreviewPort,
+  computeCompositionDigest,
+  PNPM_EXECUTOR_SPEC,
   createLaunchCredentialPort,
   createProcessManager,
   createRuntimePort,
@@ -95,6 +107,8 @@ export interface DesktopCompositionOptions {
   readonly runtime?: ManagedRuntimePort;
   /** Test seam: replaces the real GitHub read adapter (no fixture hits the network). */
   readonly pluginSource?: PluginSourcePort;
+  /** Controlled change-preview adapter; defaults to the GitHub adapter. */
+  readonly pluginPreview?: PluginPreviewPort;
   /** Test seam: replaces the real process manager (still decorated + attached). */
   readonly process?: ManagedProcessPort;
   /** Test seam: a runtime manager used for observability in diagnostics. */
@@ -116,6 +130,10 @@ export interface DesktopComposition {
   readonly processPort: ManagedProcessPort;
   readonly available: boolean;
   readonly recovery: RecoveryReport;
+  /** Journal + idempotency-ledger reconciliation of crashed apply/restore transactions. */
+  readonly applyRecovery: { readonly finalized: number; readonly rolledBack: number };
+  /** Reconciliation of crashed (read-only) preview operations; never changes an environment. */
+  readonly previewRecovery: { readonly terminated: number };
   readonly lockSnapshot: () => DataRootLockSnapshot;
   readonly exporterAvailable: boolean;
   /**
@@ -321,9 +339,61 @@ export const createDesktopComposition = async (
   // Global, read-only plugin discovery. The GitHub adapter is unauthenticated
   // and network-only; it never touches an environment composition (ADR 0005
   // D16/D17). Tests inject a controlled source here.
+  const defaultGitHubSource = createGitHubPluginSource({ fetch: globalThis.fetch });
   const pluginDiscovery = new PluginDiscoveryService({
     layout: service.layout,
-    source: options.pluginSource ?? createGitHubPluginSource({ fetch: globalThis.fetch }),
+    source: options.pluginSource ?? defaultGitHubSource,
+  });
+  // Environment-scoped change preview. The default adapter is the same GitHub
+  // source; tests inject a controlled preview port instead.
+  const executorIdentity = {
+    id: 'pnpm' as const,
+    version: PNPM_EXECUTOR_SPEC.version,
+    sha256: PNPM_EXECUTOR_SPEC.sha256,
+    entrySha256: PNPM_EXECUTOR_SPEC.entrySha256,
+    treeSha256: PNPM_EXECUTOR_SPEC.treeSha256,
+  };
+  const managedPnpmExecutor = createManagedPnpmExecutor({
+    spec: PNPM_EXECUTOR_SPEC,
+    cacheDirectory: join(service.layout.root, 'pnpm-cache'),
+    fetch: globalThis.fetch,
+  });
+  const previewPort: PluginPreviewPort | undefined =
+    options.pluginPreview ??
+    (options.pluginSource === undefined
+      ? createResolvingPreviewPort({
+          gitProvider: defaultGitHubSource,
+          executor: managedPnpmExecutor,
+          executorIdentity,
+        })
+      : undefined);
+  const changePreview =
+    previewPort === undefined
+      ? undefined
+      : new ChangePreviewService({
+          layout: service.layout,
+          port: previewPort,
+          findEnvironment: (environmentId) => {
+            const outcome = service.findEnvironment(environmentId);
+            return outcome.ok ? outcome.value : undefined;
+          },
+        });
+
+  // Environment-scoped apply transaction: the GitHub source is the production
+  // GitProvider and the frozen managed pnpm artifact is the executor. The reused
+  // runtime is verified with the managed-install tree digest before any commit.
+  const applyPort = createPluginApplyPort({
+    gitProvider: defaultGitHubSource,
+    executor: managedPnpmExecutor,
+  });
+  const changeApply = new ChangeApplyService({
+    layout: service.layout,
+    plans: new ChangePlanStore(service.layout),
+    environments: new EnvironmentStore(service.layout),
+    operations: new OperationStore(service.layout),
+    compositionDigest: computeCompositionDigest,
+    port: applyPort,
+    verifyGenerationRuntime: createGenerationRuntimeVerifier(),
   });
 
   const port = createEnvironmentContractPort({
@@ -332,8 +402,18 @@ export const createDesktopComposition = async (
     ...(options.host === undefined ? {} : { host: options.host }),
     exportDiagnostics: exporter,
     pluginDiscovery,
+    ...(changePreview === undefined ? {} : { changePreview }),
+    changeApply,
   });
 
+  // Recovery ORDER + ownership (P1 fix): each service reconciles the operation
+  // kinds it owns BEFORE the environment service runs. `preview` is read-only
+  // (orphans are terminated without touching the environment), and
+  // `apply`/`restore` are journal/ledger-reconciled. The environment service no
+  // longer sees (or clears the pointer for) kinds it does not own, so a crashed
+  // preview can never invalidate a committed generation.
+  const applyRecovery = changeApply.recover();
+  const previewRecovery = changePreview?.recover() ?? { terminated: 0 };
   const recovery = await service.recover();
   const recoveryReasons = (recovery.process ?? [])
     .filter((entry) => entry.resolution === 'unverifiable')
@@ -362,6 +442,8 @@ export const createDesktopComposition = async (
     processPort,
     available: service.available,
     recovery,
+    applyRecovery,
+    previewRecovery,
     recoveryBlocked,
     recoveryReasons,
     lockSnapshot: () => service.lockSnapshot(),

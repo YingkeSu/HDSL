@@ -228,3 +228,47 @@ describe('diagnostic export whitelist', () => {
     }
   });
 });
+
+describe('diagnostic export: plugin operation canaries (AC11)', () => {
+  it('redacts a plugin operation error message and never exports its output payload', () => {
+    const { dataRoot, layout, service } = buildFixture();
+    const written: { value: string } = { value: '' };
+    const pluginOperation = {
+      schemaVersion: '1',
+      id: 'op-plugincanary1',
+      environmentId: ENVIRONMENT_ID,
+      kind: 'preview',
+      phase: `planning ${String(dataRoot)}/home ${CANARY}`,
+      status: 'failed',
+      sequence: 2,
+      createdAt: '2026-09-20T00:00:00.000Z',
+      updatedAt: '2026-09-20T00:00:01.000Z',
+      error: {
+        code: 'PLUGIN_INTEGRITY_MISMATCH',
+        message: `manifest mismatch at ${String(dataRoot)}/home/profiles leak=${CANARY}`,
+        retryable: false,
+      },
+      output: { leak: `${CANARY} ${String(layout.root)}` },
+    };
+    const exporter = createDiagnosticsExporter({
+      service,
+      layout,
+      operations: { list: () => [pluginOperation] } as never,
+      readLaunchRecord: () => null,
+      app: appInfo,
+      pathChooser: { chooseExportPath: () => join(dataRoot, 'export.json') },
+      writeFile: (_path, content) => {
+        written.value = content;
+      },
+      redactions: [CANARY],
+      clock: () => new Date('2026-09-20T12:00:00.000Z'),
+    });
+    const outcome = exporter(ENVIRONMENT_ID);
+    expect(outcome.ok).toBe(true);
+    expect(written.value).not.toContain(CANARY);
+    expect(written.value).not.toContain(String(dataRoot));
+    expect(written.value).not.toContain(String(layout.root));
+    // The plugin operation's `output` payload is not part of the export at all.
+    expect(written.value).not.toContain('"output"');
+  });
+});

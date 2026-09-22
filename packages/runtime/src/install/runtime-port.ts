@@ -487,6 +487,7 @@ export class RuntimePort implements ManagedRuntimePort {
         version: lock.node.version,
         sha256: lock.node.sha256,
         executable: join(NODE_DIRECTORY, 'bin', 'node'),
+        treeDigest: await sha256TreeDigest(nodeDirectory),
       },
       dsh: {
         version: lock.dsh.version,

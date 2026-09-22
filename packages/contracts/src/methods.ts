@@ -9,13 +9,21 @@
 import {
   catalogCombinationIdSchema,
   environmentIdSchema,
+  generationIdSchema,
   nameSchema,
   operationIdSchema,
+  planIdSchema,
   requestIdSchema,
   revisionSchema,
   subscriptionIdSchema,
 } from './ids.js';
-import { pluginSourceSelectorSchema, PLUGIN_QUERY_MAX_LENGTH, PLUGIN_QUERY_MIN_LENGTH } from './dto.js';
+import {
+  buildAuthorizationSchema,
+  changePlanActionSchema,
+  pluginSourceSelectorSchema,
+  PLUGIN_QUERY_MAX_LENGTH,
+  PLUGIN_QUERY_MIN_LENGTH,
+} from './dto.js';
 import { sLiteral, sObject, sOptional, sString, type Infer, type Schema } from './schema.js';
 
 export const CONTRACT_METHODS = [
@@ -30,10 +38,15 @@ export const CONTRACT_METHODS = [
   'operations.subscribe',
   'operations.unsubscribe',
   'diagnostics.export',
-  // 1.1 plugin discovery (ADR 0005 D4). `changes.preview`/`changes.apply`/
-  // `generations.restore` are reserved for S2+ and are not part of this build.
+  // 1.1 plugin discovery (ADR 0005 D4).
   'plugins.search',
   'plugins.inspect',
+  // 1.1 plugin transactions (ADR 0005 D4).
+  'changes.preview',
+  'changes.apply',
+  // 1.1 read-only generation read (ADR 0005 D4).
+  'generations.list',
+  'generations.restore',
 ] as const;
 
 export type ContractMethod = (typeof CONTRACT_METHODS)[number];
@@ -92,6 +105,28 @@ export const methodInputSchemas = {
     requestId: requestIdSchema,
     source: pluginSourceSelectorSchema,
   }),
+  'changes.preview': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    action: changePlanActionSchema,
+  }),
+  'changes.apply': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    planId: planIdSchema,
+    buildAuthorization: sOptional(buildAuthorizationSchema),
+  }),
+  'generations.list': sObject({
+    environmentId: environmentIdSchema,
+  }),
+  'generations.restore': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    targetGenerationId: generationIdSchema,
+  }),
 } satisfies Record<ContractMethod, Schema<unknown>>;
 
 export type MethodInputs = {
@@ -134,6 +169,10 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'diagnostics.export': define('diagnostics.export', { readOnly: false, idempotent: true }),
   'plugins.search': define('plugins.search', { readOnly: false, idempotent: true }),
   'plugins.inspect': define('plugins.inspect', { readOnly: false, idempotent: true }),
+  'changes.preview': define('changes.preview', { readOnly: false, idempotent: true }),
+  'changes.apply': define('changes.apply', { readOnly: false, idempotent: true }),
+  'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
+  'generations.restore': define('generations.restore', { readOnly: false, idempotent: true }),
 };
 
 export const validateMethodInput = <M extends ContractMethod>(

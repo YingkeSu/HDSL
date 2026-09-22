@@ -165,6 +165,8 @@ export interface InstallManifest {
     readonly version: string;
     readonly sha256: string;
     readonly executable: string;
+    /** Optional (older records omit it); reuse verification fails closed without it. */
+    readonly treeDigest?: string;
   };
   readonly dsh: {
     readonly version: string;

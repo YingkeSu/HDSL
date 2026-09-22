@@ -1,8 +1,8 @@
 # 0006：插件变更代的 home 派生与运行数据边界
 
-- 状态：**proposed**（等待独立复审；批准前不据此改生产实现）
-- 修订：rev 2（回应独立审核 `5773952049` CHANGES_REQUESTED：拆开"共享 home"与"每代 profile 加载"、新增 E10b 硬门禁；补首次迁移细节；撤销对 creation 探针的过度归因；声明相位/注入形状无实现）
-- 日期：2026-09-22（rev 2：2026-09-22）
+- 状态：**accepted**（rev 3；独立设计复审 `5774676121`（PR #82）与 `5774990020`（PR #83）通过，机制按此落地）
+- 修订：rev 2（`5773952049` 闭合）；rev 3（状态转 `accepted`，机制按生产落地）
+- 日期：2026-09-22（rev 2/rev 3：2026-09-22）
 - 关联：#76（本决策 owner，Parent #73）；`Refs #9`（M2 插件/事务路线）；`Related #8`（Windows x64 未测门禁）；承接 [ADR 0005](0005-plugin-contract-evolution.md) D18 / E10 / §9.7 的 #76 硬前置
 - 基线：HDSL main `21b653894dd58f92d4e59e42401e8e9e40dc8fe8`（PR #81 squash merge，含 ADR 0005 PR #80 `aa2a26e`）；上游固定 tag `dsh-v0.1.5-rc.2` = `fb2c4b9e698e30edb738bca4cf0618587db7d203`（不与 master 混用）
 - 依据（可直接核对）：
@@ -90,7 +90,7 @@ G2 + G4 是本决策的关键：**任何放进 stage 代目录的运行数据都
 - 组成身份 = **staged 的声明源**（`package.json`、`pnpm-lock.yaml`、生成的 `cordis.patch.yml`）。
 - 一切 **live 派生状态**（boot 重写的 `cordis.yml`、`node_modules`、`$DSH_HOME/profiles/node_modules` 的安装回退 symlink）**不得**参与身份计算。
 - **组成锁/摘要绝不得从 live profile 重建**（否则每次 boot 摘要漂移，D13 的来源锁与旧代绑定失效）；复核只读 staged/不可变源。
-- `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile（覆盖 live 派生状态）；仅当 live 声明源与身份逐字节一致时才可复用现有 profile。
+- `restore` 策略：优先**从该代的不可变声明源重新发布** `hdsl-<gen>` profile；与实现一致的精确定义为——(1) live `hdsl-<gen>` **不存在**：从不可变声明源复制后原子发布；(2) live 存在且**声明源摘要逐字节一致**：视为已发布（幂等 no-op，不重写）；(3) live 存在但声明源**漂移**：**fail-closed 拒绝覆盖**（不破坏既有 profile，需按记录身份重建），而不是按 live 派生状态静默覆盖。组成锁/摘要始终取自不可变源，绝不从 live profile 重建。
 
 证据等级：P1–P3 为 `raw`（config 解析路径）；运行时 marker 为 `raw`（真实 boot 自有 fixture；负控仅“整窗存活 + 无 marker”，**不排除存活但已加载**，空日志不是 boot 证据）；崩溃/杀进程与 E10b-4 为**原型/`raw`**（自有副本；相位为模型化、仅信号真实；E10b-4 仅限同版本不同安装路径），均非生产。
 
@@ -233,6 +233,8 @@ interface ChangeFaults {
 - E9 未证前，"生效"证据等级不超过"活动代际 + 离线解析组合树"（ADR 0005 D15）。
 
 ## 9. 验证状态
+
+**状态说明（rev 3）**：本 ADR 的**机制决策**已由独立设计复审通过并落地（PR #82 / PR #83，merge `c3cb5de` / `889a58d`）；后续 profile 接线见 PR #86（`c055c5a`）。**`accepted` 只表示机制决策被接受，不等于 E10b/E9/E1 已证，也不等于 #76 验收完成**；§7 的待实证闸门与后验门禁不变。
 
 - 决策：本 ADR 已给出（`proposed`，rev 2）。**批准前不据此修改生产实现**。
 - 实证：

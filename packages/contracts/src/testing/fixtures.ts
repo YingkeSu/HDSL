@@ -1072,7 +1072,103 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     }),
     expected: 'ok',
     seed: PLUGIN_NOT_FOUND_SEED,
+  },  // generations.list (read-only, no requestId)
+  {
+    id: 'generations-list-legal',
+    method: 'generations.list',
+    kind: 'legal',
+    description: 'reads generation summaries for a well-formed environment id',
+    request: request('generations.list', { environmentId: 'env-0000000000000001' }),
+    expected: 'ok',
   },
+  {
+    id: 'generations-list-missing-environment',
+    method: 'generations.list',
+    kind: 'illegal',
+    description: 'a generations.list request without environmentId is rejected',
+    request: request('generations.list', {}),
+    expected: 'INVALID_INPUT',
+  },
+  // changes.preview (environment-scoped, cancellable)
+  {
+    id: 'changes-preview-legal',
+    method: 'changes.preview',
+    kind: 'legal',
+    description: 'plans an install from a GitHub source at the environment revision',
+    request: request('changes.preview', {
+      requestId: 'req-preview-legal',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      action: { kind: 'install', source: { owner: 'octo', name: 'dsh-plugin-demo', ref: 'main' } },
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'changes-preview-invalid-action',
+    method: 'changes.preview',
+    kind: 'illegal',
+    description: 'an install action without a source is rejected',
+    request: request('changes.preview', {
+      requestId: 'req-preview-bad',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      action: { kind: 'install' },
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  // changes.apply (environment-scoped transaction)
+  {
+    id: 'changes-apply-legal',
+    method: 'changes.apply',
+    kind: 'legal',
+    description: 'applies a plan for an environment at its revision',
+    request: request('changes.apply', {
+      requestId: 'req-apply-legal',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      planId: 'plan-0000000000000001',
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'changes-apply-missing-plan',
+    method: 'changes.apply',
+    kind: 'illegal',
+    description: 'an apply without a planId is rejected',
+    request: request('changes.apply', {
+      requestId: 'req-apply-bad',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  // generations.restore (environment-scoped pointer transaction)
+  {
+    id: 'generations-restore-legal',
+    method: 'generations.restore',
+    kind: 'legal',
+    description: 'restores a previous generation at the environment revision',
+    request: request('generations.restore', {
+      requestId: 'req-restore-legal',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      targetGenerationId: 'gen-0000000000000001',
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'generations-restore-missing-target',
+    method: 'generations.restore',
+    kind: 'illegal',
+    description: 'a restore without a target generation is rejected',
+    request: request('generations.restore', {
+      requestId: 'req-restore-bad',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+    }),
+    expected: 'INVALID_INPUT',
+  },
+
 ];
 
 export const ALL_CONTRACT_FIXTURES: readonly ContractFixture[] = [

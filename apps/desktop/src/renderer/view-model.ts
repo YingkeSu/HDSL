@@ -13,6 +13,9 @@
  */
 import {
   DEFAULT_PLUGIN_QUERY,
+  type ChangeApplication,
+  type ChangePlan,
+  type GenerationSummary,
   type ContractError,
   type EnvironmentSummary,
   type ExportResult,
@@ -20,8 +23,16 @@ import {
   type OperationStatus,
   type PluginInspection,
   type PluginSearchResult,
+  type PluginSourceSelector,
   type RuntimeCombination,
 } from '@hdsl/contracts';
+
+/** Direct repository input for the S2 install flow. */
+export interface InstallSourceInput {
+  readonly owner: string;
+  readonly name: string;
+  readonly ref: string;
+}
 
 /** Where the initial catalog/environment load is. */
 export type LoadPhase = 'idle' | 'loading' | 'ready' | 'failed';
@@ -86,6 +97,14 @@ export interface RendererState {
   readonly pluginInspection: PluginInspection | null;
   /** Selected repository in the discovery detail panel, by `fullName`. */
   readonly selectedPluginFullName: string | null;
+  /** Direct repository input for preview/apply. */
+  readonly installSource: InstallSourceInput;
+  /** Terminal `changes.preview` plan, or null. */
+  readonly changePlan: ChangePlan | null;
+  /** Terminal `changes.apply` result, or null. */
+  readonly changeApplication: ChangeApplication | null;
+  /** Read-only `generations.list` result for the selected environment. */
+  readonly generations: readonly GenerationSummary[];
 }
 
 /**
@@ -114,6 +133,17 @@ export interface RendererActions {
   inspectSelectedPlugin(): void;
   selectPlugin(fullName: string | null): void;
   cancelPluginSearch(): void;
+  setInstallSource(field: keyof InstallSourceInput, value: string): void;
+  /** Starts `changes.preview` for the selected environment. */
+  previewPluginChange(): void;
+  /** Starts `changes.apply` for the current plan. */
+  applyPluginChange(): void;
+  /** Cancels an in-flight preview/apply/restore; terminal operations are untouched. */
+  cancelInstallOperation(): void;
+  /** Loads `generations.list` for the selected environment. */
+  loadGenerations(): void;
+  /** Restores a previous generation as active (`generations.restore`). */
+  restoreGeneration(generationId: string): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -139,11 +169,29 @@ export const INITIAL_STATE: RendererState = {
   pluginSearch: null,
   pluginInspection: null,
   selectedPluginFullName: null,
+  installSource: { owner: '', name: '', ref: '' },
+  changePlan: null,
+  changeApplication: null,
+  generations: [],
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */
 export const selectedPluginHit = (state: RendererState) =>
   state.pluginSearch?.hits.find((hit) => hit.fullName === state.selectedPluginFullName) ?? null;
+
+/**
+ * The install source selector, or null when the owner/name input is incomplete.
+ * A `ref` is optional; the server resolves it to an exact commit.
+ */
+export const installSourceSelector = (state: RendererState): PluginSourceSelector | null => {
+  const owner = state.installSource.owner.trim();
+  const name = state.installSource.name.trim();
+  if (owner === '' || name === '') {
+    return null;
+  }
+  const ref = state.installSource.ref.trim();
+  return { owner, name, ...(ref === '' ? {} : { ref }) };
+};
 
 export const selectedEnvironment = (state: RendererState): EnvironmentSummary | null =>
   state.environments.find((environment) => environment.id === state.selectedEnvironmentId) ?? null;

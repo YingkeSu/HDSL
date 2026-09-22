@@ -41,7 +41,11 @@ import { formatHostPlatform, isHostPlatformSupported, type HostPlatform } from '
 import { API_VERSION, isWellFormedApiVersion } from './version.js';
 import type { ContractPort, StoredOutcome } from './context.js';
 import {
+  changePlanSchema,
+  changeApplicationSchema,
   environmentSummaryListSchema,
+  generationSummaryListSchema,
+  generationSummarySchema,
   exportResultSchema,
   openWebUIResultSchema,
   operationRefSchema,
@@ -151,6 +155,9 @@ const validatePortValue = <T>(schema: Schema<T>, value: unknown, label: string):
 const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> = {
   search: pluginSearchResultSchema,
   inspect: pluginInspectionSchema,
+  preview: changePlanSchema,
+  apply: changeApplicationSchema,
+  restore: generationSummarySchema,
 };
 
 /**
@@ -265,6 +272,79 @@ const execute = (
             response: contractOk(
               API_VERSION,
               validatePortValue(environmentSummaryListSchema, outcome.value, 'environments.list'),
+            ),
+            executed: true,
+          }
+        : executedFailure(outcome);
+    }
+    case 'changes.preview': {
+      const typed = input as MethodInputs['changes.preview'];
+      const outcome = runtime.port.previewChange({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        action: typed.action,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      publishIfKnown(runtime, outcome.value.operationId);
+      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+    }
+    case 'changes.apply': {
+      const typed = input as MethodInputs['changes.apply'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      if (environment.value.revision !== typed.expectedRevision) {
+        return { response: failureForCode('REVISION_CONFLICT'), executed: false };
+      }
+      markInProgress();
+      const outcome = runtime.port.applyChange({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        planId: typed.planId,
+        buildAuthorization: typed.buildAuthorization ?? null,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      publishIfKnown(runtime, outcome.value.operationId);
+      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+    }
+    case 'generations.restore': {
+      const typed = input as MethodInputs['generations.restore'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      if (environment.value.revision !== typed.expectedRevision) {
+        return { response: failureForCode('REVISION_CONFLICT'), executed: false };
+      }
+      markInProgress();
+      const outcome = runtime.port.restoreGeneration({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        targetGenerationId: typed.targetGenerationId,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      publishIfKnown(runtime, outcome.value.operationId);
+      return { response: contractOk(API_VERSION, outcome.value), executed: true };
+    }
+    case 'generations.list': {
+      const outcome = runtime.port.listGenerations(
+        (input as MethodInputs['generations.list']).environmentId,
+      );
+      return outcome.ok
+        ? {
+            response: contractOk(
+              API_VERSION,
+              validatePortValue(generationSummaryListSchema, outcome.value, 'generations.list'),
             ),
             executed: true,
           }

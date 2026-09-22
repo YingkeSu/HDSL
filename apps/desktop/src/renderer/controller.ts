@@ -49,6 +49,10 @@ import {
   operationRefSchema,
   operationSnapshotSchema,
   pluginInspectionSchema,
+  changePlanSchema,
+  changeApplicationSchema,
+  generationSummaryListSchema,
+  generationSummarySchema,
   pluginSearchResultSchema,
   REQUEST_ID_PATTERN,
   runtimeCombinationListSchema,
@@ -63,6 +67,7 @@ import {
 import type { RendererContractClient } from './contract.js';
 import {
   INITIAL_STATE,
+  installSourceSelector,
   isOperationTerminal,
   selectedEnvironment,
   selectedPluginHit,
@@ -432,6 +437,122 @@ export class RendererController implements RendererActions {
     await this.cancelTrackedOperation();
   }
 
+  setInstallSource(field: 'owner' | 'name' | 'ref', value: string): void {
+    this.#update({
+      installSource: { ...this.#state.installSource, [field]: value },
+      changePlan: null,
+      changeApplication: null,
+      actionError: null,
+    });
+  }
+
+  /** Starts `changes.preview` for the selected environment and direct source. */
+  async previewPluginChange(): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      const source = installSourceSelector(this.#state);
+      if (environment === null || source === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, changePlan: null, changeApplication: null });
+      const result = await this.#call(
+        'changes.preview',
+        {
+          requestId: this.#newRequestId(),
+          environmentId: environment.id,
+          expectedRevision: environment.revision,
+          action: { kind: 'install', source },
+        },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  /** Starts `changes.apply` for the current plan. Revision/TTL guards are server-side. */
+  async applyPluginChange(): Promise<void> {
+    await this.#runCommand(async () => {
+      const plan = this.#state.changePlan;
+      if (plan === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, changeApplication: null });
+      const result = await this.#call(
+        'changes.apply',
+        {
+          requestId: this.#newRequestId(),
+          environmentId: plan.environmentId,
+          expectedRevision: plan.baseRevision,
+          planId: plan.planId,
+        },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  /** Loads the generation list for the selected environment (read-only). */
+  async loadGenerations(): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      const result = await this.#call('generations.list', { environmentId: environment.id }, generationSummaryListSchema);
+      if (this.#disposed) return;
+      if (!result.ok) { this.#update({ actionError: result.error }); return; }
+      this.#update({ actionError: null, generations: result.value });
+    });
+  }
+
+  /** Restores a previous generation (pointer-only transaction). */
+  async restoreGeneration(generationId: string): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) { this.#update({ actionError: contractErrorForCode('INVALID_INPUT') }); return; }
+      this.#update({ actionError: null, notice: null });
+      const result = await this.#call('generations.restore', {
+        requestId: this.#newRequestId(),
+        environmentId: environment.id,
+        expectedRevision: environment.revision,
+        targetGenerationId: generationId,
+      }, operationRefSchema);
+      if (this.#disposed) return;
+      if (!result.ok) { this.#update({ actionError: result.error }); return; }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  /** Cancels an in-flight preview/apply only; terminal operations are unchanged. */
+  async cancelInstallOperation(): Promise<void> {
+    const tracked = this.#state.trackedOperation;
+    if (
+      tracked === null ||
+      (tracked.kind !== 'preview' && tracked.kind !== 'apply') ||
+      isOperationTerminal(tracked.status)
+    ) {
+      return;
+    }
+    await this.cancelTrackedOperation();
+  }
+
   async cancelTrackedOperation(): Promise<void> {
     await this.#runCommand(async () => {
       const tracked = this.#state.trackedOperation;
@@ -738,7 +859,19 @@ export class RendererController implements RendererActions {
     if (tracked.status === 'succeeded') {
       this.#applyPluginOutput(tracked);
       await this.#refreshEnvironments(epoch);
+      return;
     }
+    // A terminal non-success MUST surface here. Previously only `succeeded` was
+    // handled, so a failed (or cancelled) preview/apply left the S2 panel showing
+    // "解析来源并生成计划…" with no error (QA33 real desktop chain).
+    if (tracked.status === 'cancelled') {
+      this.#update({ notice: '操作已取消，环境组成未改变。', actionError: null });
+      return;
+    }
+    this.#update({
+      actionError: tracked.error ?? contractErrorForCode('INTERNAL_ERROR'),
+      notice: null,
+    });
   }
 
   /**
@@ -758,6 +891,36 @@ export class RendererController implements RendererActions {
         pluginSearch: parsed,
         selectedPluginFullName: parsed.hits[0]?.fullName ?? null,
       });
+      return;
+    }
+    if (tracked.kind === 'preview') {
+      const issues: ValidationIssue[] = [];
+      const parsed = changePlanSchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ changePlan: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ changePlan: parsed });
+      return;
+    }
+    if (tracked.kind === 'restore') {
+      const issues: ValidationIssue[] = [];
+      const parsed = generationSummarySchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ notice: `已恢复到代际 ${parsed.generationId}；重启环境后生效。` });
+      return;
+    }
+    if (tracked.kind === 'apply') {
+      const issues: ValidationIssue[] = [];
+      const parsed = changeApplicationSchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ changeApplication: parsed, changePlan: null });
       return;
     }
     if (tracked.kind === 'inspect') {

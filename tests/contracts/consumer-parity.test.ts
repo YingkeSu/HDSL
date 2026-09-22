@@ -39,6 +39,10 @@ describe('renderer/main/preload consume the same contract', () => {
       'diagnostics.export',
       'plugins.search',
       'plugins.inspect',
+      'changes.preview',
+      'changes.apply',
+      'generations.list',
+      'generations.restore',
     ]);
   });
 

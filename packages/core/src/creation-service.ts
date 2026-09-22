@@ -28,7 +28,9 @@ import {
   type CreateEnvironmentCommand,
   type EnvironmentState,
   type EnvironmentSummary,
+  type GenerationSummary,
   type HostPlatform,
+  type OperationKind,
   type OperationRef,
   type OperationSnapshot,
   type OpenWebUIResult,
@@ -40,6 +42,7 @@ import { join } from 'node:path';
 import {
   ensureDirectory,
   isSpaceError,
+  readDirectoryNames,
   readJsonFile,
   removePath,
   tryReadJsonFile,
@@ -48,6 +51,7 @@ import {
 import { newEnvironmentId, newGenerationId, newOperationId, newTransactionId } from './ids.js';
 import {
   generationPaths,
+  generationsDirectory,
   ensureLayout,
   resolveLayout,
   type AppDataLayout,
@@ -226,6 +230,16 @@ interface CreateJob {
   readonly journal: CreateJournalRecord;
 }
 
+/**
+ * Operation kinds this service owns and reconciles on restart. Other kinds share
+ * the same persistent store but belong to their own service recover().
+ */
+const ENVIRONMENT_LIFECYCLE_OPERATION_KINDS: ReadonlySet<OperationKind> = new Set<OperationKind>([
+  'create',
+  'start',
+  'stop',
+]);
+
 const notFound = (message: string): PortOutcome<never> => portFail('NOT_FOUND', message);
 
 const NOT_IMPLEMENTED = 'this capability is owned by the managed-process slice (T005)';
@@ -395,6 +409,46 @@ export class EnvironmentService {
     return record === undefined
       ? notFound('environment was not found')
       : portOk(toEnvironmentSummary(record));
+  }
+
+  /**
+   * Read-only generation summaries for an environment (ADR 0005 D4/D6). Reads
+   * only durable generation records; it never rebuilds identity from the live
+   * profile (ADR 0006). Unknown/malformed records are skipped, not fabricated.
+   */
+  listGenerations(environmentId: string): PortOutcome<readonly GenerationSummary[]> {
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    const directory = generationsDirectory(this.#layout, environmentId);
+    const summaries: GenerationSummary[] = [];
+    for (const name of readDirectoryNames(directory)) {
+      const record = tryReadJsonFile<{
+        id?: string;
+        compositionDigest?: string;
+        createdAt?: string;
+        profileName?: string;
+      }>(join(directory, name, 'generation.json'));
+      if (
+        record === undefined ||
+        typeof record.id !== 'string' ||
+        typeof record.compositionDigest !== 'string' ||
+        typeof record.createdAt !== 'string'
+      ) {
+        continue;
+      }
+      summaries.push({
+        generationId: record.id,
+        environmentId,
+        compositionDigest: record.compositionDigest,
+        profileName: typeof record.profileName === 'string' ? record.profileName : null,
+        active: environment.activeGenerationId === record.id,
+        createdAt: record.createdAt,
+      });
+    }
+    summaries.sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+    return portOk(summaries);
   }
 
   findOperation(operationId: string): PortOutcome<OperationSnapshot> {
@@ -1080,6 +1134,18 @@ tryReadInstallManifest(
     }
 
     for (const operation of this.#operations.list()) {
+      // Service-ownership dispatch (P1 fix): this service owns ONLY the
+      // environment lifecycle kinds. `preview` (ChangePreviewService),
+      // `apply`/`restore` (ChangeApplyService) and the global
+      // `search`/`inspect` (PluginDiscoveryService) operations share the same
+      // persistent store but are reconciled by their OWN service recover().
+      // Before this guard an orphaned (post-crash) non-terminal `preview`
+      // operation was mistaken for an interrupted environment transaction and
+      // `#markEnvironmentError` cleared `activeGenerationId`/`compositionDigest`
+      // of an already-committed environment.
+      if (!ENVIRONMENT_LIFECYCLE_OPERATION_KINDS.has(operation.kind)) {
+        continue;
+      }
       if (isTerminalStatus(operation.status) || this.#controllers.has(operation.id)) {
         continue;
       }
@@ -1091,6 +1157,9 @@ tryReadInstallManifest(
         // have been created.
         continue;
       }
+      // Only an interrupted `create` remains: the environment never reached a
+      // committed generation, so failing it (and clearing any half-written
+      // pointer) is the correct, pre-existing semantics.
       this.#operations.update(
         operation,
         {

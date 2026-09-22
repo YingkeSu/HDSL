@@ -15,7 +15,10 @@ import type {
   EnvironmentCommand,
   IdempotencyRecord,
   OperationCommand,
+  ApplyChangeCommand,
   PluginInspectCommand,
+  PreviewChangeCommand,
+  RestoreGenerationCommand,
   PluginSearchCommand,
   PortOutcome,
   RevisionCommand,
@@ -24,6 +27,7 @@ import { portFail, portOk } from '../context.js';
 import type {
   EnvironmentSummary,
   ExportResult,
+  GenerationSummary,
   OpenWebUIResult,
   OperationKind,
   OperationRef,
@@ -109,6 +113,33 @@ export class ReferenceContractPort implements ContractPort {
 
   listEnvironments(): PortOutcome<readonly EnvironmentSummary[]> {
     return portOk([...this.#environments.values()]);
+  }
+
+  listGenerations(_environmentId: string): PortOutcome<readonly GenerationSummary[]> {
+    return portOk([]);
+  }
+
+  restoreGeneration(command: RestoreGenerationCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    const operation = this.#recordPluginOperation('restore', {
+      status: 'succeeded',
+      output: {
+        generationId: command.targetGenerationId,
+        environmentId: command.environmentId,
+        compositionDigest: 'a'.repeat(64),
+        profileName: null,
+        active: true,
+        createdAt: '2026-09-20T00:00:00.000Z',
+      },
+    });
+    this.effects.push(`restoreGeneration:${operation.id}`);
+    return portOk({ operationId: operation.id });
   }
 
   findEnvironment(environmentId: string): PortOutcome<EnvironmentSummary> {
@@ -256,6 +287,73 @@ export class ReferenceContractPort implements ContractPort {
     return portOk({ operationId: operation.id });
   }
 
+  previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    if (command.action.kind !== 'install') {
+      return portFail('UNSUPPORTED_COMBINATION', 'remove preview is not supported in this slice (S3)');
+    }
+    const plan = {
+      planId: 'plan-0000000000000001',
+      environmentId: command.environmentId,
+      baseRevision: command.expectedRevision,
+      action: command.action,
+      createdAt: '2026-09-20T00:00:00.000Z',
+      expiresAt: '2026-09-20T00:15:00.000Z',
+      sourceLock: {
+        sourceKind: 'github' as const,
+        repository: { owner: command.action.source.owner, name: command.action.source.name },
+        commitSha: 'a'.repeat(40),
+        ref: command.action.source.ref ?? null,
+        packageName: command.action.source.name,
+        packageVersion: '1.0.0',
+        manifestSha256: 'b'.repeat(64),
+        closureLockSha256: null,
+        isBuiltin: false,
+        buildAuthorization: null,
+        executor: null,
+      },
+      scriptAssessment: 'none-detected' as const,
+      scripts: [],
+      requiresBuildAuthorization: false,
+      riskItems: ['no install-time scripts detected in the parsed manifest'],
+      removals: [],
+      retention: [],
+      blockingReferences: [],
+      executor: null,
+      planInputsDigest: 'c'.repeat(64),
+    };
+    const operation = this.#recordPluginOperation('preview', { status: 'succeeded', output: plan });
+    this.effects.push(`previewChange:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
+  applyChange(command: ApplyChangeCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    const application = {
+      planId: command.planId,
+      environmentId: command.environmentId,
+      generationId: 'gen-0000000000000002',
+      compositionDigest: 'a'.repeat(64),
+      sourceLock: null,
+      committedAt: '2026-09-20T00:00:00.000Z',
+    };
+    const operation = this.#recordPluginOperation('apply', { status: 'succeeded', output: application });
+    this.effects.push(`applyChange:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef> {
     const config = this.#pluginInspection;
     if (config?.failure !== undefined) {
@@ -300,7 +398,7 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect',
+    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;
