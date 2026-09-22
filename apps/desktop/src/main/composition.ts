@@ -257,11 +257,18 @@ export const buildManagedProcessPort = (
   });
 };
 
+/**
+ * Production runtime options. Profile initialization MUST stay enabled on every
+ * production install path so a new generation always gets its managed profile
+ * and never silently falls back to the shared `web` profile.
+ */
+export const PRODUCTION_RUNTIME_OPTIONS = { profileInit: true } as const;
+
 export const createDesktopComposition = async (
   options: DesktopCompositionOptions,
 ): Promise<DesktopComposition> => {
   const catalog = options.catalog ?? VERIFIED_COMBINATIONS;
-  const runtime = options.runtime ?? createRuntimePort();
+  const runtime = options.runtime ?? createRuntimePort(PRODUCTION_RUNTIME_OPTIONS);
   const exported: { current: DiagnosticsExporter | undefined } = { current: undefined };
   const service = new EnvironmentService({
     dataRoot: options.dataRoot,

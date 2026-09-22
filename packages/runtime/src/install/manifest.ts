@@ -42,6 +42,15 @@ export interface InstallManifest {
     readonly checks: readonly InstallCheck[];
     readonly reason?: string;
   };
+  /**
+   * Optional (schema v1 add-on): the generated profile's immutable declaration
+   * source staged at `<generation>/profile`. Absent on records from older builds
+   * (treated as "no managed profile", i.e. legacy `web` compatibility).
+   */
+  readonly profile?: {
+    readonly name: string;
+    readonly digest: string;
+  } | null;
   readonly installedAt: string;
 }
 

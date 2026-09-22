@@ -30,6 +30,11 @@ export interface InstallContext {
   readonly scratchDirectory: string;
   /** Shared, isolated npm download cache (`<dataRoot>/npm-cache`). */
   readonly npmCacheDirectory: string;
+  /**
+   * Managed profile name for this generation. The installer may stage an
+   * immutable declaration source for it when profile initialization is enabled.
+   */
+  readonly profileName?: string;
   readonly onProgress?: (update: InstallProgress) => void;
 }
 
@@ -182,5 +187,15 @@ export interface InstallManifest {
     readonly checks: readonly InstallCheck[];
     readonly reason?: string;
   };
+  /**
+   * Optional (schema v1 add-on). Absent on records from older builds, which are
+   * treated as "no managed profile" (legacy `web` compatibility). When present,
+   * the commit verifies BOTH the name and the digest against the real staged
+   * declaration source before publishing.
+   */
+  readonly profile?: {
+    readonly name: string;
+    readonly digest: string;
+  } | null;
   readonly installedAt: string;
 }

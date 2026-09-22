@@ -18,6 +18,7 @@ import {
   adaptProcessPort,
   createDesktopComposition,
   isBlockedByRecovery,
+  PRODUCTION_RUNTIME_OPTIONS,
   type VerifiedWebUiContext,
   type VerifiedWebUiOpener,
 } from '../../apps/desktop/src/main/composition.js';
@@ -130,6 +131,12 @@ const compose = async (
 };
 
 describe('createDesktopComposition', () => {
+  it('pins production runtime profile initialization on the composition entry', () => {
+    // A new production generation must always get its managed profile; the
+    // production runtime options must keep profile initialization enabled.
+    expect(PRODUCTION_RUNTIME_OPTIONS.profileInit).toBe(true);
+  });
+
   it('creates an environment and gates the WebUI opener behind ownership verification', async () => {
     const dataRoot = freshRoot('hdsl-comp-');
     const { composition, contexts } = await compose(dataRoot);

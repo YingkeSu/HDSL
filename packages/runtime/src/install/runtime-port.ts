@@ -16,7 +16,9 @@
 import {
   copyFileSync,
   existsSync,
+  lstatSync,
   mkdirSync,
+  readFileSync,
   readdirSync,
   renameSync,
   rmSync,
@@ -24,7 +26,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { open } from 'node:fs/promises';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { basename, dirname, join } from 'node:path';
 import {
   type CompositionLock,
@@ -81,6 +83,13 @@ export interface RuntimePortOptions {
   readonly closureInstall?: boolean;
   /** `'managed'` (default) runs the version/help preflight; `'none'` skips it. */
   readonly precheck?: 'managed' | 'none';
+  /**
+   * When `true` and `InstallContext.profileName` is set, the installer stages a
+   * generation profile declaration source at `<destination>/profile` by running
+   * the managed DSH from its shipped template. Default `false` so synthetic and
+   * artifacts-only fixtures are unaffected.
+   */
+  readonly profileInit?: boolean;
   readonly npmRegistry?: string;
   readonly clock?: () => Date;
   readonly commandTimeoutMs?: number;
@@ -96,6 +105,12 @@ export interface InstallContext {
   readonly cacheDirectory: string;
   readonly scratchDirectory: string;
   readonly npmCacheDirectory: string;
+  /**
+   * Managed profile name for this generation. When the installer is configured
+   * with `profileInit`, it stages the immutable declaration source at
+   * `<destination>/profile` and records `profile.name` in the manifest.
+   */
+  readonly profileName?: string;
   readonly onProgress?: (update: InstallProgress) => void;
 }
 
@@ -134,6 +149,48 @@ const baseEnvironment = (home: string, nodeBin: string, npmCache: string, extra:
   npm_config_yes: 'true',
   ...extra,
 });
+
+/** Files that constitute a profile's immutable declaration source. */
+const PROFILE_DECLARATION_FILES = [
+  'package.json',
+  'cordis.patch.yml',
+  'pnpm-workspace.yaml',
+  'pnpm-lock.yaml',
+] as const;
+
+/**
+ * Mirrors `@hdsl/core`'s `profileDeclarationFingerprint` exactly. Live derived
+ * files (`cordis.yml`, `node_modules`) are excluded; a missing or irregular
+ * declaration source yields `undefined` (never an empty digest).
+ */
+const profileDeclarationDigest = (directory: string): string | undefined => {
+  let packageStats: ReturnType<typeof lstatSync>;
+  try {
+    packageStats = lstatSync(join(directory, 'package.json'));
+  } catch {
+    return undefined;
+  }
+  if (!packageStats.isFile()) {
+    return undefined;
+  }
+  const entries: string[] = [];
+  for (const name of PROFILE_DECLARATION_FILES) {
+    const path = join(directory, name);
+    let stats: ReturnType<typeof lstatSync>;
+    try {
+      stats = lstatSync(path);
+    } catch {
+      continue;
+    }
+    if (!stats.isFile()) {
+      return undefined;
+    }
+    entries.push(
+      `${name}\u0000${String(stats.size)}\u0000${createHash('sha256').update(readFileSync(path)).digest('hex')}`,
+    );
+  }
+  return createHash('sha256').update(entries.join('\n')).digest('hex');
+};
 
 const findLocalArtifact = (directory: string, sha256: string): string | undefined => {
   const artifactDirectory = join(directory, sha256);
@@ -185,6 +242,7 @@ export class RuntimePort implements ManagedRuntimePort {
   readonly #limits: Required<RuntimeLimits>;
   readonly #closureInstall: boolean;
   readonly #precheck: 'managed' | 'none';
+  readonly #profileInit: boolean;
   readonly #npmRegistry: string | undefined;
   readonly #clock: () => Date;
   readonly #commandTimeoutMs: number;
@@ -203,6 +261,7 @@ export class RuntimePort implements ManagedRuntimePort {
     };
     this.#closureInstall = options.closureInstall ?? true;
     this.#precheck = options.precheck ?? 'managed';
+    this.#profileInit = options.profileInit ?? false;
     this.#npmRegistry = options.npmRegistry;
     this.#clock = options.clock ?? (() => new Date());
     this.#commandTimeoutMs = options.commandTimeoutMs ?? 30_000;
@@ -320,6 +379,53 @@ export class RuntimePort implements ManagedRuntimePort {
       throw new InstallFailure('INTERNAL_ERROR', 'the DSH artifact did not contain lib/bin.js');
     }
 
+    // Stage the generation's immutable profile declaration source. `--dump-config`
+    // triggers profile initialization from the shipped template; its output is
+    // discarded. E9 (the staticity of `--dump-config` vs the runtime loaded set)
+    // is NOT established, so this must never be described as proving zero bundle
+    // execution. The child sees only the staged, secret-free environment below.
+    let stagedProfile: { name: string; digest: string } | null = null;
+    if (this.#profileInit && context.profileName !== undefined) {
+      const nodeBin = join(destination, NODE_DIRECTORY, 'bin');
+      const stagedHome = join(destination, '.profile-stage-home');
+      rmSync(stagedHome, { recursive: true, force: true });
+      mkdirSync(stagedHome, { recursive: true });
+      // Isolated env: HOME/DSH_HOME/TMPDIR/caches are inside the generation; the
+      // host environment and any credential variables are never inherited.
+      const environment = baseEnvironment(stagedHome, nodeBin, context.npmCacheDirectory);
+      const init = await runCommand(
+        nodeExecutable,
+        [
+          dshEntrypoint,
+          '--profile',
+          context.profileName,
+          '--from-default-profile',
+          'web',
+          '--dump-config',
+        ],
+        {
+          cwd: destination,
+          env: environment,
+          timeoutMs: this.#commandTimeoutMs,
+          signal: context.signal,
+        },
+      );
+      const source = join(stagedHome, 'profiles', context.profileName);
+      const digest = profileDeclarationDigest(source);
+      if (init.exitCode !== 0 || digest === undefined) {
+        rmSync(stagedHome, { recursive: true, force: true });
+        throw new InstallFailure(
+          'INTERNAL_ERROR',
+          'the managed DSH did not produce the generation profile declaration source',
+        );
+      }
+      const stagedTarget = join(destination, 'profile');
+      rmSync(stagedTarget, { recursive: true, force: true });
+      renameSync(source, stagedTarget);
+      rmSync(stagedHome, { recursive: true, force: true });
+      stagedProfile = { name: context.profileName, digest };
+    }
+
     context.onProgress?.({ phase: 'preflight', progress: 92 });
     const preflight = await this.#runPreflight(lock, destination, nodeExecutable, dshEntrypoint, homeDirectory, context);
 
@@ -342,6 +448,7 @@ export class RuntimePort implements ManagedRuntimePort {
       },
       closure: closureMetadata,
       preflight,
+      profile: stagedProfile,
       installedAt: this.#clock().toISOString(),
     };
     const manifestPath = join(destination, 'install-manifest.json');

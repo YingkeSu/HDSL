@@ -114,6 +114,7 @@ interface HarnessOptions {
     readonly failExtraction?: boolean;
   };
   readonly dataRoot?: string;
+  readonly profileInit?: boolean;
   readonly extraLocalArtifacts?: readonly { readonly sha256: string; readonly tarball: Buffer }[];
 }
 
@@ -129,6 +130,7 @@ const buildHarness = async (options: HarnessOptions = {}): Promise<Harness> => {
   const runtime = createRuntimePort({
     closureInstall: false,
     precheck: 'none',
+    ...(options.profileInit === true ? { profileInit: true } : {}),
     localArtifactDirectory: localArtifacts,
     ...(options.faultsRuntime === undefined ? {} : { faults: options.faultsRuntime }),
   });
@@ -597,3 +599,4 @@ describe('journal recovery', () => {
     await harness.managed.close();
   });
 });
+
