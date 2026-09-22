@@ -118,6 +118,20 @@ export interface ManagedPnpmExecutorOptions {
 
 export const DEFAULT_PNPM_REGISTRY = 'https://registry.npmjs.org';
 
+/**
+ * Default-deny install arguments (ADR 0005 D14). `--ignore-scripts` blocks the
+ * root project and every dependency lifecycle script (preinstall/install/
+ * postinstall/prepare). Real rc.2-chain evidence: with `--ignore-scripts` no
+ * marker was written for a root project or a git-hosted dependency; without it
+ * pnpm ran the root scripts and required a precise `allowBuilds` entry
+ * (`"<name>@git+<url>#<sha>": true`) to run the dependency's scripts. pnpm
+ * rejects a name-only `allowBuilds` for git deps
+ * (`ERR_PNPM_GIT_DEP_PREPARE_NOT_ALLOWED`), which matches the "authorization is
+ * bound to the exact commit and script set" rule.
+ */
+export const DEFAULT_INSTALL_ARGS = ['install', '--ignore-scripts'] as const;
+
+
 export const createManagedPnpmExecutor = (
   options: ManagedPnpmExecutorOptions,
 ): PluginExecutorPort => {
