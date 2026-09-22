@@ -26,7 +26,8 @@
 | remove | preview/apply 取消（preview 终态无 plan；pre-commit 取消旧代不变） | **PASS** | removal-apply「cancels a removal preview…」「cancels a removal apply before the commit point…」 |
 | remove | **提交窗口内取消**（同源 `cancelOperation`） | **FAIL（同上 #92）** | 与 install 同代码路径；修复后由 QA 独立验窗口/幂等 |
 | 幂等 | 同 requestId 重放返原记录、不重复副作用 | **PASS（30 边界审计范围；本片只在网络/取消面引用）** | `tests/core/apply-idempotency-recovery.test.ts`、`tests/contracts/idempotency.test.ts` |
-| 幂等 | `retryable` 失败用新 requestId 重试成功 | **PASS** | removal-apply「lets a new requestId retry a pre-commit removal apply failure to success」 |
+| 幂等 | `retryable` 失败用新 requestId 重试成功（remove） | **PASS** | removal-apply「lets a new requestId retry a pre-commit removal apply failure to success」 |
+| 幂等 | **install apply**：真 dispatcher + 真 core，受控 `DOWNLOAD_FAILED` → 同 requestId 重放原终态且**不重复副作用** → **新 id 才重试成功** | **PASS（本片新增）** | `tests/core/change-apply-retryable-replay.test.ts`（`createContractRuntime` + 真 `ChangeApplyService`；stage 调用计数 1→1→2） |
 | 输出/秘密 | 受控错误不泄漏 canary/路径 | **PASS** | `tests/core/plugin-operation-canary.test.ts`、`tests/contracts/plugin-output.test.ts` |
 
 ## 本片新增测试（默认 CI、确定性、无产品改动）
