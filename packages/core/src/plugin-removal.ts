@@ -10,11 +10,19 @@ import { join } from 'node:path';
 import { portFail, portOk, type PortOutcome } from '@hdsl/contracts';
 import { environmentPaths, generationPaths, type AppDataLayout } from './layout.js';
 import { managedProfileName } from './generation-profile.js';
-import type { EnvironmentRecord } from './environment-store.js';
+
+/**
+ * Structural minimum both `EnvironmentRecord` and `EnvironmentSummary` satisfy, so
+ * the preview/adapter layers can pass either without widening the derivation.
+ */
+export interface RemovalEnvironmentRef {
+  readonly id: string;
+  readonly activeGenerationId: string | null;
+}
 
 export interface RemovalContextInput {
   readonly layout: AppDataLayout;
-  readonly environment: EnvironmentRecord | undefined;
+  readonly environment: RemovalEnvironmentRef | undefined;
   /** Isolated staging directory name suffix (e.g. the operation id). */
   readonly stagingKey: string;
 }
