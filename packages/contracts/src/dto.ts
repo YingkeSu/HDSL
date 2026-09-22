@@ -384,11 +384,16 @@ export type ScriptAssessment = Infer<typeof scriptAssessmentSchema>;
 export const EXECUTOR_ID_MAX_LENGTH = 128;
 export const EXECUTOR_VERSION_MAX_LENGTH = 64;
 
-/** Managed executor identity: versioned artifact plus the verified digest. */
+/** Managed executor identity: versioned artifact plus verified content digests. */
 export const executorIdentitySchema = sObject({
   id: sString({ minLength: 1, maxLength: EXECUTOR_ID_MAX_LENGTH }),
   version: sString({ minLength: 1, maxLength: EXECUTOR_VERSION_MAX_LENGTH }),
+  /** Verified tarball digest. */
   sha256: sha256Schema,
+  /** Digest of the executed entry (`bin/pnpm.mjs`), bound to the extraction. */
+  entrySha256: sha256Schema,
+  /** Digest of the extracted dependency tree, bound to the extraction. */
+  treeSha256: sha256Schema,
 });
 export type ExecutorIdentity = Infer<typeof executorIdentitySchema>;
 

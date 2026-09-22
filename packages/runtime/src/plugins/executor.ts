@@ -13,7 +13,7 @@
  * side-effect (marker file) on the same execution chain.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readFileSync, readdirSync, readlinkSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { portFail, portOk, type ExecutorIdentity, type PortOutcome } from '@hdsl/contracts';
 import { downloadToFile, type FetchLike } from '../install/download.js';
@@ -27,7 +27,53 @@ export interface PnpmExecutorSpec {
   readonly url: string;
   /** Registry `sha512-...` integrity of the pinned tarball. */
   readonly sha512: string;
+  /** Expected `sha256` of the verified tarball bytes. */
+  readonly sha256: string;
+  /** Entry path inside the extracted artifact (e.g. `bin/pnpm.mjs`). */
+  readonly entryPath: string;
+  /** Expected `sha256` of the executed entry. */
+  readonly entrySha256: string;
+  /** Expected digest of the extracted dependency tree. */
+  readonly treeSha256: string;
 }
+
+/**
+ * Frozen managed pnpm artifact (E1). Values computed from a bounded official
+ * download of `https://registry.npmjs.org/pnpm/-/pnpm-11.7.0.tgz`: the `sha512`
+ * matches the registry integrity, the `sha256` is the artifact digest, and the
+ * entry/tree digests bind the safe extraction.
+ */
+export const PNPM_EXECUTOR_SPEC: PnpmExecutorSpec = {
+  id: 'pnpm',
+  version: '11.7.0',
+  url: 'https://registry.npmjs.org/pnpm/-/pnpm-11.7.0.tgz',
+  sha512: 'sha512-GcyFLBIMcSV2DyRD7mvgyltA+fUFmN4aCaHxd1A+AQ5Xwjx3ZG4B52HeWb+HT7IqM5jDOrlpH8E+uUa28PTWIA==',
+  sha256: 'deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee',
+  entryPath: 'bin/pnpm.mjs',
+  entrySha256: 'ff3224d46b47fbb24a7e9fe15fededef7e00892d07d4e376b6762d4899906bfd',
+  treeSha256: 'b364f1bde35b9716f9af7b6018b64834490b63b783e3e3b462962e22c0dae1d1',
+};
+
+/** Deterministic digest over an extracted tree (files + symlink targets). */
+export const executorTreeDigest = (root: string): string => {
+  const entries: unknown[] = [];
+  const walk = (current: string, prefix: string): void => {
+    for (const name of readdirSync(current).sort()) {
+      const full = join(current, name);
+      const rel = prefix === '' ? name : `${prefix}/${name}`;
+      const stats = lstatSync(full);
+      if (stats.isSymbolicLink()) {
+        entries.push(['link', rel, readlinkSync(full)]);
+      } else if (stats.isDirectory()) {
+        walk(full, rel);
+      } else if (stats.isFile()) {
+        entries.push(['file', rel, stats.size, createHash('sha256').update(readFileSync(full)).digest('hex')]);
+      }
+    }
+  };
+  walk(root, '');
+  return createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+};
 
 export interface PluginExecutorRunRequest {
   readonly cwd: string;
@@ -82,39 +128,57 @@ export const createManagedPnpmExecutor = (
   const ensure = async (
     signal: AbortSignal,
   ): Promise<PortOutcome<{ readonly identity: ExecutorIdentity; readonly entry: string }>> => {
-    if (prepared !== undefined) {
-      return portOk(prepared);
-    }
-    const directory = join(options.cacheDirectory, 'pnpm', options.spec.version);
+    const directory = join(options.cacheDirectory, 'pnpm', options.spec.version, options.spec.sha256);
     const archive = join(directory, 'pnpm.tgz');
     const extractRoot = join(directory, 'package');
-    const entry = join(extractRoot, 'bin', 'pnpm.mjs');
+    const entry = join(extractRoot, ...options.spec.entryPath.split('/'));
+    const extractionIsBound = (): boolean => {
+      if (!existsSync(entry) || !existsSync(extractRoot)) {
+        return false;
+      }
+      try {
+        const entrySha = createHash('sha256').update(readFileSync(entry)).digest('hex');
+        return entrySha === options.spec.entrySha256 && executorTreeDigest(extractRoot) === options.spec.treeSha256;
+      } catch {
+        return false;
+      }
+    };
+    const identity: ExecutorIdentity = {
+      id: options.spec.id,
+      version: options.spec.version,
+      sha256: options.spec.sha256,
+      entrySha256: options.spec.entrySha256,
+      treeSha256: options.spec.treeSha256,
+    };
+    if (prepared !== undefined && extractionIsBound()) {
+      return portOk(prepared);
+    }
     try {
-      if (!existsSync(entry)) {
+      if (!extractionIsBound()) {
         mkdirSync(directory, { recursive: true });
-        await downloadToFile(options.spec.url, archive, {
-          fetch: options.fetch,
-          signal,
-          maxBytes: 200 * 1024 * 1024,
-        });
+        // Re-verify (or re-fetch) the pinned archive before re-extracting. A
+        // tampered cache never becomes the executed tree.
+        if (!existsSync(archive)) {
+          await downloadToFile(options.spec.url, archive, {
+            fetch: options.fetch,
+            signal,
+            maxBytes: 200 * 1024 * 1024,
+          });
+        }
         const integrity = await sha512Integrity(archive);
-        if (integrity !== options.spec.sha512) {
-          return portFail(
-            'EXECUTOR_UNAVAILABLE',
-            'the managed pnpm artifact integrity does not match the pinned spec',
-          );
+        const artifactSha = await sha256File(archive);
+        if (integrity !== options.spec.sha512 || artifactSha !== options.spec.sha256) {
+          return portFail('EXECUTOR_UNAVAILABLE', 'the managed pnpm artifact does not match the pinned spec');
         }
         rmSync(extractRoot, { recursive: true, force: true });
         await extractTarGz(archive, extractRoot, { stripComponents: 1 });
-        if (!existsSync(entry)) {
+        if (!extractionIsBound()) {
           return portFail(
             'EXECUTOR_UNAVAILABLE',
-            'the managed pnpm artifact did not contain bin/pnpm.mjs',
+            'the extracted managed pnpm tree does not match the pinned entry/tree digests',
           );
         }
       }
-      const sha256 = await sha256File(archive);
-      const identity: ExecutorIdentity = { id: options.spec.id, version: options.spec.version, sha256 };
       prepared = { identity, entry };
       return portOk(prepared);
     } catch {
