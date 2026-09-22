@@ -41,6 +41,11 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 - **提交点 = 活动代际指针切换**（复用 S2 事务守卫/cache/journal/ledger/recover）。提交前失败或取消：旧代不变、stage 清理、计划不消费；提交后：pointer 权威前滚，`CANNOT_CANCEL`，可显式 restore。
 - **失败不提交 ≠ 副作用可回滚**：安装期脚本一旦执行，其本机副作用不在代数事务的回滚范围内。UI 与证据必须分开陈述。
 
+## 临时授权的清理边界（精确）
+
+- HDSL 的**授权配置载体**是单次安装期间写入的 workspace `allowBuilds`，在安装后立即清除；发布出的代际 **workspace 配置（`pnpm-workspace.yaml`/`package.json`）无 `allowBuilds`/`onlyBuiltDependencies`**（默认 CI 测试 + 真实 desktop 已核）。
+- 但已发布代际的 `profile/node_modules/.modules.yaml` 可能保留 pnpm 自身的**安装态** `allowBuilds`（本次真实 desktop 观察到一个精确键）。这是 pnpm 的 node_modules 安装记录，不是 HDSL 的授权配置载体；每个新代际的 profile 由 plan 绑定的 targetProfile 全新物化，不继承上一代的 `node_modules`。它是否在后续全新安装中构成实际放行门**未经独立 probe**；本次按“如实记录”处理，不声称“磁盘上无任何 `allowBuilds` 字节”。
+
 ## UI 口径（renderer）
 
 - 预览展示精确 commit、已枚举脚本清单（含 `root`/`dependency` 来源；依据计划锁定的依赖闭包，未能完整核对时为 `unknown`，不提供授权）。
@@ -71,9 +76,10 @@ BuildScriptEntry   = { packageName(1..214), packageVersion(1..128), script(1..64
 | runtime 执行复核 | 受控 executor seam 断言两阶段流程（默认拒执行物化 → 只读枚举 → 单次精确 `allowBuilds` + `--ignore-scripts=false`）、发布前清除 `allowBuilds`、拒绝路径不执行 | 本片默认 CI（`tests/plugins/*` 与 `tests/core/change-apply-authorized.test.ts`，假执行器，不执行任何脚本） |
 | opt-in 真实受控 node 链（git+file://，v2 fixture） | 外部 marker 证明 deny=0 marker；精确授权下**恰好**授权集合产生 marker；漂移/子集拒绝 | 受控 fixture v2 已通过独立静态审（30 APPROVED，归档 `7f206792…`）；runtime 子任务在冻结受管 pnpm 11.7.0 上跑 `scripts/research/a4-build-authorization-probe.mjs` 16/16（deny=0；枚举 root 4 + dep 4；allow 8 hook 实际触发；子集/漂移拒绝）。本整合分支未复跑 |
 | opt-in 真实 `.pnpm` 传递布局 | 本地最小 registry + 受管 pnpm 生成 `profile→plugin→传递依赖(.pnpm)` 真实树；默认拒执行 marker=0；生产枚举函数读到传递包 4 hook；删真实 manifest ⇒ `unknown` | `scripts/research/a4-pnpm-transitive-layout-probe.mjs` 7/7（受管 pnpm 11.7.0；未放宽 `blockExoticSubdeps`；不执行脚本）。未 publish；手工 mkdir 的 `.pnpm` 用例仅为单元逻辑证据 |
-| opt-in 生产 GitHub 外部键 | 真实 `github:` shorthand 的 pinned-lock key vs depPath 逐字节、exact allow 4 marker、错 key 零 marker | `scripts/research/a4-github-key-probe.mjs` 13/13（受审 PUBLIC fixture `YingkeSu/hdsl-s4-gh-fixture@cb265920…`）；30 只读复核接受为外部键形态证据；真实 HDSL 锁→key 推导有默认 CI 回归 |
-| opt-in 真实 desktop | 本地受控 git+file:// 传输（仅测试 adapter）走完整预览→授权→apply→重启 | **未跑** |
-| 生产 GitHub 全链 | 受控公开 GitHub 脚本 fixture 的真实 HTTPS 全链 | **未跑**，需先给最小发布方案与精确审查内容 |
+| opt-in 生产 GitHub 外部键 | 真实 `github:` shorthand 的 pinned-lock key vs depPath 逐字节、exact allow 4 marker、错 key/drift 零 marker | `scripts/research/a4-github-key-probe.mjs` v3 14/14（受审 PUBLIC fixture `base-v3 71f9a972…`；不注入 `S4_MARKER_DIR`，marker 走既有 `$TMPDIR` 子目录）；30 只读复核接受为外部键形态证据；HDSL 锁→key 推导有默认 CI 回归；exact key 见[发布记录](plugin-build-authorization-github-fixture-publication.md) |
+| opt-in 真实 desktop（production Electron + bridge） | 真实 UI 预览/未授权拒绝/勾选授权应用 4 marker/无沙箱文案/授权配置不持久化/漂移旧授权 API 级拒绝 | **PASS**（QA 子任务，代码 `e80fe55` + fixture `base-v3 71f9a972…`；未注入 env；未跑 start） |
+| opt-in 真实 desktop | 真实 production Electron + bridge 走完整预览→授权→apply→重启 | 预览/拒绝/授权/漂移已 PASS（`e80fe55` + `base-v3`）；start 未跑 |
+| 生产 GitHub 全链 | 受控公开 GitHub 脚本 fixture 的真实 HTTPS 全链 | 外部键形态 14/14 + 真实 desktop 授权链已 PASS；含 start 的完整运行链仍以实际证据为准 |
 
 - `executor.executedInstallScripts` 是观测报告，**不作为**默认拒执行或“仅执行授权集合”的正控证据；权威证据是受控链上的外部 marker 正控/负控。
 - **`UNAUTHORIZED_SCRIPT_EXECUTION` 尚未接线**：受管 pnpm 无可靠的进程内“实际执行集合”信号，因此当前执行期保证是**构造性的**——“默认拒执行 + 仅写精确 `allowBuilds` 键”。若无法获得可靠的观测信号，不得臆造该码的触发证据；该码保留给未来可用的确定性观测。

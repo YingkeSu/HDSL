@@ -80,7 +80,7 @@
 - **UI/日志**：展示精确 commit + 已枚举脚本清单（含 `root`/`dependency` 来源；依据计划绑定闭包，未能完整核对时为 `unknown`，不提供授权入口）与“安装期在你的机器上执行该包代码，不受 DSH 或 HDSL 沙箱保护”；授权需显式勾选确认，未确认不发送授权。
 - **与 S3 服务核验正交**：构建授权只影响“是否允许执行安装期脚本”这一轴，**不**构成对 `hdsl.services.provides` 的核验，也不得把 S3 的 `unknown` 服务轴变为 `known`/confirmed。通过构建授权安装的新来源，其卸载仍按 S3 三态（无核验记录 ⇒ unknown 阻塞，UI 仍呈现“无法验证服务依赖，暂不能卸载”）。
 - **限制（受控、不绕过）**：受管 pnpm 11.7.0 的 `blockExoticSubdeps` 默认保留，git 插件含 git 子依赖的闭包受控不支持（`ERR_PNPM_EXOTIC_SUBDEP`），预览/失败文案须写清；预览闭包枚举以 pinned lock 可达身份为权威（含 `.pnpm` 虚拟存储），任一可达包不可核对 ⇒ `unknown`；`BuildScriptEntry` 不含 commit，同版本不同 commit 的依赖只保降级表述、由完整性+严格计数/歧义拒结兜住；`github:` shorthand 的 `allowBuilds` 键已在生产受控 probe 实测逐字节相等。详见[验证边界](../../docs/development/plugin-build-authorization-validation.md)。
-- **证据分层与未跑项**见 [plugin-build-authorization-validation.md](../../docs/development/plugin-build-authorization-validation.md)：默认 CI（契约/core/renderer + runtime 受控 executor seam 假执行器）已实现；opt-in 真实受控 node 链与真实 desktop **未跑**；**生产 GitHub 全链未跑**，不得声称端到端验收。`UNAUTHORIZED_SCRIPT_EXECUTION` 尚无可靠执行期观测信号，当前为构造性保证（默认拒执行 + 仅写精确 `allowBuilds`）。
+- **证据分层与未跑项**见 [plugin-build-authorization-validation.md](../../docs/development/plugin-build-authorization-validation.md) 与[发布/实测记录](../../docs/development/plugin-build-authorization-github-fixture-publication.md)：默认 CI（契约/core/renderer + runtime 受控 executor seam 假执行器）已实现；opt-in 真实受控链（git+file://、`.pnpm` 传递布局、生产 GitHub exact key 14/14）与真实 production desktop 授权链（预览/拒绝/授权/漂移）已 PASS；**含 start 的完整运行链与漂移旧授权的 UI 跨 preview 未覆盖**，不得据此声称全部端到端验收。`UNAUTHORIZED_SCRIPT_EXECUTION` 尚无可靠执行期观测信号，当前为构造性保证（默认拒执行 + 仅写精确 `allowBuilds`）。
 
 ## 未决与依赖
 
