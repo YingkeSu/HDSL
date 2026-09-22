@@ -19,7 +19,7 @@ import {
   type ChangeFaults,
   type EnvironmentRecord,
 } from '@hdsl/core';
-import { computeCompositionDigest } from '@hdsl/runtime';
+import { computeCompositionDigest, sha256TreeDigestSync } from '@hdsl/runtime';
 import type { ChangeApplication, ChangePlan, CompositionLock } from '@hdsl/contracts';
 
 const roots: string[] = [];
@@ -114,7 +114,15 @@ const build = (options: { state?: EnvironmentRecord['state']; faults?: ChangeFau
   mkdirSync(join(oldPaths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh'), { recursive: true });
   writeFileSync(join(oldPaths.nodeDirectory, 'bin', 'node'), '#!/bin/sh\n');
   writeFileSync(join(oldPaths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'bin.js'), '// dsh\n');
-  writeFileSync(oldPaths.manifestPath, JSON.stringify({ schemaVersion: '1', installMode: 'npm-ci', node: { version: '22.19.0' }, dsh: { version: '0.1.5-rc.2' } }));
+  writeFileSync(
+    oldPaths.manifestPath,
+    JSON.stringify({
+      schemaVersion: '1',
+      installMode: 'npm-ci',
+      node: { version: '22.19.0', treeDigest: sha256TreeDigestSync(oldPaths.nodeDirectory) },
+      dsh: { version: '0.1.5-rc.2', treeDigest: sha256TreeDigestSync(join(oldPaths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')) },
+    }),
+  );
   writeFileSync(oldPaths.lockPath, JSON.stringify({ schemaVersion: '1', node: { version: '22.19.0', platform: 'darwin', arch: 'arm64', sha256: 'a'.repeat(64) }, dsh: { version: '0.1.5-rc.2', platform: 'darwin', arch: 'arm64', sha256: 'b'.repeat(64) }, plugins: [], sources: { node: { url: 'https://x/n', sha256: 'a'.repeat(64) }, dsh: { url: 'https://x/d', sha256: 'b'.repeat(64) } } }));
   writeFileSync(oldPaths.generationRecordPath, JSON.stringify({ id: OLD_GENERATION, environmentId: ENVIRONMENT_ID, compositionDigest: '0'.repeat(64), createdAt: now }));
   const plans = new ChangePlanStore(layout);

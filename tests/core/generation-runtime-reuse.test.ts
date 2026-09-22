@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { ensureLayout, generationPaths, resolveLayout, reuseGenerationRuntime } from '@hdsl/core';
+import { sha256TreeDigestSync } from '@hdsl/runtime';
 
 const roots: string[] = [];
 afterEach(() => {
@@ -31,7 +32,12 @@ const build = () => {
   writeFileSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh', 'bin.js'), '// dsh\n');
   writeFileSync(
     paths.manifestPath,
-    JSON.stringify({ schemaVersion: '1', installMode: 'npm-ci', node: { version: '22.19.0' }, dsh: { version: '0.1.5-rc.2' } }),
+    JSON.stringify({
+      schemaVersion: '1',
+      installMode: 'npm-ci',
+      node: { version: '22.19.0', treeDigest: sha256TreeDigestSync(paths.nodeDirectory) },
+      dsh: { version: '0.1.5-rc.2', treeDigest: sha256TreeDigestSync(join(paths.dshDirectory, 'node_modules', '@deepseek-ai', 'dsh')) },
+    }),
   );
   return { layout, paths, dataRoot };
 };
