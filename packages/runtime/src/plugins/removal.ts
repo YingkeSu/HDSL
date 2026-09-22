@@ -137,6 +137,17 @@ export interface PluginRemovalInput {
   readonly removedRowIds?: readonly string[];
   /** Service names appearing in the removed plugin's own patch rows (informational). */
   readonly removedServiceNames?: readonly string[];
+  /**
+   * HDSL service-verification status for the removed plugin (ADR 0005 D21).
+   * - `known` + `provides: []` is a VERIFIED EMPTY set (removal may proceed when
+   *   no retained consumer intersects);
+   * - `unknown` (missing declaration, empty string, unverified or digest
+   *   mismatch) must block whenever a retained source injects ANY service; it is
+   *   never inferred safe from the existence of other providers.
+   */
+  readonly serviceVerification?:
+    | { readonly status: 'known'; readonly provides: readonly string[] }
+    | { readonly status: 'unknown' };
 }
 
 export interface PluginRemovalResolution {
@@ -264,12 +275,40 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
 
   const SERVICE_COUPLING_LIMITATION =
     'service-level coupling (another layer injecting a Cordis service provided by the removed plugin) is not decidable from patch files; no static reference does not prove the removal is free of impact';
-  const injectedElsewhere = new Set<string>();
+  const injectedElsewhere = new Map<string, PluginReferenceSource>();
   for (const source of input.referenceSources) {
     for (const service of source.services ?? []) {
-      injectedElsewhere.add(service);
+      if (!injectedElsewhere.has(service)) {
+        injectedElsewhere.set(service, source);
+      }
     }
   }
+  const verification = input.serviceVerification ?? { status: 'unknown' as const };
+  if (verification.status === 'known') {
+    // Verified provider set: block only on an actual intersection with a retained
+    // consumer (unrelated services never block).
+    for (const provided of verification.provides) {
+      const consumer = injectedElsewhere.get(provided);
+      if (consumer !== undefined) {
+        const detail = isSafeDetail(consumer.detail) ? consumer.detail : `unresolvable ${consumer.kind} reference source`;
+        blockingReferences.push({
+          pluginId: input.pluginId,
+          kind: consumer.kind,
+          detail: `${detail} consumes a Cordis service this plugin provides`,
+        });
+      }
+    }
+  } else if (injectedElsewhere.size > 0) {
+    // Unknown verification: NEVER infer safety from other providers. The absence
+    // of a static reference is not proof; block while any retained consumer can
+    // depend on a service this plugin may provide.
+    blockingReferences.push({
+      pluginId: input.pluginId,
+      kind: 'config',
+      detail: 'service dependencies for this plugin are not verified (no HDSL service verification record)',
+    });
+  }
+
   const serviceOverlap = (input.removedServiceNames ?? []).filter((service) => injectedElsewhere.has(service));
   const riskItems: string[] = [SERVICE_COUPLING_LIMITATION];
   if (serviceOverlap.length > 0) {

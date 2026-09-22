@@ -171,8 +171,57 @@ describe('resolvePluginRemoval', () => {
     expect(outcome.value.blockingReferences[0]?.detail).not.toContain('/Users');
   });
 
+  it('D21 known-empty verification: allows removal when no retained consumer intersects', () => {
+    const outcome = resolvePluginRemoval(input({
+      serviceVerification: { status: 'known', provides: [] },
+      referenceSources: [
+        { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-web-app', references: [], services: ['webStartup'], unresolved: false },
+      ],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences).toEqual([]);
+  });
+
+  it('D21 known providers: blocks only the intersecting retained consumer', () => {
+    const outcome = resolvePluginRemoval(input({
+      serviceVerification: { status: 'known', provides: ['webStartup'] },
+      referenceSources: [
+        { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-web-app', references: [], services: ['webStartup'], unresolved: false },
+        { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-headless', references: [], services: ['otherService'], unresolved: false },
+      ],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences).toHaveLength(1);
+    expect(outcome.value.blockingReferences[0]?.detail).toContain('@deepseek-ai/dsh-web-app');
+    expect(outcome.value.blockingReferences[0]?.detail).toContain('provides');
+  });
+
+  it('D21 unknown verification: blocks while any retained consumer exists, never inferred safe', () => {
+    const withConsumer = resolvePluginRemoval(input({
+      serviceVerification: { status: 'unknown' },
+      referenceSources: [
+        { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-web-app', references: [], services: ['webStartup'], unresolved: false },
+      ],
+    }));
+    expect(withConsumer.ok).toBe(true);
+    if (!withConsumer.ok) return;
+    expect(withConsumer.value.blockingReferences[0]?.detail).toContain('not verified');
+
+    // No retained consumer at all: no service can depend on this plugin.
+    const noConsumers = resolvePluginRemoval(input({
+      serviceVerification: { status: 'unknown' },
+      referenceSources: [{ kind: 'bundle', detail: 'bundle without injects', references: [], services: [], unresolved: false }],
+    }));
+    expect(noConsumers.ok).toBe(true);
+    if (!noConsumers.ok) return;
+    expect(noConsumers.value.blockingReferences).toEqual([]);
+  });
+
   it('warns (never blocks) about patch-injected service overlap and never treats services as packages', () => {
     const outcome = resolvePluginRemoval(input({
+      serviceVerification: { status: 'known', provides: [] },
       removedServiceNames: ['webStartup', 'sharedService'],
       referenceSources: [
         { kind: 'bundle', detail: 'bundle @deepseek-ai/dsh-web-app', references: [], services: ['webStartup'], unresolved: false },
