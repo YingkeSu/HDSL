@@ -130,6 +130,8 @@ export interface DesktopComposition {
   readonly processPort: ManagedProcessPort;
   readonly available: boolean;
   readonly recovery: RecoveryReport;
+  /** Journal + idempotency-ledger reconciliation of crashed apply/restore transactions. */
+  readonly applyRecovery: { readonly finalized: number; readonly rolledBack: number };
   readonly lockSnapshot: () => DataRootLockSnapshot;
   readonly exporterAvailable: boolean;
   /**
@@ -402,6 +404,10 @@ export const createDesktopComposition = async (
     changeApply,
   });
 
+  // Change transactions carry their own journal + dispatcher idempotency ledger;
+  // reconcile them before serving traffic so a crashed apply/restore cannot leave
+  // a requestId stuck in progress or an unresolved journal.
+  const applyRecovery = changeApply.recover();
   const recovery = await service.recover();
   const recoveryReasons = (recovery.process ?? [])
     .filter((entry) => entry.resolution === 'unverifiable')
@@ -430,6 +436,7 @@ export const createDesktopComposition = async (
     processPort,
     available: service.available,
     recovery,
+    applyRecovery,
     recoveryBlocked,
     recoveryReasons,
     lockSnapshot: () => service.lockSnapshot(),

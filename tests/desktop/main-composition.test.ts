@@ -142,6 +142,9 @@ describe('createDesktopComposition', () => {
     const { composition, contexts } = await compose(dataRoot);
     expect(composition.available).toBe(true);
     expect(composition.recoveryBlocked).toBe(false);
+    // Crashed apply/restore journals + dispatcher idempotency records are
+    // reconciled at startup, not only for environment creation.
+    expect(composition.applyRecovery).toEqual({ finalized: 0, rolledBack: 0 });
 
     const operationId = await createEnvironment(composition, '接线环境');
     expect(operationId).toMatch(/^op-/);

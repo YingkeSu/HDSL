@@ -27,6 +27,7 @@ import {
   type BuildAuthorization,
   type ChangeApplication,
   type ChangePlan,
+  type ContractMethod,
   type CompositionLock,
   type EnvironmentSummary,
   type OperationRef,
@@ -38,6 +39,7 @@ import { join } from 'node:path';
 import type { RestoreGenerationCommand } from '@hdsl/contracts';
 import { ChangePlanStore } from './change-plan-store.js';
 import { EnvironmentStore, type EnvironmentRecord } from './environment-store.js';
+import { IdempotencyStore } from './idempotency-store.js';
 import { OperationStore, isTerminalStatus, toOperationSnapshot } from './operation-store.js';
 import { managedProfileName, publishGenerationProfile } from './generation-profile.js';
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
@@ -122,6 +124,13 @@ export interface ChangeApplyServiceOptions {
   readonly now?: () => Date;
   /** Test-only fault injection. */
   readonly faults?: ChangeFaults;
+  /**
+   * Durable idempotency ledger shared with the dispatcher. Recovery reconciles
+   * `in-progress` records to a terminal state so a same-`requestId` replay after
+   * a crash returns the original outcome (or a controlled failure) instead of
+   * `ENVIRONMENT_BUSY` forever.
+   */
+  readonly idempotency?: IdempotencyStore;
 }
 
 interface ApplyJournalRecord {
@@ -146,6 +155,9 @@ export interface ApplyRecoveryReport {
 
 const ALL_PHASES: readonly ChangePhase[] = ['planned', 'staged', 'verified', 'committed', 'finalized'];
 
+/** Methods whose crashed `in-progress` ledger entries this service reconciles. */
+const RECONCILABLE_IDEMPOTENT_METHODS: readonly ContractMethod[] = ['changes.apply', 'generations.restore'];
+
 export class ChangeApplyService {
   readonly #layout: AppDataLayout;
   readonly #plans: ChangePlanStore;
@@ -160,6 +172,7 @@ export class ChangeApplyService {
     | undefined;
   readonly #controllers = new Map<string, AbortController>();
   readonly #inFlight = new Set<string>();
+  readonly #idempotency: IdempotencyStore;
 
   constructor(options: ChangeApplyServiceOptions) {
     this.#layout = options.layout;
@@ -171,6 +184,7 @@ export class ChangeApplyService {
     this.#now = options.now ?? (() => new Date());
     this.#faults = options.faults ?? {};
     this.#verifyGenerationRuntime = options.verifyGenerationRuntime;
+    this.#idempotency = options.idempotency ?? new IdempotencyStore(options.layout);
   }
 
   get environmentStore(): EnvironmentStore {
@@ -292,6 +306,7 @@ export class ChangeApplyService {
       if (created !== undefined) {
         this.#operations.update(created, { status: 'succeeded', phase: 'finished', output: this.#generationSummary(command, record) }, this.#now().toISOString());
       }
+      this.#reconcileLedger(command.requestId, operationId);
       return portOk({ operationId });
     }
     // Single-active: refuse while another apply/restore transaction is pending.
@@ -379,6 +394,7 @@ export class ChangeApplyService {
         this.#now().toISOString(),
       );
     }
+    this.#reconcileLedger(command.requestId, operationId);
     this.#removeJournal(transactionId);
     return portOk({ operationId });
   }
@@ -401,10 +417,11 @@ export class ChangeApplyService {
   recover(): ApplyRecoveryReport {
     let finalized = 0;
     let rolledBack = 0;
+    const reconciledRequestIds = new Set<string>();
     for (const journal of this.#listJournals()) {
       const environment = this.#environments.read(journal.environmentId);
       if (environment !== undefined && environment.activeGenerationId === journal.generationId) {
-        this.#markOperationSucceeded(journal.operationId, journal.generationId, journal.planId, journal.sourceLock);
+        this.#markOperationSucceeded(journal.operationId, journal.generationId, journal.planId, journal.sourceLock, journal.requestId);
         if (journal.kind !== 'restore') {
           this.#plans.consumeIfUnused(journal.planId, journal.requestId);
         }
@@ -423,6 +440,8 @@ export class ChangeApplyService {
             this.#now().toISOString(),
           );
         }
+        this.#reconcileLedger(journal.requestId, journal.operationId);
+        reconciledRequestIds.add(journal.requestId);
         this.#removeJournal(journal.transactionId);
         rolledBack += 1;
         continue;
@@ -445,6 +464,22 @@ export class ChangeApplyService {
         { status: 'failed', phase: 'failed', error: contractError('INTERNAL_ERROR', 'the restore was interrupted before it could be committed', { operationId: record.id }) },
         this.#now().toISOString(),
       );
+      rolledBack += 1;
+    }
+    // Ledger sweep: an `in-progress` record for an apply/restore transaction that
+    // no journal reconciled means the crash happened before any durable effect
+    // evidence existed. A same-requestId replay must not stay `ENVIRONMENT_BUSY`
+    // forever, so bind it to a controlled terminal failure (the original
+    // method/fingerprint binding is preserved, so a different payload under the
+    // same id is still `IDEMPOTENCY_CONFLICT`). `changes.preview` is out of scope.
+    for (const { requestId, record: ledger } of this.#idempotency.list()) {
+      if (ledger.state !== 'in-progress' || reconciledRequestIds.has(requestId)) {
+        continue;
+      }
+      if (!RECONCILABLE_IDEMPOTENT_METHODS.includes(ledger.method)) {
+        continue;
+      }
+      this.#reconcileLedger(requestId, null);
       rolledBack += 1;
     }
     return { finalized, rolledBack };
@@ -613,7 +648,7 @@ export class ChangeApplyService {
       }
 
       this.#plans.consume(plan.planId, command.requestId);
-      this.#markOperationSucceeded(ids.operationId, ids.generationId, plan.planId, staged.value.sourceLock, digest);
+      this.#markOperationSucceeded(ids.operationId, ids.generationId, plan.planId, staged.value.sourceLock, command.requestId, digest);
       writeJournal('finalized', staged.value.sourceLock);
       this.#removeJournal(ids.transactionId);
     } catch {
@@ -716,8 +751,34 @@ export class ChangeApplyService {
       );
     }
     removePath(generationPaths(this.#layout, journal.environmentId, journal.generationId).generationDirectory);
+    // Reconcile the dispatcher ledger: the effect is terminal (the operation is
+    // failed), so a same-requestId replay must return that bound operation
+    // instead of staying `in-progress` (permanent ENVIRONMENT_BUSY).
+    this.#reconcileLedger(journal.requestId, journal.operationId);
     this.#removeJournal(journal.transactionId);
     void message;
+  }
+
+  /**
+   * Moves an `in-progress` ledger record to its terminal state, preserving the
+   * original method/fingerprint binding so a different payload under the same
+   * `requestId` is still rejected as `IDEMPOTENCY_CONFLICT`. No-op when the
+   * dispatcher already wrote the outcome (the normal path).
+   */
+  #reconcileLedger(requestId: string, operationId: string | null): void {
+    const ledger = this.#idempotency.read(requestId);
+    if (ledger === undefined || ledger.state !== 'in-progress') {
+      return;
+    }
+    this.#idempotency.write(requestId, {
+      state: 'completed',
+      method: ledger.method,
+      fingerprint: ledger.fingerprint,
+      outcome:
+        operationId === null
+          ? { ok: false, error: contractError('INTERNAL_ERROR', 'the change transaction was interrupted before it started; retry with a new requestId') }
+          : { ok: true, value: { operationId } },
+    });
   }
 
   #markOperationSucceeded(
@@ -725,6 +786,7 @@ export class ChangeApplyService {
     generationId: string,
     planId: string,
     sourceLock: PluginSourceLock | null,
+    requestId: string,
     compositionDigest?: string,
   ): void {
     const record = this.#operations.read(operationId);
@@ -745,6 +807,7 @@ export class ChangeApplyService {
       { status: 'succeeded', phase: 'finished', output },
       this.#now().toISOString(),
     );
+    this.#reconcileLedger(requestId, operationId);
   }
 
   #hasOpenJournal(environmentId: string): boolean {

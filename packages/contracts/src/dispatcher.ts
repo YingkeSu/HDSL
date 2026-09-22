@@ -293,6 +293,14 @@ const execute = (
     }
     case 'changes.apply': {
       const typed = input as MethodInputs['changes.apply'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      if (environment.value.revision !== typed.expectedRevision) {
+        return { response: failureForCode('REVISION_CONFLICT'), executed: false };
+      }
+      markInProgress();
       const outcome = runtime.port.applyChange({
         requestId: typed.requestId,
         environmentId: typed.environmentId,
@@ -308,6 +316,14 @@ const execute = (
     }
     case 'generations.restore': {
       const typed = input as MethodInputs['generations.restore'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      if (environment.value.revision !== typed.expectedRevision) {
+        return { response: failureForCode('REVISION_CONFLICT'), executed: false };
+      }
+      markInProgress();
       const outcome = runtime.port.restoreGeneration({
         requestId: typed.requestId,
         environmentId: typed.environmentId,

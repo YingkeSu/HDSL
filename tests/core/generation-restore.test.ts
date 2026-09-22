@@ -215,7 +215,7 @@ describe('generations.restore: mutual exclusion with apply and start', () => {
 });
 
 describe('generations.restore: orphan reconciliation', () => {
-  it('fails an orphaned running restore operation so a replay is not stuck busy', () => {
+  it('fails an orphaned running restore operation during recovery', () => {
     const { operations, service } = build();
     operations.create({
       id: 'op-00000000000000ee',
@@ -228,7 +228,8 @@ describe('generations.restore: orphan reconciliation', () => {
     const report = service.recover();
     expect(report.rolledBack).toBeGreaterThanOrEqual(1);
     expect(operations.read('op-00000000000000ee')?.status).toBe('failed');
-    // The requestId is no longer stuck: a fresh restore succeeds.
+    // The service is not blocked: a fresh restore still succeeds.
+    // (Dispatcher-level requestId replay is covered by apply-idempotency-recovery.test.ts.)
     const outcome = service.restoreGeneration(command());
     expect(outcome.ok).toBe(true);
   });
