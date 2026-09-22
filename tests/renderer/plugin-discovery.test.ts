@@ -42,6 +42,7 @@ const noopActions: RendererActions = {
   setPluginQuery: () => undefined,
   resetPluginQuery: () => undefined,
   runPluginSearch: () => undefined,
+  inspectSelectedPlugin: () => undefined,
   selectPlugin: () => undefined,
   cancelPluginSearch: () => undefined,
 };
@@ -122,6 +123,22 @@ describe('RendererController plugin discovery', () => {
     expect(controller.getState().environments).toEqual(environmentsBefore);
     // Only the discovery effect ran; no environment mutation was attempted.
     expect(port.effects.every((effect) => effect.startsWith('searchPlugins'))).toBe(true);
+    await controller.dispose();
+  });
+
+  it('fetches authoritative repository detail through plugins.inspect for the selected hit', async () => {
+    const { client, calls } = createTestRendererClient();
+    const controller = new RendererController({ client });
+    await controller.load();
+    await controller.runPluginSearch();
+    await flush();
+    const selected = controller.getState().selectedPluginFullName;
+    expect(selected).not.toBeNull();
+    await controller.inspectSelectedPlugin();
+    await flush();
+    const inspectCall = calls.find((call) => call.method === 'plugins.inspect');
+    expect(inspectCall?.input).toMatchObject({ source: { owner: 'octo', name: 'dsh-plugin-demo' } });
+    expect(controller.getState().pluginInspection?.repository.fullName).toBe(selected);
     await controller.dispose();
   });
 
@@ -253,6 +270,38 @@ describe('PluginDiscovery markup', () => {
     expect(html).toContain('S2');
     expect(html).toContain('当前版本尚未实现');
     expect(html).toMatch(/<button type="button" disabled[^>]*>来源预览<\/button>/);
+  });
+
+  it('escapes untrusted repository text instead of interpreting it as markup', () => {
+    const html = renderPluginDiscovery({
+      state: state({
+        pluginSearch: search({
+          hits: [
+            {
+              fullName: 'octo/dsh-plugin-demo',
+              owner: 'octo',
+              name: 'dsh-plugin-demo',
+              description: "<script>alert('x')</script>",
+              htmlUrl: 'https://github.com/octo/dsh-plugin-demo',
+              stars: 1,
+              topics: ['<img src=x onerror="alert(1)">'],
+              defaultBranch: 'main',
+              updatedAt: '2026-01-02T03:04:05Z',
+              archived: false,
+              fork: false,
+              license: '<b>MIT</b>',
+            },
+          ],
+        }),
+        selectedPluginFullName: 'octo/dsh-plugin-demo',
+      }),
+      actions: noopActions,
+    });
+    // React escapes text children; no raw tag/attribute may survive.
+    expect(html).not.toContain('<script>');
+    expect(html).not.toContain('<img src=x');
+    expect(html).not.toContain('onerror="alert');
+    expect(html).toContain('&lt;script&gt;');
   });
 
   it('renders the rate-limit retry hint from the operation error', () => {

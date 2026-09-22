@@ -11,6 +11,7 @@ import { useState, type ReactElement } from 'react';
 import {
   GITHUB_SEARCH_RESULT_LIMIT,
   type ContractError,
+  type PluginInspection,
   type PluginSearchHit,
 } from '@hdsl/contracts';
 import { Icon } from './Icon.js';
@@ -41,11 +42,19 @@ const errorHint = (error: ContractError): string => {
 
 function DetailPanel({
   hit,
+  inspection,
+  onInspect,
   onClose,
 }: {
   readonly hit: PluginSearchHit;
+  readonly inspection: PluginInspection | null;
+  readonly onInspect: () => void;
   readonly onClose: () => void;
 }): ReactElement {
+  const inspected =
+    inspection !== null &&
+    inspection.source.owner === hit.owner &&
+    inspection.source.name === hit.name;
   return (
     <section className="panel plugin-detail" aria-label={`仓库详情 ${hit.fullName}`}>
       <div className="plugin-detail-head">
@@ -96,6 +105,24 @@ function DetailPanel({
           </dd>
         </div>
       </dl>
+      <div className="plugin-inspect-entry">
+        <button type="button" onClick={onInspect}>
+          获取来源详情（plugins.inspect）
+        </button>
+        {inspected ? (
+          <p className="muted" role="status">
+            已由 plugins.inspect 重新获取：{inspection.repository.fullName} · ★{' '}
+            {formatStars(inspection.repository.stars)} · 默认分支{' '}
+            {inspection.repository.defaultBranch} · 许可{' '}
+            {inspection.repository.license ?? '（未声明）'} · 获取时间{' '}
+            {formatTimestamp(inspection.fetchedAt)}。
+          </p>
+        ) : (
+          <p className="muted">
+            当前展示的是检索命中元数据；点击按钮通过 plugins.inspect 重新获取该仓库的公开详情。
+          </p>
+        )}
+      </div>
       <p className="boundary-note">
         默认查询已排除 fork 与 archived；结果元数据（star/topic）不作为安全或可安装性依据。
       </p>
@@ -278,6 +305,10 @@ export function PluginDiscovery({
           {detail !== null && (
             <DetailPanel
               hit={detail}
+              inspection={state.pluginInspection}
+              onInspect={() => {
+                actions.inspectSelectedPlugin();
+              }}
               onClose={() => {
                 actions.selectPlugin(null);
               }}

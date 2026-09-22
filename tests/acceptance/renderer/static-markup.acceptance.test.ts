@@ -27,6 +27,7 @@ const actions: RendererActions = {
   setPluginQuery: () => undefined,
   resetPluginQuery: () => undefined,
   runPluginSearch: () => undefined,
+  inspectSelectedPlugin: () => undefined,
   selectPlugin: () => undefined,
   cancelPluginSearch: () => undefined,
 };

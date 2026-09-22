@@ -18,6 +18,7 @@ import {
   type ExportResult,
   type OperationKind,
   type OperationStatus,
+  type PluginInspection,
   type PluginSearchResult,
   type RuntimeCombination,
 } from '@hdsl/contracts';
@@ -81,6 +82,8 @@ export interface RendererState {
   readonly pluginQuery: string;
   /** Last succeeded `plugins.search` payload, or null. */
   readonly pluginSearch: PluginSearchResult | null;
+  /** Last succeeded `plugins.inspect` payload for the selected hit, or null. */
+  readonly pluginInspection: PluginInspection | null;
   /** Selected repository in the discovery detail panel, by `fullName`. */
   readonly selectedPluginFullName: string | null;
 }
@@ -107,6 +110,8 @@ export interface RendererActions {
   setPluginQuery(query: string): void;
   resetPluginQuery(): void;
   runPluginSearch(): void;
+  /** Fetches authoritative repository detail via `plugins.inspect`. */
+  inspectSelectedPlugin(): void;
   selectPlugin(fullName: string | null): void;
   cancelPluginSearch(): void;
 }
@@ -132,6 +137,7 @@ export const INITIAL_STATE: RendererState = {
   notice: null,
   pluginQuery: DEFAULT_PLUGIN_QUERY,
   pluginSearch: null,
+  pluginInspection: null,
   selectedPluginFullName: null,
 };
 

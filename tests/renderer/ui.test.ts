@@ -32,6 +32,7 @@ const noopActions: RendererActions = {
   setPluginQuery: () => undefined,
   resetPluginQuery: () => undefined,
   runPluginSearch: () => undefined,
+  inspectSelectedPlugin: () => undefined,
   selectPlugin: () => undefined,
   cancelPluginSearch: () => undefined,
 };
