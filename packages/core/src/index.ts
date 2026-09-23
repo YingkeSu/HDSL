@@ -16,6 +16,7 @@ export * from './home-migration.js';
 export * from './generation-profile.js';
 export * from './generation-runtime-reuse.js';
 export * from './generation-runtime-identity.js';
+export * from './generation-version.js';
 export * from './target-profile-cache.js';
 export * from './change-plan-store.js';
 export * from './plugin-preview.js';

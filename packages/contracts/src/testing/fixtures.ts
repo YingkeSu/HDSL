@@ -590,6 +590,111 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     expected: 'ENVIRONMENT_BUSY',
   },
 
+  // environments.switchCombination (#114, A2)
+  {
+    id: 'environments-switch-legal',
+    method: 'environments.switchCombination',
+    kind: 'legal',
+    description: 'switches a stopped environment to another verified combination',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-1',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'environments-switch-busy',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'a running environment must be stopped before switching (D1)',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-2',
+      environmentId: FIXTURE_IDS.environment.running,
+      expectedRevision: 3,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'ENVIRONMENT_BUSY',
+  },
+  {
+    id: 'environments-switch-revision',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'expectedRevision does not match',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-3',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 999,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'REVISION_CONFLICT',
+  },
+  {
+    id: 'environments-switch-unknown-environment',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'unknown environmentId',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-4',
+      environmentId: 'env-missing',
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'NOT_FOUND',
+  },
+  {
+    id: 'environments-switch-unknown-combination',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'unknown catalogCombinationId',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-5',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: 'combo-missing',
+    }),
+    expected: 'NOT_FOUND',
+  },
+  {
+    id: 'environments-switch-unsupported',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'a combination for a different host is not supported',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-6',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.win32,
+    }),
+    expected: 'UNSUPPORTED_COMBINATION',
+  },
+  {
+    id: 'environments-switch-unverified',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'an unverified combination can never be switched to',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-7',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.unverified,
+    }),
+    expected: 'UNSUPPORTED_COMBINATION',
+  },
+  {
+    id: 'environments-switch-missing-request-id',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'a switch without a requestId is rejected',
+    request: request('environments.switchCombination', {
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'INVALID_INPUT',
+  },
+
   // environments.openWebUI
   {
     id: 'environments-openwebui-legal',

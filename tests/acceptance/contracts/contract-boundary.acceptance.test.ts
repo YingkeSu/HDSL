@@ -91,6 +91,7 @@ const harness = (
     createEnvironment: base.createEnvironment.bind(base),
     startEnvironment: base.startEnvironment.bind(base),
     stopEnvironment: base.stopEnvironment.bind(base),
+    switchCombination: base.switchCombination.bind(base),
     openWebUI: base.openWebUI.bind(base),
     cancelOperation: base.cancelOperation.bind(base),
     exportDiagnostics: base.exportDiagnostics.bind(base),

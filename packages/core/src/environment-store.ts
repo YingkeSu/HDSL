@@ -20,6 +20,14 @@ export interface EnvironmentRecord {
   readonly state: EnvironmentState;
   readonly activeGenerationId: string | null;
   readonly compositionDigest: string | null;
+  /**
+   * Additive (#114, A2): the generation this environment last started
+   * successfully and the DSH version it ran. Missing on records written by
+   * older builds and read as "unknown", which never produces a restore
+   * compatibility warning.
+   */
+  readonly lastStartedGenerationId?: string | null;
+  readonly lastStartedDshVersion?: string | null;
   readonly createdAt: string;
   readonly updatedAt: string;
 }

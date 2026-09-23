@@ -422,6 +422,41 @@ const execute = (
       publishIfKnown(runtime, reference.operationId);
       return { response: contractOk(API_VERSION, reference), executed: true };
     }
+    case 'environments.switchCombination': {
+      const typed = input as MethodInputs['environments.switchCombination'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      if (environment.value.revision !== typed.expectedRevision) {
+        return { response: failureForCode('REVISION_CONFLICT'), executed: false };
+      }
+      const combination = runtime.port.findCombination(typed.catalogCombinationId);
+      if (!combination.ok) {
+        return guardFailure(combination);
+      }
+      const unsupported = unsupportedCombinationReason(runtime.port.host, combination.value);
+      if (unsupported !== undefined) {
+        return { response: failure('UNSUPPORTED_COMBINATION', unsupported), executed: false };
+      }
+      markInProgress();
+      const outcome = runtime.port.switchCombination({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        combination: combination.value,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(
+        operationRefSchema,
+        outcome.value,
+        'environments.switchCombination',
+      );
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
+    }
     case 'environments.openWebUI': {
       const typed = input as MethodInputs['environments.openWebUI'];
       const environment = runtime.port.findEnvironment(typed.environmentId);

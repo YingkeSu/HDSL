@@ -181,6 +181,8 @@ export const operationKindSchema = sLiteral(
   'create',
   'start',
   'stop',
+  // 1.1 addition (#114, A2): in-environment composition switch transaction.
+  'switch',
   'openWebUI',
   'export',
   // 1.1 plugin discovery (ADR 0005 D4/D5).
@@ -637,6 +639,11 @@ export const generationSummarySchema = sObject({
   profileName: sNullable(sString({ minLength: 1, maxLength: 80 })),
   active: sBoolean,
   createdAt: sString({ minLength: 1, maxLength: 64 }),
+  // 1.1 additive (#114, A2): a NON-BLOCKING data-compatibility warning emitted
+  // by `generations.restore` when the target generation's DSH version is older
+  // than the environment's last successfully started DSH version. Absent/null
+  // means "no warning" (including same-version and unknown-version cases).
+  dshCompatibilityWarning: sOptional(sNullable(sString({ minLength: 1, maxLength: 512 }))),
 });
 export type GenerationSummary = Infer<typeof generationSummarySchema>;
 
