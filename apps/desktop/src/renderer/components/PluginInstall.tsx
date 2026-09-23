@@ -46,6 +46,8 @@ const errorHint = (error: ContractError): string => {
       return '受管执行器不可用或身份不符。安装未开始，环境组成不变。';
     case 'RATE_LIMITED':
       return 'GitHub 限流。请稍后重试。';
+    case 'SOURCE_ACCESS_DENIED':
+      return 'GitHub 拒绝了该来源的访问（权限、认证或滥用防护）。这不是限流，安装未开始，环境组成不变。';
     case 'NETWORK_UNAVAILABLE':
       return '网络不可用。请检查网络后重试。';
     default:

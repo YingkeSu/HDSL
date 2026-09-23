@@ -35,7 +35,8 @@
 | 结果计数语义 | 展示 `totalCount`、`incompleteResults`、`hasMore`；`hasMore` 已考虑 GitHub 检索只返回前 1000 条（`GITHUB_SEARCH_RESULT_LIMIT`），超限时界面说明被截断 |
 | 非安全信号 | star/topic 标注为“仅展示，不作为安全或可安装性依据”；界面显示“发现不代表可安装或安全” |
 | 详情 | `plugins.inspect` 返回公开仓库元数据；详情面板展示检索命中元数据，并提供按钮按 `plugins.inspect` 重新获取权威仓库详情；来源预览入口在界面预留，预览本体属 S2 |
-| 限流 | 403/429 → `RATE_LIMITED`（`retryable`，携带可机读 `retryAfterSeconds`） |
+| 限流 | `429`，或带可靠限流证据的 `403`（`retry-after` / `x-ratelimit-remaining: 0` / 明示限流消息）→ `RATE_LIMITED`（`retryable`，携带可机读 `retryAfterSeconds`，仅来自可靠依据） |
+| 访问拒绝 | `403` 且无可靠限流证据（权限/认证/滥用防护）→ `SOURCE_ACCESS_DENIED`（**非** `retryable`，不误报为限流；`#95`） |
 | 网络失败 | 连接建立前失败 → `NETWORK_UNAVAILABLE`；建立后传输/解析失败 → `DOWNLOAD_FAILED` |
 | 取消 | 取消为终态 `cancelled`，无环境或组成副作用；已终态取消 → `CANNOT_CANCEL` |
 | 无凭据 | 检索路径不读取、不发送任何 GitHub 凭据（含环境变量） |

@@ -117,7 +117,7 @@
 | operations.subscribe | subscribe-legal-operation / subscribe-legal-all | illegal-id / unknown-field → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | operations.unsubscribe | unsubscribe-legal（先 subscribe 的 prelude） | illegal-id → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | diagnostics.export | export-legal | missing-request-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；failed → `EXPORT_FAILED` |
-| plugins.search | plugins-search-legal / plugins-search-truncated / plugins-search-rate-limited / plugins-search-network-failure | empty-query / unknown-field（含 token 字段） → `INVALID_INPUT` |
+| plugins.search | plugins-search-legal / plugins-search-truncated / plugins-search-rate-limited / plugins-search-access-denied / plugins-search-network-failure | empty-query / unknown-field（含 token 字段） → `INVALID_INPUT` |
 | plugins.inspect | plugins-inspect-legal / plugins-inspect-not-found | local-path（`link:`/路径） / unknown-field → `INVALID_INPUT` |
 | plugins.installed | plugins-installed-legal | missing-environment → `INVALID_INPUT` |
 | generations.list | generations-list-legal | missing-environment → `INVALID_INPUT` |
@@ -133,7 +133,7 @@
 
 ## 1.1 插件发现（S1 已实现）
 
-`plugins.search` 与 `plugins.inspect` 是**全局**（`environmentId = null`）只读检索/详情方法，返回 `OperationRef`；终态结果经 `OperationSnapshot.output` 读取。二者不使用任何 GitHub 凭据，不受环境 `ENVIRONMENT_BUSY` 影响，且不改变任何环境组成。错误映射见 ADR 0005 D11/D16（`RATE_LIMITED` + `retryAfterSeconds`、`NETWORK_UNAVAILABLE`、`SOURCE_NOT_FOUND` 等）。
+`plugins.search` 与 `plugins.inspect` 是**全局**（`environmentId = null`）只读检索/详情方法，返回 `OperationRef`；终态结果经 `OperationSnapshot.output` 读取。二者不使用任何 GitHub 凭据，不受环境 `ENVIRONMENT_BUSY` 影响，且不改变任何环境组成。错误映射见 ADR 0005 D11/D16：`RATE_LIMITED` + `retryAfterSeconds`（`429`，或带可靠限流证据的 `403`）、`SOURCE_ACCESS_DENIED`（无可靠限流证据的 `403`，非重试）、`NETWORK_UNAVAILABLE`、`SOURCE_NOT_FOUND` 等。
 
 ## 后续接口预留
 

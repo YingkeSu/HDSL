@@ -339,4 +339,31 @@ describe('PluginDiscovery markup', () => {
     expect(html).toContain('RATE_LIMITED');
     expect(html).toContain('90');
   });
+
+  it('renders a permission-class 403 as a non-retryable access denial, never as rate limiting', () => {
+    const html = renderPluginDiscovery({
+      state: state({
+        trackedOperation: {
+          operationId: 'op-search',
+          kind: 'search',
+          phase: 'failed',
+          status: 'failed',
+          sequence: 2,
+          progress: null,
+          environmentId: null,
+          error: {
+            code: 'SOURCE_ACCESS_DENIED',
+            message: 'GitHub denied access to the source (permissions, authentication or abuse protection)',
+            retryable: false,
+          },
+          output: null,
+        },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('SOURCE_ACCESS_DENIED');
+    expect(html).toContain('这不是限流');
+    // The permission 403 must not be described as a retryable throttle.
+    expect(html).not.toContain('GitHub 限流');
+  });
 });

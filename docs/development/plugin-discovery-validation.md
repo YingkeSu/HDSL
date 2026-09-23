@@ -37,7 +37,8 @@
 新增测试（均为受控响应，不访问真实网络）：
 
 - `tests/plugins/github-source.test.ts`：精确查询编码、`total_count`/`incomplete_results`/1000 上限口径、
-  403/429 → `RATE_LIMITED` + `retryAfterSeconds`、连接失败/超时 → `NETWORK_UNAVAILABLE`、
+  429 或带可靠限流证据的 403 → `RATE_LIMITED` + `retryAfterSeconds`；无可靠限流证据的 403 → 非重试
+  `SOURCE_ACCESS_DENIED`；连接失败/超时 → `NETWORK_UNAVAILABLE`、
   不读取 `GITHUB_TOKEN`、404 → `SOURCE_NOT_FOUND`、仓库名含 `_`/`.`。
 - `tests/plugins/plugin-discovery.test.ts`：succeeded 携带 payload、受限流失败映射、**取消为终态且迟到结果不能复活**、非插件操作不归该服务所有。
 - `tests/contracts/plugin-output.test.ts`：逐 kind `OperationSnapshot.output` 规则、`retryAfterSeconds` 上线、
@@ -67,7 +68,7 @@
 
 - 方式：未认证 `api.github.com`，仅 `plugins.search` + 一次 `plugins.inspect`，`timeoutMs` 5–8 秒、`per_page` 5–100；
   通过已构建的 `createGitHubPluginSource` 直接调用；结果：
-  - 一次探针在限额耗尽时得到真实 `403/429` 路径 → `RATE_LIMITED`，`retryAfterSeconds` 由
+  - 一次探针在限额耗尽时得到真实 `403/429` 路径（`x-ratelimit-remaining: 0`）→ `RATE_LIMITED`，`retryAfterSeconds` 由
     `x-ratelimit-reset` 计算（证明真实限流形态可机读），未重试、未轮询；
   - 限额恢复后：`plugins.search` succeeded（`totalCount=15649`，`hasMore=true`），
     `plugins.inspect` succeeded（`deepseek-ai/deepseek-harness`）；

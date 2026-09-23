@@ -34,6 +34,9 @@ const errorHint = (error: ContractError): string => {
   if (error.code === 'NETWORK_UNAVAILABLE') {
     return '网络不可用或连接中断。请检查网络后重试；检索不会改变任何环境组成。';
   }
+  if (error.code === 'SOURCE_ACCESS_DENIED') {
+    return 'GitHub 拒绝了该来源的访问（权限、认证或滥用防护），这不是限流，不可重试。请确认来源是公开可读的仓库。';
+  }
   if (error.code === 'SOURCE_NOT_FOUND') {
     return 'GitHub 上找不到该仓库或引用。';
   }

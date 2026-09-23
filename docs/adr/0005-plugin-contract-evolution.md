@@ -136,13 +136,14 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 - 提交后取消 → 复用 `CANNOT_CANCEL`（F10）；界面与日志必须如实报告"已提交，可显式恢复到上一代际"，**不得**称已回滚。显式恢复走 `generations.restore`。
 - 检索/预览路径同样支持取消（D5），取消为终态、无环境副作用；已完成的 preview 取消返回 `CANNOT_CANCEL`，其计划按 TTL 自然过期（这是允许的 cache/journal 产物）。
 
-### D11 错误码：新增 15 个、复用 001 既有码
+### D11 错误码：新增 16 个、复用 001 既有码
 
-新增 15 个，其中仅 `RATE_LIMITED`、`NETWORK_UNAVAILABLE` 为 `retryable`，其余为确定性拒绝：
+新增 16 个，其中仅 `RATE_LIMITED`、`NETWORK_UNAVAILABLE` 为 `retryable`，其余为确定性拒绝：
 
 | code | 语义 | 触发点 |
 | --- | --- | --- |
-| `RATE_LIMITED` | GitHub 限流（403/429），携带 `retryAfterSeconds?` | `plugins.*` 网络路径 |
+| `RATE_LIMITED` | GitHub 限流；`429`，或带**可靠限流证据**的 `403`（`retry-after` / `x-ratelimit-remaining: 0` / 明示限流消息），携带 `retryAfterSeconds?` | `plugins.*` 网络路径 |
+| `SOURCE_ACCESS_DENIED` | `403` 且**无**可靠限流证据：权限不足/认证失败/滥用防护（`#95`，非 retryable） | `plugins.*` 网络路径 |
 | `NETWORK_UNAVAILABLE` | 无连接/离线/连接中断/TLS 失败/整体超时（**连接建立前**） | `plugins.*` 网络路径 |
 | `SOURCE_NOT_FOUND` | 仓库、ref 或提交不存在；锁定的 commit 不可达 | inspect/preview/apply 复核 |
 | `SOURCE_MANIFEST_INVALID` | manifest 不可读/非法 JSON/超出上界 | inspect/preview |
@@ -162,7 +163,10 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 
 - **连接建立前**（DNS/离线/TLS/整体超时）→ `NETWORK_UNAVAILABLE`（新，retryable）。
 - **连接已建立、传输/取物失败**（git fetch 中断、tarball/archive 部分下载、校验前后中断、磁盘写入）→ **复用既有 `DOWNLOAD_FAILED`**（retryable），不新造同义码；`DISK_FULL` 仍单独用于空间不足。
-- 限流（403/429）→ `RATE_LIMITED`（新，retryable，带 `retryAfterSeconds`）。
+- 限流（`429`，或带可靠限流证据的 `403`）→ `RATE_LIMITED`（新，retryable，带 `retryAfterSeconds`）。
+- `403` 且无可靠限流证据（权限/认证/滥用）→ `SOURCE_ACCESS_DENIED`（新，**非** retryable）。可靠限流证据为 `retry-after`、`x-ratelimit-remaining: 0`、或 GitHub 明示限流/滥用消息；`x-ratelimit-reset` **单独出现不构成证据**（每个响应都带 `x-ratelimit-*`）。
+- `retryAfterSeconds` 只来自可靠依据（`retry-after`，或 `x-ratelimit-remaining: 0` 时的 `x-ratelimit-reset`），不编造。
+- **#95 裁决（B）**：上述精度在未打标签的 `1.1` 内落地（`contracts-v1.1.0` 未冻结）；仅 `RATE_LIMITED` 的触发面相对早期 1.1 草稿收窄，未发布接口不触发 2.0。
 - 对象/ref/commit 不存在 → `SOURCE_NOT_FOUND`（非 retryable）。
 - 该映射同属 D16，并被 §4.1 的错误码差异清单引用。
 
@@ -226,7 +230,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 
 ### D16 离线、限流与缓存语义
 
-- 限流（403/429）→ `RATE_LIMITED` + `retryAfterSeconds`（可机读，UI 说明重试时机）；连接失败 → `NETWORK_UNAVAILABLE`；传输失败 → `DOWNLOAD_FAILED`（D11 映射）；都不**改环境组成**，且**不得**退化为含糊失败。
+- 限流（`429`，或带可靠限流证据的 `403`）→ `RATE_LIMITED` + `retryAfterSeconds`（可机读，UI 说明重试时机）；`403` 无可靠限流证据 → 非重试 `SOURCE_ACCESS_DENIED`；连接失败 → `NETWORK_UNAVAILABLE`；传输失败 → `DOWNLOAD_FAILED`（D11 映射）；都不**改环境组成**，且**不得**退化为含糊失败。
 - 缓存语义的不变量：**缓存只能用于展示发现结果，不能用于授权变更**。任何变更绑定身份（commit SHA、manifest/闭包摘要、脚本集合、授权）必须在 preview/apply 时重新解析或复核（D8），不得取自缓存。
 - `PluginSearchResult` 暴露 `query`（与实际发出的查询逐字符一致，1–256 字符）、`hits[]`、`totalCount`、`incompleteResults`、`hasMore`、`fetchedAt`、`fromCache`；默认查询与过滤条件（如 topic、`fork:false archived:false`）必须体现在该字符串中。界面据此区分"确实这么少"与"结果被截断"，并显示"发现不代表可安装或安全"。
 - `plugins.*` 与 `changes.*` 的输入**没有** GitHub 凭据字段；MVP 路径不使用凭据（PRD US33），也不得从环境继承或落盘任何 GitHub token。
@@ -287,7 +291,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | DTO | `PluginSearchResult`、`PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan`、`ChangePlanAction`、`ChangeBlockingReference`、`BuildScriptEntry`、`BuildAuthorization`、`ChangeApplication`、`GenerationSummary`、`InstalledPlugin`/`InstalledPluginsView`（S3） |
 | 既有 DTO 的加可选字段 | `OperationSnapshot.output?`（逐 kind/state 必填规则见 D5）；`ContractError.retryAfterSeconds?`；`CompositionLock.pluginSources?`（非摘要，摘要字节不变见 D13） |
 | 枚举 | `operationKind` 新增 `search` / `inspect` / `preview` / `apply` / `restore` |
-| 错误码 | D11 的 15 个新码；`retryable` 集新增 2 项；复用既有 `DOWNLOAD_FAILED` 承载传输失败 |
+| 错误码 | D11 的 16 个新码；`retryable` 集新增 2 项；复用既有 `DOWNLOAD_FAILED` 承载传输失败 |
 | 端口 | `ContractPort` 新增 D17 的能力（含计划守卫读取/消费） |
 | 文档 | `local-api.md` 的预留段替换为 002 规格指针；本 ADR §4 为 002 之前的权威差异出处 |
 

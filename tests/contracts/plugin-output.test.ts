@@ -173,6 +173,24 @@ describe('retryAfterSeconds wire field (ADR 0005 D11)', () => {
     expect(response.error.retryAfterSeconds).toBe(60);
     expect(response.error.message).not.toContain('canary');
   });
+
+  it('carries a permission-class 403 as a non-retryable SOURCE_ACCESS_DENIED (#95)', () => {
+    const { runtime } = harness({
+      inspectPluginSource: () =>
+        portFail('SOURCE_ACCESS_DENIED', 'GitHub denied access with HTTP 403'),
+    });
+    const response = runtime.dispatch(
+      contractRequest('plugins.inspect', {
+        requestId: 'req-denied',
+        source: { owner: 'octo', name: 'demo' },
+      }),
+    );
+    expect(response.ok).toBe(false);
+    if (response.ok) return;
+    expect(response.error.code).toBe('SOURCE_ACCESS_DENIED');
+    expect(response.error.retryable).toBe(false);
+    expect(response.error.retryAfterSeconds).toBeUndefined();
+  });
 });
 
 describe('plugins.search is global and environment-independent (ADR 0005 D5)', () => {

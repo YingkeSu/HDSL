@@ -77,6 +77,7 @@ describe('fixture table coverage', () => {
       // 1.1 plugin surface (ADR 0005 D11).
       'RATE_LIMITED',
       'NETWORK_UNAVAILABLE',
+      'SOURCE_ACCESS_DENIED',
       'SOURCE_NOT_FOUND',
       'SOURCE_MANIFEST_INVALID',
       'NOT_A_PLUGIN',

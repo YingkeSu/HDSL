@@ -8,8 +8,8 @@
 
 | 路径 | 失败/取消 | 判定 | 证据 |
 | --- | --- | --- | --- |
-| search | 403/429（可识别限流，带 x-ratelimit/retry-after） | **PASS** | `tests/plugins/github-source.test.ts`「maps 403/429 to RATE_LIMITED with a machine-readable retry delay」 |
-| search | 403/429 **无 rate-limit 头部**（D11 现状：RATE_LIMITED 且不臆造 retryAfter；**权限/认证类 403 不可区分**） | **现状已断言 / 精度差异待裁决** | 新增 `tests/plugins/github-403-precision.test.ts`；条目见下「实质缺口」F1 |
+| search | 403/429（可识别限流，带 x-ratelimit/retry-after） | **PASS** | `tests/plugins/github-source.test.ts`「maps reliably signalled 403/429 to RATE_LIMITED with a machine-readable retry delay」 |
+| search | 403/429 **无 rate-limit 头部**（历史：D11 现状记录为 RATE_LIMITED；**#95 已裁决 B**：无可靠证据的 403 → 非重试 `SOURCE_ACCESS_DENIED`，429 仍 `RATE_LIMITED`） | **PASS（#95 已实现）** | `tests/plugins/github-403-precision.test.ts`（重写：403 无头 / `x-ratelimit-reset` 有值但 `remaining>0` → `SOURCE_ACCESS_DENIED`；`retry-after` / `remaining:0` / 明示限流消息 → `RATE_LIMITED`；429 → `RATE_LIMITED`；不臆造 `retryAfterSeconds`） |
 | search | 离线/超时（连接前/body 停滞） | **PASS** | github-source「connection failure / timeout before response / stalled body → NETWORK_UNAVAILABLE」 |
 | search | malformed / 404 | **PASS** | github-source「malformed → DOWNLOAD_FAILED；404 → SOURCE_NOT_FOUND」 |
 | search | 取消（终态、无副作用、迟到结果不复活） | **PASS** | `tests/plugins/plugin-discovery.test.ts`「cancels an in-flight search」「operations.cancel hits the plugin operation」 |
@@ -39,7 +39,7 @@
 3. **提交窗口**（指针已切、op 仍 `running`）取消 → `CANNOT_CANCEL`；显式预置 in-progress ledger，`recover()` 后**四元一致**（op `succeeded` / 指针新代 / plan 消费 / ledger `completed`；ledger 缺失即失败）；
 4. **#92 残余态**（预置 `cancelled` op + committed journal + in-progress ledger）→ `recover()` **不抛异常**且四元一致。
 
-其余新增：`tests/core/change-apply-retryable-replay.test.ts`（install 真 dispatcher 重放/新 id 重试）、`tests/plugins/github-403-precision.test.ts`（403/429 无 rate-limit 头部负控）。
+其余新增：`tests/core/change-apply-retryable-replay.test.ts`（install 真 dispatcher 重放/新 id 重试）、`tests/plugins/github-403-precision.test.ts`（原 403/429 无 rate-limit 头部负控；已由 #95 重写为“无可靠证据的 403 → `SOURCE_ACCESS_DENIED`”）。
 
 原因：改前 `CANNOT_CANCEL` 仅出现在**未执行**的 scenario plan 与 fixture 码表，缺少已执行行为断言；install-apply 取消亦无确定性测试（remove 侧已有）；#92 的升级遗留态恢复无回归。
 
@@ -47,7 +47,7 @@
 
 **已修缺陷**：`#92`（提交窗口内取消/恢复分叉）由 PR #93 修复并 merge（`3457769f`）；旧红→新绿见上表。`#94`（install 侧托管安装失败未复用网络/传输分类）由 PR #96 修复并 merge（`0e45186e`），QA 独立复核 @`d85d2e72` 并已记入上表 install 行。
 
-1. **403 区分能力（F1，已裁决 → 跟踪 issue #95）**：`packages/runtime/src/plugins/github.ts:300` 把**任意** `403||429` 映射为 `RATE_LIMITED`（retryable）。可识别限流（带 `x-ratelimit-reset`/`retry-after`）有执行证据；**无 rate-limit 头部的 403/429 负控已存在且已执行**（`tests/plugins/github-403-precision.test.ts`：D11 现状 `RATE_LIMITED` 且**不臆造** `retryAfterSeconds`）。**编排已裁决**：按 D11 现状验证、**不改 D11**；剩余**权限/认证类 403 与限流 403 不可区分**的精度差异转 **issue #95** 跟踪（契约文本 vs 行为精度，由契约 owner/编排评估）。
+1. **403 区分能力（F1，已裁决 → 由 issue #95 实现）**：`packages/runtime/src/plugins/github.ts` 原把**任意** `403||429` 映射为 `RATE_LIMITED`（retryable）。**编排/契约 owner 已在 #95 裁定 B 并完成实现**：`429`，或带可靠限流证据（`retry-after` / `x-ratelimit-remaining: 0` / 明示限流消息）的 `403` → `RATE_LIMITED`；无证据的 `403`（含 `x-ratelimit-reset` 有值但 `remaining>0`）→ 新增非重试码 `SOURCE_ACCESS_DENIED`；`retryAfterSeconds` 仅来自可靠依据。测试 `tests/plugins/github-403-precision.test.ts` 与 `github-source` 已同步；D11/D16/local-api/002 fixture 表与错误码计数一致更新。历史记录（本条目原文）：原按 D11 现状验证、无证据的 403/429 → `RATE_LIMITED` 且不臆造 `retryAfterSeconds`，权限/认证类 403 不可区分。
 2. **pnpm/registry 429 不可识别**：受管 pnpm 取包失败分类（`removal-port`/`classifyManagedInstallFailure`）只产出 `NETWORK_UNAVAILABLE`/`DOWNLOAD_FAILED`/`INTERNAL_ERROR`，**无可靠 429 token，不臆造**（与 34/35 结论一致）⇒ 矩阵中「install/remove 429」**未验证为 RATE_LIMITED**，记为**能力限制/AC 覆盖差异**。
 3. **remove 提交窗口内取消**：与 install 同源；已随 #93 修复并在候选上由 `removal-apply` 窗口用例覆盖（merge `3457769f`）。
 
