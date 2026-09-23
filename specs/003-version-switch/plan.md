@@ -73,3 +73,22 @@ pnpm run build:desktop
 pnpm test
 python3 scripts/check_repository.py
 ```
+
+## 6. Tier 2（#131）
+
+Tier 1 只证明 Node 轴；Tier 2 把第二个 DSH 版本纳入已支持范围并补真实跨版本回退证据。
+
+| 路径 | 本切片动作 |
+| --- | --- |
+| `packages/runtime/src/catalog/combinations.ts` | **修改**：新增 `0.1.7-rc.1` 工件常量 + `VERIFIED_DSH_RELEASES`；4 个组合（2 Node × 2 DSH）；`CATALOG_REVISION` 更新 |
+| `packages/runtime/catalog/dsh-0.1.7-rc.1/**` | **新增**：独立 `package.json` / `package-lock.json` / `closure.json` |
+| `tests/install/composition.test.ts`、`tests/catalog/npm-versions.test.ts` | **同步**：双 DSH 闭包与 supported 派生断言 |
+| `tests/install/real-install.evidence.test.ts` | **同步**：不再硬编码单 DSH 版本/包数 |
+| `tests/install/real-cross-version.evidence.test.ts` | **新增**：真实安装/启动/停止 + 真实降级提示四态 opt-in 证据 |
+| `docs/research/dsh-compatibility.md` | **追加** R007（0.1.7-rc.1 只读事实）与 R006 补充 |
+| `docs/development/version-switch-validation.md` | **追加** §5 Tier 2 真实证据 |
+
+刻意**不触碰**：既有 `dsh-0.1.5-rc.2/**` 字节、`environments.switchCombination`/`generations.restore` 语义、schema、renderer。
+
+未自动跟随 `latest`/`next`/`alpha`；未验证平台（Windows/Linux）保持未测；不承诺跨版本
+home/session 迁移。真实 opt-in 证据只对实际执行的 head 成立。

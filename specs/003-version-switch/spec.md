@@ -2,7 +2,9 @@
 
 **Feature Branch**: `ao/hdsl-59/version-switch`（首个实现 PR）
 **Created**: 2026-09-23
-**Status**: Tier 1 已实现（Node 轴 + 切换事务）；Tier 2（纳入第二个 DSH 版本）未实现。
+**Status**: Tier 1（Node 轴 + 切换事务）与 Tier 2（#131：纳入第二个 DSH 版本
+`0.1.7-rc.1` + 真实 macOS ARM64 跨版本回退证据）已实现。跨版本 home/session
+迁移仍不在范围内。
 **Input**: `YingkeSu/HDSL#114`（A2），基线 `ea7f5717c8c2eb9cb051c451fcb4298b3bb71bfa`。
 
 ## 定位
@@ -27,7 +29,8 @@ A1（#113）解决「看上游版本、把**已支持组合**装成**新环境**
   G6）是 DSH 自身约束。`stopped` 只是 `environments.switchCombination` 的**操作
   专属**前置。
 - 首个 PR 不修改 renderer UI、不修改 `packages/runtime/src/catalog/**`、不新增第二个
-  DSH 版本。UI 控件与「扩展支持范围」是后续独立子步/PR。
+  DSH 版本。UI 控件（#132）与「扩展支持范围」（#131）已作为后续独立子 PR 交付；
+  本文件的 Tier 2 节记录 #131 的最终行为。
 
 ## 用户场景与验收
 
@@ -49,10 +52,13 @@ A1（#113）解决「看上游版本、把**已支持组合**装成**新环境**
    `NOT_FOUND`/`UNSUPPORTED_COMBINATION`，不虚报支持。
 7. Given 环境无「最近成功启动 DSH 版本」记录，When 回退，Then 不产生提示（未知 ≠ 不安全）。
 
-### Tier 2（本切片不实现，不得用 Tier 1 冒充）
+### Tier 2（#131 已实现）
 
-8. 纳入第二个 DSH 版本（含安装/验证证据）后，跨版本回退给出非阻断数据兼容提示。
-   真实跨版本 home/session 迁移不在本切片承诺内，按既有 R006 证据如实标注。
+8. 已纳入第二个 DSH 版本 `0.1.7-rc.1`（含真实安装、`dsh -V`、启动到 ready、SIGTERM
+   停止证据）；跨版本回退给出非阻断数据兼容提示，同版本/升级/未知不提示。真实跨版本
+   home/session 迁移不在本切片承诺内，按既有 R006 证据如实标注。证据见
+   `docs/development/version-switch-validation.md` §5 与
+   `docs/research/dsh-compatibility.md` R007。
 
 ## 功能需求
 
@@ -67,6 +73,9 @@ A1（#113）解决「看上游版本、把**已支持组合**装成**新环境**
 - **FR-A2-006**: 切换 MUST NOT 改写/迁移共享 home 的 `sessions`/`storages`/凭据/用户 patch。
 - **FR-A2-007**: 同一 `requestId` 重放 MUST 返回原结果；目标组合已活动 MUST 为幂等 no-op
   （不产生新代、不动 revision）。
+- **FR-A2-008**: catalog MUST 只把有安装/启动证据的 DSH 版本标为已支持；`versions.dsh`
+  的 `supported`/`catalogCombinationIds` MUST 从已支持组合派生，dist-tag（`latest`/`next`/
+  `alpha`）MUST NOT 构成支持。新增组合 MUST 自带独立闭包，且 MUST NOT 改写既有组合字节。
 
 ## 不变量
 
