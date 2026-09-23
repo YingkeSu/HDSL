@@ -250,6 +250,15 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
         <p className="muted">
           恢复只切换活动代际指针：共享的 home/data（会话、存储、凭据产物）与其它代际目录不会被删除或回滚；运行中的环境拒绝恢复。
         </p>
+        {state.restoreWarning !== null && (
+          <div className="notice" role="status">
+            <strong>数据兼容提示（非阻断）</strong>
+            <p>{state.restoreWarning}</p>
+            <p className="muted">
+              该提示不改写任何已写数据，也不改变已提交的代际指针；同版本或版本未知时不提示。
+            </p>
+          </div>
+        )}
       </div>
 
       {state.actionError !== null && (

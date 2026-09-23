@@ -15,6 +15,7 @@ import { ExpectedComposition } from '../components/ExpectedComposition.js';
 import { PluginDiscovery } from '../components/PluginDiscovery.js';
 import { PluginInstall } from '../components/PluginInstall.js';
 import { PluginRemoval } from '../components/PluginRemoval.js';
+import { SwitchVersion } from '../components/SwitchVersion.js';
 
 export const renderAppView = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(AppView, props));
@@ -36,3 +37,6 @@ export const renderPluginInstall = (props: AppViewProps): string =>
 
 export const renderPluginRemoval = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginRemoval, props));
+
+export const renderSwitchVersion = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(SwitchVersion, props));

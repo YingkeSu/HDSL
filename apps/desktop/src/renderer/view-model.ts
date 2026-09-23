@@ -125,6 +125,12 @@ export interface RendererState {
   readonly dshVersions: DshVersionListing | null;
   /** Last succeeded `compositions.expected` desired-composition view, or null. */
   readonly expectedComposition: ExpectedCompositionView | null;
+  /**
+   * Non-blocking DSH data-compatibility warning returned by the last succeeded
+   * `generations.restore` (A2/#114), or null. Null covers "no restore yet" and
+   * the same-version/unknown-version cases, which never warn.
+   */
+  readonly restoreWarning: string | null;
 }
 
 /**
@@ -175,6 +181,13 @@ export interface RendererActions {
   /** Starts a read-only upstream DSH version listing (`versions.dsh`, A1/#113). */
   loadDshVersions(): void;
   /**
+   * Switches a STOPPED environment's active composition to another supported
+   * combination (`environments.switchCombination`, A2/#114). The supported set
+   * is the audited `versions.dsh` listing; an unsupported/unknown combination is
+   * refused, and a running/starting/stopping environment is never auto-stopped.
+   */
+  switchVersion(catalogCombinationId: string): void;
+  /**
    * Starts a read-only EXPECTED composition read for the selected environment
    * (`compositions.expected`, #118). The result is never the runtime ACTIVE set.
    */
@@ -214,6 +227,7 @@ export const INITIAL_STATE: RendererState = {
   selectedInstalledPluginId: null,
   dshVersions: null,
   expectedComposition: null,
+  restoreWarning: null,
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */
@@ -250,6 +264,43 @@ export const canStart = (environment: EnvironmentSummary): boolean =>
 
 export const canStop = (environment: EnvironmentSummary): boolean =>
   environment.state === 'running' || environment.state === 'starting';
+
+/** Only a stopped environment may switch composition; switching never auto-stops. */
+export const canSwitchVersion = (environment: EnvironmentSummary): boolean =>
+  environment.state === 'stopped';
+
+/**
+ * Combination ids the audited upstream `versions.dsh` listing marks as
+ * supported (A1/#113). An empty set means "not yet known", never "unsafe".
+ */
+export const supportedCombinationIds = (state: RendererState): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  const listing = state.dshVersions;
+  if (listing === null) {
+    return ids;
+  }
+  for (const entry of listing.versions) {
+    if (!entry.supported) continue;
+    for (const combinationId of entry.catalogCombinationIds) {
+      ids.add(combinationId);
+    }
+  }
+  return ids;
+};
+
+/**
+ * Catalog combinations that are verifiably switchable: verified on this host
+ * AND referenced by a supported upstream DSH version. Unknown or unverified
+ * combinations are never offered as switchable (unknown != unsafe).
+ */
+export const switchableCombinations = (
+  state: RendererState,
+): readonly RuntimeCombination[] => {
+  const supported = supportedCombinationIds(state);
+  return state.catalog.filter(
+    (entry) => entry.compatibility.status === 'verified' && supported.has(entry.id),
+  );
+};
 
 /** Keep mutations from replacing an operation whose initial snapshot is missing. */
 export const isBusy = (state: RendererState): boolean =>
