@@ -50,6 +50,7 @@
 | diagnostics.export | requestId, environmentId | ExportResult | 由 main 原生选择路径并脱敏；幂等，失败返回 EXPORT_FAILED |
 | plugins.installed | environmentId | InstalledPluginsView | 1.1 追加（ADR 0005 D4/D15，S3，1.0 标签不动）；只读即时、无 requestId、running 不返回 BUSY；结果为活动代持久组成 + 当前受管 DSH 安装解析，字段最小有界（无磁盘路径/manifest 文本/凭据），`plugins` 上界 128 且**不静默截断**（超出 → 受控 INTERNAL_ERROR，对齐 D20）；环境不存在 → NOT_FOUND，无活动代 → generationId=null 且空列表 |
 | versions.dsh | requestId | OperationRef | 1.1 追加（A1/#113，1.0 标签不动）；全局（`environmentId=null`）只读上游 DSH 版本清单，终态 `DshVersionListing` 仅从 `OperationSnapshot.output` 读取；只访问白名单主机 `registry.npmjs.org`、无凭据、不下载/不执行任何包；按受审组合标注 `supported`，未受审版本不得呈现为可安装；网络错误按 D11 分类（`NETWORK_UNAVAILABLE`/`RATE_LIMITED`/`SOURCE_ACCESS_DENIED`/`SOURCE_NOT_FOUND`/`DOWNLOAD_FAILED`） |
+| compositions.expected | requestId, environmentId | OperationRef | 1.1 追加（#118，1.0 标签不动）；环境级只读**期望组成**：离线运行受管 `dsh --profile <p> --dump-config` 并解析分组 `# == <label>` YAML，终态 `ExpectedCompositionView` 仅从 `OperationSnapshot.output` 读取；`basis='dump-config'`、`runtimeVerification='unavailable'` 固定，**永不表示运行期 ACTIVE 集合**；`!!js` 逐字保留不求值，stderr/解析失败显式呈现；不执行插件代码、不使用凭据；running/starting/stopping → `ENVIRONMENT_BUSY`，无活动代 → `NOT_FOUND` |
 
 `OpenWebUIResult` 只返回 `{ loopbackOrigin }`；`loopbackOrigin` 为 `http(s)://127.0.0.1:<port>` 或 `[::1]` 形式，端口必须是 1–65535 的**规范十进制**（拒绝 `:0`、`:65536`、`:99999` 与前导零 `:00080`），**不含 token、cookie 或查询串**。成功即已原生打开，失败一律走错误码，不设 `opened: false` 这种第二套失败表示。main 必须在打开前核对 `LaunchRecord.endpoint` 属于该环境的当前受管进程，且地址为 loopback；否则返回 `WEBUI_UNAVAILABLE`。返回体在出站前按 `openWebUIResultSchema` 校验，额外字段（如 `tokenUrl`/`cookie`）会导致 `INTERNAL_ERROR`。
 
@@ -128,6 +129,7 @@
 | changes.apply | changes-apply-legal / changes-apply-legal-authorized（S4 精确授权） | missing-plan / invalid-authorization（commit 非 40 hex） → `INVALID_INPUT` |
 | generations.restore | generations-restore-legal | missing-target → `INVALID_INPUT` |
 | versions.dsh | versions-dsh-legal / versions-dsh-network-failure | missing-request-id → `INVALID_INPUT` |
+| compositions.expected | compositions-expected-legal | missing-request-id / missing-environment → `INVALID_INPUT` |
 | idempotency-conflict | — | 同 `requestId` 不同 `name` → `IDEMPOTENCY_CONFLICT` |
 | idempotency-guard-retry | 先 `NOT_FOUND` 再修正参数 | 修正后同 `requestId` → `ok`（守卫拒绝不锁死参数） |
 
