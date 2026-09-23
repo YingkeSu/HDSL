@@ -186,7 +186,7 @@ describe('resolvePluginRemoval', () => {
     expect(outcome.value.blockingReferences).toEqual([]);
   });
 
-  it('D21 known providers: blocks only the intersecting retained consumer', () => {
+  it('D21 known providers (superseded #112): reports the intersecting retained consumer as information, never a blocker', () => {
     const outcome = resolvePluginRemoval(input({
       serviceVerification: { status: 'known', provides: ['webStartup'] },
       referenceSources: [
@@ -196,12 +196,15 @@ describe('resolvePluginRemoval', () => {
     }));
     expect(outcome.ok).toBe(true);
     if (!outcome.ok) return;
-    expect(outcome.value.blockingReferences).toHaveLength(1);
-    expect(outcome.value.blockingReferences[0]?.detail).toContain('@deepseek-ai/dsh-web-app');
-    expect(outcome.value.blockingReferences[0]?.detail).toContain('provides');
+    // The old ADR 0005 D21 gate blocked on the intersection; #112 superseded it,
+    // so the fact is surfaced as a risk item and removal is not blocked.
+    expect(outcome.value.blockingReferences).toEqual([]);
+    const note = outcome.value.riskItems.find((item) => item.includes('webStartup'));
+    expect(note).toContain('@deepseek-ai/dsh-web-app');
+    expect(note).toContain('not a removal blocker');
   });
 
-  it('D21 unknown verification ALWAYS blocks (empty scans are not proof of safety)', () => {
+  it('D21 unknown verification (superseded #112): informational only, never blocks removal', () => {
     const withConsumer = resolvePluginRemoval(input({
       serviceVerification: { status: 'unknown' },
       referenceSources: [
@@ -210,18 +213,19 @@ describe('resolvePluginRemoval', () => {
     }));
     expect(withConsumer.ok).toBe(true);
     if (!withConsumer.ok) return;
-    expect(withConsumer.value.blockingReferences[0]?.detail).toContain('not verified');
+    expect(withConsumer.value.blockingReferences).toEqual([]);
+    expect(withConsumer.value.riskItems.some((item) => item.includes('not verified'))).toBe(true);
 
-    // Even with NO retained consumer found by the scan, unknown blocks: patch and
-    // manifest cannot fully describe code-level service dependencies.
+    // Even with NO retained consumer found by the scan, unknown is NOT a blocker:
+    // unknown is not danger (#112).
     const noConsumers = resolvePluginRemoval(input({
       serviceVerification: { status: 'unknown' },
       referenceSources: [{ kind: 'bundle', detail: 'bundle without injects', references: [], services: [], unresolved: false }],
     }));
     expect(noConsumers.ok).toBe(true);
     if (!noConsumers.ok) return;
-    expect(noConsumers.value.blockingReferences).toHaveLength(1);
-    expect(noConsumers.value.blockingReferences[0]?.detail).toContain('not verified');
+    expect(noConsumers.value.blockingReferences).toEqual([]);
+    expect(noConsumers.value.riskItems.some((item) => item.includes('not verified'))).toBe(true);
   });
 
   it('warns (never blocks) about patch-injected service overlap and never treats services as packages', () => {

@@ -7,15 +7,15 @@
  * live in code, so HDSL needs an explicit reviewed record before it can treat a
  * removed plugin's provider set as KNOWN.
  *
- * Rules (ADR 0005 D21):
+ * Rules (ADR 0005 D21, informational since #112):
  *   - a record only makes a declaration `known` when its `review.status` is
  *     `confirmed` AND `repository` + `commitSha` + `manifestSha256` match the
  *     installed generation exactly;
- *   - `known` with `provides: []` is a VERIFIED EMPTY set (removal may proceed
- *     when no retained consumer intersects);
+ *   - `known` with `provides: []` is a VERIFIED EMPTY set;
  *   - anything else (no entry, pending review, commit/digest mismatch, malformed
- *     record) is `unknown` and MUST block the removal — an empty scan is never
- *     proof of safety;
+ *     record) is `unknown`. The old policy "unknown MUST block the removal" was
+ *     superseded by #112: this lookup is now an INFORMATIONAL fact reported in
+ *     `riskItems`, never a removal blocker;
  *   - there is deliberately NO runtime auto-trust: install can only match and
  *     persist existing verified facts, it never creates them.
  */

@@ -96,6 +96,29 @@ describe('resolveTargetProfileLock', () => {
     expect(stagingIsClean(staging)).toBe(true);
   });
 
+  it('adds a non-bundle source as a plain dependency and never guesses it into dsh.profile.bundles', async () => {
+    const { declaration, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
+    const plainManifest = JSON.stringify({ name: 'plain-dep', version: '1.0.0', dependencies: {} });
+    const outcome = await resolveTargetProfileLock(
+      { resolveManifest: async () => ({ ok: true, value: { commitSha: COMMIT, manifestText: plainManifest, lockText: null } }) },
+      executor(calls, join(declaration, 'hdsl-e2e-marker')),
+      { source: { owner: 'octo', name: 'plain-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    const target = JSON.parse(outcome.value.targetDeclarationText) as {
+      dependencies: Record<string, string>;
+      dsh: { profile: { bundles: string[] } };
+    };
+    expect(target.dependencies['plain-dep']).toBe(`github:octo/plain-demo#${COMMIT}`);
+    expect(target.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-base']);
+    expect(target.dsh.profile.bundles).not.toContain('plain-dep');
+  });
+
   it('fails closed when the source commit changed during resolution', async () => {
     const { declaration, staging, nodeExecutable } = build();
     const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];

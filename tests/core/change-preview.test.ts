@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  CHANGE_PLAN_RESTART_REQUIRED,
   ChangePlanStore,
   ChangePreviewService,
   generationPaths,
@@ -122,6 +123,9 @@ describe('changes.preview (core)', () => {
     expect(plan.requiresBuildAuthorization).toBe(false);
     expect(plan.sourceLock?.commitSha).toBe('b'.repeat(40));
     expect(plan.planInputsDigest).toBe('f'.repeat(64));
+    // B1 (#115): dependency/bundle changes have no watcher and are stated in the
+    // plan terminal output, so the UI does not rely on static copy.
+    expect(plan.riskItems).toContain(CHANGE_PLAN_RESTART_REQUIRED);
 
     const stored = new ChangePlanStore(layout).read(plan.planId);
     expect(stored?.consumedBy).toBeNull();

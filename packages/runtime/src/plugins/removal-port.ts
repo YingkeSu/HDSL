@@ -241,7 +241,7 @@ export const createPluginRemovalPort = (options: { readonly executor: PluginExec
       return fresh;
     }
     if (fresh.value.blockingReferences.length > 0) {
-      return portFail('REFERENCED_BY_OTHER', 'the removal is blocked by a reference or an unverified service dependency');
+      return portFail('REFERENCED_BY_OTHER', 'the removal is blocked by a reference from another patch or configuration layer');
     }
     if (fresh.value.targetDeclarationText !== input.planDeclarationText || fresh.value.targetLockText !== input.planLockText) {
       return portFail('PLAN_STALE', 'the pruned target profile changed since the preview');

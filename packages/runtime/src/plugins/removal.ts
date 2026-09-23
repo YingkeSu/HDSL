@@ -16,6 +16,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { isPlainRecord } from '@hdsl/contracts';
+import { reconcileProfileBundles } from './profile-bundles.js';
 
 /** Maximum packages inspected in the managed install's `@deepseek-ai` scope. */
 const IN_BOX_SCAN_MAX = 1_000;
@@ -139,12 +140,10 @@ export interface PluginRemovalInput {
   readonly removedServiceNames?: readonly string[];
   /**
    * HDSL service-verification status for the removed plugin (ADR 0005 D21).
-   * - `known` + `provides: []` is a VERIFIED EMPTY set (removal may proceed when
-   *   no retained consumer intersects);
-   * - `unknown` (missing declaration, empty string, unverified or digest
-   *   mismatch) ALWAYS blocks: a scan that finds no retained consumer is not proof
-   *   that no code-level dependency exists, and it is never inferred safe from the
-   *   existence of other providers.
+   * The `known`/`unknown` gate was superseded by #112: this is now an
+   * INFORMATIONAL input, never a `blockingReferences` source. `known` +
+   * `provides: []` is a verified-empty set; `unknown` (missing declaration,
+   * unverified or digest mismatch) is reported as a risk item and does NOT block.
    */
   readonly serviceVerification?:
     | { readonly status: 'known'; readonly provides: readonly string[] }
@@ -163,7 +162,9 @@ export interface PluginRemovalResolution {
   readonly isBuiltin: boolean;
   /**
    * Honest risk statements. Always includes the service-coupling limitation: the
-   * absence of a static reference never proves the removal is safe.
+   * absence of a static reference never proves the removal is safe. Service
+   * verification is reported here as information, never as a blocker (superseded
+   * by #112: `unknown` is not danger).
    */
   readonly riskItems: readonly string[];
   /** Declaration without the direct dependency entry and bundle reference. */
@@ -174,6 +175,9 @@ export interface PluginRemovalResolution {
 export type PluginRemovalOutcome =
   | { readonly ok: true; readonly value: PluginRemovalResolution }
   | { readonly ok: false; readonly code: 'NOT_FOUND' | 'BUILTIN_BUNDLE_PROTECTED' | 'REFERENCED_BY_OTHER' | 'INTERNAL_ERROR'; readonly message: string };
+
+/** Bounds an informational risk string to the frozen contract limit (256). */
+const boundRisk = (value: string): string => (value.length <= 256 ? value : value.slice(0, 256));
 
 /**
  * Pure resolution of a remove preview. Never touches the filesystem: the caller
@@ -290,35 +294,32 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
       }
     }
   }
+  // Service verification is INFORMATIONAL, never a removal gate. The old
+  // `known`/`unknown` blocking policy (ADR 0005 D21) was superseded by #112:
+  // HDSL is a launcher/version manager, does not promise impact analysis, and a
+  // missing/unverified review record no longer means "forbid removal" (unknown
+  // is not danger). The verified provider set, when present, is still reported
+  // as an observed retained-consumer fact; it does not block.
   const verification = input.serviceVerification ?? { status: 'unknown' as const };
+  const informationalServiceNotes: string[] = [];
   if (verification.status === 'known') {
-    // Verified provider set: block only on an actual intersection with a retained
-    // consumer (unrelated services never block).
     for (const provided of verification.provides) {
       const consumer = injectedElsewhere.get(provided);
       if (consumer !== undefined) {
         const detail = isSafeDetail(consumer.detail) ? consumer.detail : `unresolvable ${consumer.kind} reference source`;
-        blockingReferences.push({
-          pluginId: input.pluginId,
-          kind: consumer.kind,
-          detail: `${detail} consumes a Cordis service this plugin provides`,
-        });
+        informationalServiceNotes.push(
+          boundRisk(`informational: ${detail} consumes the Cordis service "${provided}" this plugin provides (not a removal blocker)`),
+        );
       }
     }
   } else {
-    // Unknown verification ALWAYS blocks (ADR 0005 D21, ruling (i)): manifests and
-    // patches cannot fully describe code-level service dependencies, so "no
-    // retained consumer found by the scan" is not proof that no dependency exists.
-    // Never inferred safe from other providers or from an empty scan.
-    blockingReferences.push({
-      pluginId: input.pluginId,
-      kind: 'config',
-      detail: 'service dependencies for this plugin are not verified (no HDSL service verification record)',
-    });
+    informationalServiceNotes.push(
+      'informational: service dependencies for this plugin are not verified by an HDSL review record (unknown is not a removal blocker; policy superseded by #112)',
+    );
   }
 
   const serviceOverlap = (input.removedServiceNames ?? []).filter((service) => injectedElsewhere.has(service));
-  const riskItems: string[] = [SERVICE_COUPLING_LIMITATION];
+  const riskItems: string[] = [SERVICE_COUPLING_LIMITATION, ...informationalServiceNotes];
   if (serviceOverlap.length > 0) {
     riskItems.push(
       `informational: service name(s) also referenced by other patch layers: ${serviceOverlap.slice(0, 8).join(', ')} (not a blocking reference)`,
@@ -327,11 +328,21 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
 
   const { [input.pluginId]: _removed, ...remainingDependencies } = dependencies;
   void _removed;
+  // Bundle pruning goes through the same reconcile baseline as install. Only the
+  // explicit removal target leaves the layer; unrelated (template/non-string)
+  // entries are preserved verbatim rather than dropped as a side effect.
+  const prunedBundles = reconcileProfileBundles({
+    currentBundles: bundles.filter((entry): entry is string => typeof entry === 'string'),
+    dependencies: [],
+    removed: [input.pluginId],
+  });
+  const exitedBundles = new Set(prunedBundles.exited);
+  const nextBundles = bundles.filter((entry) => typeof entry !== 'string' || !exitedBundles.has(entry));
   const prunedDeclarationText = `${JSON.stringify(
     {
       ...declaration,
       dependencies: remainingDependencies,
-      dsh: { ...dsh, profile: { ...profile, bundles: bundles.filter((id) => id !== input.pluginId) } },
+      dsh: { ...dsh, profile: { ...profile, bundles: nextBundles } },
     },
     null,
     2,
