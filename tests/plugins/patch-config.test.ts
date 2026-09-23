@@ -1,11 +1,12 @@
 /**
- * #116 E1: desired-config boundary for the runtime entry axis.
+ * #116 E1a: desired-config boundary for the runtime entry axis.
  *
  * These tests pin the *honest* semantics: a saved patch file is desired config
- * only, never a claimed ACTIVE runtime set, and an invalid (0-byte / non-array /
- * malformed) patch is an explainable error rather than a silent no-op.
+ * only, never a claimed ACTIVE runtime set; an invalid (0-byte / non-array /
+ * multi-document / malformed) patch is an explainable error rather than a silent
+ * no-op; and `changed`/dirty/rows stay consistent with what is persisted.
  */
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { lstatSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -14,7 +15,7 @@ import {
   activationOf,
   applyPatchOperation,
   resolvePatchReloadMode,
-  writePatchFileAtomic,
+  writePatchFileWithinRoot,
 } from '@hdsl/runtime';
 
 const cleanup: string[] = [];
@@ -23,12 +24,16 @@ afterEach(() => {
     rmSync(directory, { recursive: true, force: true });
   }
 });
-const tempFile = (contents: string): string => {
-  const directory = mkdtempSync(join(tmpdir(), 'hdsl-patch-config-'));
-  cleanup.push(directory);
-  const path = join(directory, 'cordis.patch.yml');
+interface Profile {
+  readonly root: string;
+  readonly path: string;
+}
+const tempProfile = (contents: string): Profile => {
+  const root = mkdtempSync(join(tmpdir(), 'hdsl-patch-config-'));
+  cleanup.push(root);
+  const path = join(root, 'cordis.patch.yml');
   writeFileSync(path, contents);
-  return path;
+  return { root, path };
 };
 
 const SAMPLE = [
@@ -81,6 +86,16 @@ describe('PatchConfigDocument.parse (legal array)', () => {
     if (!broken.ok) expect(broken.code).toBe('INVALID_INPUT');
   });
 
+  it('rejects a multi-document patch instead of dropping later documents', () => {
+    const two = ['- insert:', '    - id: a', '      name: pkg-a', '---', '- insert:', '    - id: b', '      name: pkg-b'].join('\n');
+    const parsed = PatchConfigDocument.parse(two);
+    expect(parsed.ok).toBe(false);
+    if (!parsed.ok) {
+      expect(parsed.code).toBe('INVALID_INPUT');
+      expect(parsed.message).toContain('multiple YAML documents');
+    }
+  });
+
   it('rejects an insert value that is not a sequence of rows', () => {
     const bad = PatchConfigDocument.parse('- insert: { id: a, name: pkg }\n');
     expect(bad.ok).toBe(false);
@@ -115,17 +130,50 @@ describe('PatchConfigDocument.parse (legal array)', () => {
 });
 
 describe('PatchConfigDocument edits', () => {
-  it('enable clears disabled on the insert row and prunes the empty override', () => {
+  it('enable clears disabled on the insert row and prunes only the emptied target override', () => {
     const parsed = PatchConfigDocument.parse(['- insert:', '    - id: beta', '      name: beta-pkg', '      disabled: true', '- id: beta', '  disabled: true'].join('\n'));
     expect(parsed.ok).toBe(true);
     if (!parsed.ok) return;
     const edited = parsed.value.edit({ kind: 'enable', rowId: 'beta' });
     expect(edited.ok).toBe(true);
     if (!edited.ok) return;
+    expect(edited.value.changed).toBe(true);
     const text = edited.value.document.toText();
     expect(text).not.toMatch(/disabled/);
+    expect(text).not.toMatch(/^- id: beta$/m);
     expect(edited.value.document.rows()).toEqual([
       { id: 'beta', kind: 'insert', name: 'beta-pkg', nameKnown: true, disabled: undefined, hasConfig: false },
+    ]);
+  });
+
+  it('enable does not delete unrelated id-only overrides or their comments', () => {
+    const parsed = PatchConfigDocument.parse(
+      ['- insert:', '    - id: x', '      name: pkg-x', '      disabled: true', '- id: unrelated', '  # keep me'].join('\n'),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const edited = parsed.value.edit({ kind: 'enable', rowId: 'x' });
+    expect(edited.ok).toBe(true);
+    if (!edited.ok) return;
+    const text = edited.value.document.toText();
+    expect(text).toContain('unrelated');
+    expect(text).toContain('# keep me');
+    expect(text).not.toMatch(/disabled/);
+    expect(edited.value.document.rows().map((row) => row.id)).toEqual(['x', 'unrelated']);
+  });
+
+  it('keeps changed/dirty/rows consistent when enable changes nothing', () => {
+    const original = '- id: a\n';
+    const parsed = PatchConfigDocument.parse(original);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const edited = parsed.value.edit({ kind: 'enable', rowId: 'a' });
+    expect(edited.ok).toBe(true);
+    if (!edited.ok) return;
+    expect(edited.value.changed).toBe(false);
+    expect(edited.value.document.toText()).toBe(original);
+    expect(edited.value.document.rows()).toEqual([
+      { id: 'a', kind: 'override', name: undefined, nameKnown: true, disabled: undefined, hasConfig: false },
     ]);
   });
 
@@ -166,6 +214,24 @@ describe('PatchConfigDocument edits', () => {
     expect(text).toContain('keep: !!js 1 + 1');
     expect(text).toContain('answer: 42');
     expect(edited.value.document.rows().find((row) => row.id === 'alpha')?.hasConfig).toBe(true);
+  });
+
+  it('config applies last-write-wins across an insert row and a later override', () => {
+    const parsed = PatchConfigDocument.parse(
+      ['- insert:', '    - id: x', '      name: pkg-x', '      config:', '        a: 1', '- id: x', '  config:', '    b: 2'].join('\n'),
+    );
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const edited = parsed.value.edit({ kind: 'config', rowId: 'x', config: { c: 3 } });
+    expect(edited.ok).toBe(true);
+    if (!edited.ok) return;
+    // The LAST matching entry (the override) must carry the new config, so the
+    // composed result is {c:3} instead of the stale override {b:2}.
+    const text = edited.value.document.toText();
+    const overrideIndex = text.lastIndexOf('- id: x');
+    expect(overrideIndex).toBeGreaterThan(-1);
+    expect(text.slice(overrideIndex)).toContain('c: 3');
+    expect(text.slice(overrideIndex)).not.toContain('b: 2');
   });
 
   it('remove deletes the insert row and its override, keeping the sibling', () => {
@@ -210,8 +276,9 @@ describe('runtime-state honesty', () => {
   });
 
   it('applyPatchOperation saves desired config with pending runtime state and writes atomically', () => {
-    const path = tempFile(SAMPLE);
+    const { root, path } = tempProfile(SAMPLE);
     const live = applyPatchOperation({
+      profileRoot: root,
       patchPath: path,
       text: readFileSync(path, 'utf8'),
       operation: { kind: 'disable', rowId: 'alpha' },
@@ -226,8 +293,11 @@ describe('runtime-state honesty', () => {
     expect(live.value.restartRequired).toBe(false);
     expect(JSON.parse(JSON.stringify(live.value))).not.toHaveProperty('active');
     expect(readFileSync(path, 'utf8')).toContain('disabled: true');
+    // No temp file is left behind.
+    expect(readdirSync(root).filter((name) => name.includes('.tmp-'))).toEqual([]);
 
     const startup = applyPatchOperation({
+      profileRoot: root,
       patchPath: path,
       text: readFileSync(path, 'utf8'),
       operation: { kind: 'enable', rowId: 'alpha' },
@@ -239,24 +309,80 @@ describe('runtime-state honesty', () => {
     expect(startup.value.restartRequired).toBe(true);
   });
 
-  it('applyPatchOperation refuses a 0-byte patch instead of silently treating it as removal', () => {
-    const path = tempFile('');
-    const result = applyPatchOperation({
-      patchPath: path,
-      text: readFileSync(path, 'utf8'),
+  it('applyPatchOperation refuses a 0-byte patch and a multi-document patch without rewriting them', () => {
+    const blank = tempProfile('');
+    const blankResult = applyPatchOperation({
+      profileRoot: blank.root,
+      patchPath: blank.path,
+      text: readFileSync(blank.path, 'utf8'),
       operation: { kind: 'remove', rowId: 'alpha' },
+      reloadMode: 'live',
+    });
+    expect(blankResult.ok).toBe(false);
+    if (!blankResult.ok) expect(blankResult.code).toBe('INVALID_INPUT');
+    expect(readFileSync(blank.path, 'utf8')).toBe('');
+
+    const two = ['- insert:', '    - id: a', '      name: pkg-a', '---', '- insert:', '    - id: b', '      name: pkg-b'].join('\n');
+    const multi = tempProfile(two);
+    const multiResult = applyPatchOperation({
+      profileRoot: multi.root,
+      patchPath: multi.path,
+      text: readFileSync(multi.path, 'utf8'),
+      operation: { kind: 'disable', rowId: 'a' },
+      reloadMode: 'live',
+    });
+    expect(multiResult.ok).toBe(false);
+    if (!multiResult.ok) expect(multiResult.code).toBe('INVALID_INPUT');
+    expect(readFileSync(multi.path, 'utf8')).toBe(two);
+  });
+});
+
+describe('anchored atomic write', () => {
+  it('writes 0600 and never leaves a partial/temp file visible', () => {
+    const { root, path } = tempProfile('[]\n');
+    const result = writePatchFileWithinRoot(root, path, '[]\n# updated\n');
+    expect(result.ok).toBe(true);
+    expect(readFileSync(path, 'utf8')).toBe('[]\n# updated\n');
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    expect(readdirSync(root).filter((name) => name.includes('.tmp-'))).toEqual([]);
+  });
+
+  it('rejects a path outside the profile root and creates nothing there', () => {
+    const { root } = tempProfile('[]\n');
+    const outside = join(root, '..', `hdsl-outside-${String(process.pid)}.yml`);
+    rmSync(outside, { force: true });
+    const result = writePatchFileWithinRoot(root, outside, '[]\n');
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.code).toBe('INVALID_INPUT');
+    expect(() => lstatSync(outside)).toThrow();
+    const noRoot = writePatchFileWithinRoot('', join(root, 'cordis.patch.yml'), '[]\n');
+    expect(noRoot.ok).toBe(false);
+  });
+
+  it('replaces a symlink target instead of following it', () => {
+    const { root, path } = tempProfile('[]\n');
+    const victim = join(root, 'victim.txt');
+    writeFileSync(victim, 'do not overwrite\n');
+    rmSync(path, { force: true });
+    symlinkSync(victim, path);
+    const result = writePatchFileWithinRoot(root, path, '[]\n# real\n');
+    expect(result.ok).toBe(true);
+    expect(lstatSync(path).isSymbolicLink()).toBe(false);
+    expect(readFileSync(victim, 'utf8')).toBe('do not overwrite\n');
+  });
+
+  it('applyPatchOperation refuses a patch path outside the profile root', () => {
+    const { root } = tempProfile('[]\n');
+    const outside = join(root, '..', `hdsl-outside-${String(process.pid)}.yml`);
+    const result = applyPatchOperation({
+      profileRoot: root,
+      patchPath: outside,
+      text: '[]\n',
+      operation: { kind: 'disable', rowId: 'x' },
       reloadMode: 'live',
     });
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.code).toBe('INVALID_INPUT');
-    expect(readFileSync(path, 'utf8')).toBe('');
-  });
-
-  it('writePatchFileAtomic never leaves a partial file visible', () => {
-    const directory = mkdtempSync(join(tmpdir(), 'hdsl-patch-atomic-'));
-    cleanup.push(directory);
-    const path = join(directory, 'cordis.patch.yml');
-    writePatchFileAtomic(path, '[]\n');
-    expect(readFileSync(path, 'utf8')).toBe('[]\n');
+    expect(() => lstatSync(outside)).toThrow();
   });
 });

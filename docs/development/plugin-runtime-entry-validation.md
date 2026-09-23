@@ -66,12 +66,14 @@
 
 ## 2. desired-config 边界验证（默认 CI）
 
-`packages/runtime/src/plugins/patch-config.ts` + `tests/plugins/patch-config.test.ts`（17 例）：
+`packages/runtime/src/plugins/patch-config.ts` + `tests/plugins/patch-config.test.ts`（24 例）：
 
-- 合法数组解析：`[]` 合法；0 字节 / 映射根 / 非法 YAML / `insert` 非序列 → `INVALID_INPUT`。
+- 合法单文档数组解析：`[]` 合法；0 字节 / 映射根 / 非法 YAML / **多文档** / `insert` 非序列 → `INVALID_INPUT`（多文档拒绝，避免编辑后静默丢弃后续文档）。
 - 身份位置显式 tag（`name: !!js …`）不被当作字面包名；`config` 内 `!!js` 在编辑无关行时逐字保留。
-- `enable` / `disable` / `config` / `remove` 语义与 `NOT_FOUND` / `INVALID_INPUT`。
-- 原子写；`applyPatchOperation` 返回 `saved` + `runtime: pending` + `runtimeVerification: unavailable` + `activation`。
+- `enable` / `disable` / `config` / `remove` 语义与 `NOT_FOUND` / `INVALID_INPUT`；`config` 按文件顺序 last-write-wins（含 insert + 后续 override）；`enable` 只 prune 本次清空的 `id`-only 目标 override，不误删无关 override/注释；`changed`/dirty/`rows()`/落盘一致。
+- 锚定原子写 `writePatchFileWithinRoot`：越界路径拒绝；0600；符号链接不被 follow；无临时文件残留；`applyPatchOperation` 返回 `saved` + `runtime: pending` + `runtimeVerification: unavailable` + `activation`。
+
+复审修复轮（hdsl-54 CHANGES_REQUESTED @ `2e5ca33`）覆盖：#1 多文档拒绝、#2 insert+override 同 id `config` last-write-wins、#3 最小化 prune、#4 dirty 一致性、#5 原子写安全（O_EXCL/O_NOFOLLOW/0600/清 temp）、#6 写路径锚定。
 
 运行：
 

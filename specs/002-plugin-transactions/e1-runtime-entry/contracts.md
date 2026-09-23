@@ -45,20 +45,28 @@ interface PatchWriteResult {
 
 | 方法 | 输入 | 成功 | 失败 |
 | --- | --- | --- | --- |
-| `PatchConfigDocument.parse(text)` | patch 文本 | `PatchConfigDocument` | `INVALID_INPUT`（0 字节、非序列根、多文档/YAML 错误、`insert` 非序列、超尺寸） |
-| `document.edit(op)` | 四类操作 | `{ document, changed }` | `NOT_FOUND`（enable/remove 未命中）、`INVALID_INPUT`（空 id / config 无值 / config 不可表示） |
+| `PatchConfigDocument.parse(text)` | patch 文本 | `PatchConfigDocument` | `INVALID_INPUT`（0 字节、非序列根、**多文档**、YAML 错误、`insert` 非序列、超尺寸） |
+| `document.edit(op)` | 四类操作 | `{ document, changed }`（`changed` 与实际改动一致） | `NOT_FOUND`（enable/remove 未命中）、`INVALID_INPUT`（空 id / config 无值 / config 不可表示） |
 | `document.rows()` / `document.diagnostics()` / `document.toText()` | — | 行视图 / 诊断 / 文本 | — |
-| `writePatchFileAtomic(path, text)` | 文本 | 原子落盘 | 抛错（调用方映射 `INTERNAL_ERROR`） |
+| `writePatchFileWithinRoot(profileRoot, patchPath, text)` | profile 根 + 根内路径 + 文本 | 原子落盘 | `INVALID_INPUT`（路径越界/无根）、`INTERNAL_ERROR`（写失败） |
 | `resolvePatchReloadMode(profilePackageJsonText)` | profile `package.json` 文本 | `live` / `startup` / `unknown` | — |
 | `activationOf(scope, reloadMode)` | 作用域 + reload | `PatchActivation` | — |
-| `applyPatchOperation(input)` | 路径 + 文本 + 操作 + reload + scope | `PatchWriteResult` | 解析/编辑错误原样返回；写失败 `INTERNAL_ERROR` |
+| `applyPatchOperation(input)` | `profileRoot` + 根内 `patchPath` + 文本 + 操作 + reload + scope | `PatchWriteResult` | 解析/编辑/越界错误原样返回；写失败 `INTERNAL_ERROR` |
 
-## 3. 操作语义
+`writePatchFileAtomicRaw` **不是**导出面；唯一公开写入口是锚定的 `writePatchFileWithinRoot`。
 
-- **enable**：清除目标行（own `insert` 行与/或覆盖行）的 `disabled`；仅剩 `id` 的空覆盖被移除。目标不存在 → `NOT_FOUND`。
+## 3. 操作语义与行匹配
+
+- **enable**：清除目标行（own `insert` 行与/或覆盖行）的 `disabled`；**只**删除因本次删除 `disabled` 而变成 `id`-only 的目标覆盖行（该行自身注释随之移除），不触碰无关 override 或注释。目标不存在 → `NOT_FOUND`；无可改动 → `changed: false` 且 `toText()` 返回原文。
 - **disable**：为目标 `insert` 行 / 覆盖行写 `disabled: true`；目标只存在于 bundle/base 时新增 `- id: X` + `disabled: true` 覆盖（additive）。
-- **config**：用给定值**整行替换**目标行的 `config`（不深合并）；目标只存在于 bundle/base 时新增覆盖。
+- **config**：用给定值**整行替换**目标行的 `config`（不深合并）；**last-write-wins**：写文档顺序中**最后一个**匹配行（`insert` 行或更后的 `- id:` 覆盖），从而合成结果就是新 config；目标只存在于 bundle/base 时新增覆盖。
 - **remove**：删除目标 `insert` 行及其覆盖行；保留其余行。目标不存在 → `NOT_FOUND`。
+
+### 行匹配（明确，不作为安全声明）
+
+- 仅按 profile 内行 `id` 匹配，按**文件顺序**跨 `insert` 行与 `- id:` 覆盖行；重复 id 为 last-write-wins（与 DSH 层合成一致）。
+- **不**匹配 `name`：重复 id 携带不同 `name` 时不作消歧，属已知限制而非保护。
+- 读-改-写无锁/CAS；并发写属产品接线（见 [spec.md](spec.md) §5），本层不声称并发安全。
 
 ## 4. 诚实状态契约（硬约束）
 
@@ -72,9 +80,15 @@ interface PatchWriteResult {
 
 复用 `@hdsl/contracts` 现有错误码，不新增：
 
-- `INVALID_INPUT`：非法 patch、非法操作输入。
+- `INVALID_INPUT`：非法 patch（含多文档）、非法操作输入、写路径越界。
 - `NOT_FOUND`：enable/remove 目标行不存在。
 - `INTERNAL_ERROR`：原子写失败。
+
+## 6. 原子写与路径锚定
+
+- 唯一公开写入口 `writePatchFileWithinRoot(profileRoot, patchPath, text)` 先做**词法包含**校验（`patchPath` 必须严格位于 `profileRoot` 内），越界 → `INVALID_INPUT`，不发生 IO。
+- 原子写：不可预测临时名 + `O_CREAT|O_EXCL|O_NOFOLLOW`、mode `0o600`、file fsync → rename；失败路径 `finally` 清临时文件；rename 后目录 fsync 按平台能力 best-effort（如 Windows 可能不支持）。
+- 包含校验为词法（与 core `assertWithin` 同一意图），不是 realpath 沙箱；预先存在的目录符号链接逃逸不在本层防御范围。
 
 ## 6. 明确排除
 

@@ -1,11 +1,11 @@
 /**
- * Desired-config boundary for the runtime entry axis (#116 E1, ADR 0005 D15).
+ * Desired-config boundary for the runtime entry axis (#116 E1a, ADR 0005 D15).
  *
  * This module manages the **documented public surface** DSH reads: the profile
  * patch file (`cordis.patch.yml`) whose root is a top-level YAML **array** of
  * patch entries (`- insert: [...]` rows and `- id: X` overrides). It provides
  * exactly four edits — `enable`, `disable`, `config`, `remove` — and persists
- * them atomically.
+ * them atomically, anchored to a profile root.
  *
  * ## What a successful write does and does NOT mean
  *
@@ -30,32 +30,50 @@
  *
  * ## Parsing rules (fail closed, explainable)
  *
- * - A missing/empty file or a non-array root is `INVALID_INPUT`
- *   ("must be a top-level YAML array"). A legal empty array (`[]`) is valid and
- *   means "no overlay" — it is deliberately distinct from a 0-byte file.
- * - `insert` must be a sequence of mapping rows; a malformed shape is
- *   `INVALID_INPUT`.
- * - Unresolvable constructs in **identity positions** (`id`/`name`) are reported
- *   as diagnostics and never collapse into a literal name (a tagged/aliased
- *   `name: !!js …` is not a package). Tags/aliases inside `config` are data and
- *   are preserved verbatim by the AST round-trip (so `!!js` survives an edit of
- *   an unrelated row).
+ * - Exactly one YAML document; its root must be a top-level array. A missing
+ *   body, a 0-byte file, multiple documents, a mapping root or a malformed
+ *   `insert` is `INVALID_INPUT`. A legal empty array (`[]`) is valid and means
+ *   "no overlay" — deliberately distinct from a 0-byte file.
+ * - `insert` must be a sequence of mapping rows. Unresolvable constructs in
+ *   **identity positions** (`id`/`name`) are reported as diagnostics and never
+ *   collapse into a literal name (a tagged/aliased `name: !!js …` is not a
+ *   package). Tags/aliases inside `config` are data and are preserved verbatim
+ *   by the AST round-trip (so `!!js` survives an edit of an unrelated row).
+ *
+ * ## Row matching (explicit, not a safety claim)
+ *
+ * Rows are matched by profile-local row `id` only, in **file order** across
+ * `insert` rows and `- id:` overrides. A repeated id is last-write-wins, which
+ * matches how DSH composes the layers (a later override replaces the earlier
+ * entry's whole config). This module does **not** match `name`, so a repeated id
+ * carrying different names is not disambiguated; that is documented, not guarded.
+ * Read-modify-write has no lock/CAS here; concurrent writers are a product-wiring
+ * concern (see the E1 spec).
  *
  * Bundle/dependency changes are NOT part of this surface: they live in
  * `package.json` and, per upstream G6, need a restart
  * ({@link activationOf} with scope `composition`).
  */
-import { closeSync, fsyncSync, mkdirSync, openSync, renameSync, writeSync } from 'node:fs';
-import { dirname } from 'node:path';
+import {
+  closeSync,
+  constants as fsConstants,
+  fsyncSync,
+  mkdirSync,
+  openSync,
+  renameSync,
+  rmSync,
+  writeSync,
+} from 'node:fs';
+import { randomBytes } from 'node:crypto';
+import { dirname, isAbsolute, relative, resolve } from 'node:path';
 import {
   isAlias,
   isMap,
   isScalar,
   isSeq,
-  parseDocument,
+  parseAllDocuments,
   type Document,
   type Node,
-  type Pair,
   type Scalar,
   type YAMLMap,
   type YAMLSeq,
@@ -173,10 +191,17 @@ const plainString = (node: Node | null | undefined): string | undefined => {
   return typeof node.value === 'string' ? node.value : undefined;
 };
 
+/** One row matching a target id, in document order. */
+interface RowMatch {
+  readonly kind: 'insert' | 'override';
+  readonly map: YAMLMap;
+}
+
 /**
  * Parses and validates a patch document. The parse is deliberately stricter
- * than "it happens to be YAML": the root must be a top-level array so a 0-byte
- * or mapping file cannot masquerade as "no entries".
+ * than "it happens to be YAML": exactly one document, top-level array root, so
+ * a 0-byte file, a trailing second document or a mapping cannot masquerade as
+ * something it is not.
  */
 export class PatchConfigDocument {
   readonly #text: string;
@@ -196,20 +221,34 @@ export class PatchConfigDocument {
     if (text.length > PATCH_SCAN_MAX) {
       return portFail('INVALID_INPUT', 'the patch file exceeds the bounded parse size');
     }
-    const document = parseDocument(text, {
-      uniqueKeys: true,
-      prettyErrors: false,
-      strict: true,
-      logLevel: 'silent',
-    });
-    if (document.errors.length > 0) {
-      const first = document.errors[0];
+    let documents: Document.Parsed[];
+    try {
+      documents = parseAllDocuments(text, {
+        uniqueKeys: true,
+        prettyErrors: false,
+        strict: true,
+        logLevel: 'silent',
+      });
+    } catch {
+      return portFail('INVALID_INPUT', 'the patch file could not be parsed');
+    }
+    if (documents.length === 0) {
+      // A missing body is a parse error upstream (`yaml.load('') === undefined`),
+      // NOT an empty list. Use `[]` for "no overlay".
+      return portFail('INVALID_INPUT', 'the patch file must be a top-level YAML array of loader patch entries');
+    }
+    if (documents.length !== 1) {
+      // Editing only the first document would silently drop the rest (data
+      // loss); reject instead of rewriting a multi-document file.
+      return portFail('INVALID_INPUT', 'the patch file must not contain multiple YAML documents');
+    }
+    const document = documents[0];
+    if (document === undefined || document.errors.length > 0) {
+      const first = document?.errors[0];
       return portFail('INVALID_INPUT', `the patch file is not valid YAML: ${first?.message ?? 'parse error'}`);
     }
     const contents = document.contents as Node | null | undefined;
     if (contents === null || contents === undefined) {
-      // A missing body is a parse error upstream (`yaml.load('') === undefined`),
-      // NOT an empty list. Use `[]` for "no overlay".
       return portFail('INVALID_INPUT', 'the patch file must be a top-level YAML array of loader patch entries');
     }
     if (!isSeq(contents)) {
@@ -276,7 +315,7 @@ export class PatchConfigDocument {
   static #describeRow(text: string, row: YAMLMap, diagnostics: PatchDiagnostic[]): void {
     const idNode = nodeOf(row.get('id', true));
     const id = plainString(idNode);
-    if (idNode === undefined || idNode === null) {
+    if (idNode === undefined) {
       diagnostics.push({ code: 'row-id-missing', line: lineOf(text, row), detail: 'a patch row has no id' });
     } else if (id === undefined || id === '') {
       diagnostics.push({
@@ -286,7 +325,7 @@ export class PatchConfigDocument {
       });
     }
     const nameNode = nodeOf(row.get('name', true));
-    if (nameNode !== undefined && nameNode !== null && plainString(nameNode) === undefined) {
+    if (nameNode !== undefined && plainString(nameNode) === undefined) {
       diagnostics.push({
         code: 'row-name-not-plain-scalar',
         line: lineOf(text, nameNode),
@@ -356,7 +395,7 @@ export class PatchConfigDocument {
       id,
       kind,
       name,
-      nameKnown: nameNode === undefined || nameNode === null || name !== undefined,
+      nameKnown: nameNode === undefined || name !== undefined,
       disabled,
       hasConfig: row.has('config'),
     };
@@ -370,7 +409,7 @@ export class PatchConfigDocument {
     return this.#dirty ? this.#document.toString() : this.#text;
   }
 
-  /** Applies one edit in place and returns whether anything changed. */
+  /** Applies one edit in place; `changed` describes the actual mutation. */
   edit(operation: PatchEditOperation): PortOutcome<{ readonly document: PatchConfigDocument; readonly changed: boolean }> {
     const target = operation.rowId;
     if (typeof target !== 'string' || target === '') {
@@ -379,104 +418,93 @@ export class PatchConfigDocument {
     if (operation.kind === 'config' && operation.config === undefined) {
       return portFail('INVALID_INPUT', 'a config edit requires a config value');
     }
-    const insertRows = this.#insertRows(target);
-    const overrideEntries = this.#overrideEntries(target);
+    const matches = this.#matches(target);
     switch (operation.kind) {
       case 'enable':
-        return this.#enable(target, insertRows, overrideEntries);
+        return this.#enable(target, matches);
       case 'disable':
-        return this.#disable(target, insertRows, overrideEntries);
+        return this.#disable(target, matches);
       case 'config':
-        return this.#setConfig(target, operation.config, insertRows, overrideEntries);
+        return this.#setConfig(target, operation.config, matches);
       case 'remove':
-        return this.#remove(target, insertRows, overrideEntries);
+        return this.#remove(target, matches);
     }
   }
 
-  #insertRows(id: string): YAMLMap[] {
-    const found: YAMLMap[] = [];
+  /**
+   * All rows with this id, in **document order** across `insert` rows and
+   * `- id:` overrides (so a last-write-wins edit can target the final match).
+   */
+  #matches(id: string): RowMatch[] {
+    const matches: RowMatch[] = [];
     for (const entry of this.#root.items as readonly (Node | null | undefined)[]) {
-      if (entry === null || entry === undefined || !isMap(entry) || entry.has('insert') === false) {
+      if (entry === null || entry === undefined || !isMap(entry)) {
         continue;
       }
       const insert = nodeOf(entry.get('insert', true));
-      if (insert === undefined || !isSeq(insert)) {
-        continue;
-      }
-      for (const row of insert.items as readonly (Node | null | undefined)[]) {
-        if (row !== null && row !== undefined && isMap(row) && plainString(nodeOf(row.get('id', true))) === id) {
-          found.push(row);
+      if (insert !== undefined && isSeq(insert)) {
+        for (const row of insert.items as readonly (Node | null | undefined)[]) {
+          if (row !== null && row !== undefined && isMap(row) && plainString(nodeOf(row.get('id', true))) === id) {
+            matches.push({ kind: 'insert', map: row });
+          }
         }
-      }
-    }
-    return found;
-  }
-
-  #overrideEntries(id: string): YAMLMap[] {
-    const found: YAMLMap[] = [];
-    for (const entry of this.#root.items as readonly (Node | null | undefined)[]) {
-      if (entry === null || entry === undefined || !isMap(entry) || entry.has('insert')) {
         continue;
       }
       if (plainString(nodeOf(entry.get('id', true))) === id) {
-        found.push(entry);
+        matches.push({ kind: 'override', map: entry });
       }
     }
-    return found;
+    return matches;
   }
 
-  #enable(id: string, insertRows: YAMLMap[], overrideEntries: YAMLMap[]): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
-    if (insertRows.length === 0 && overrideEntries.length === 0) {
+  #enable(id: string, matches: readonly RowMatch[]): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
+    if (matches.length === 0) {
       return portFail('NOT_FOUND', `no patch row with id ${JSON.stringify(id)} was found to enable`);
     }
     let changed = false;
-    for (const row of insertRows) {
-      if (row.has('disabled')) {
-        row.delete('disabled');
-        changed = true;
+    for (const match of matches) {
+      if (!match.map.has('disabled')) {
+        continue;
+      }
+      match.map.delete('disabled');
+      changed = true;
+      // Only an override emptied by THIS edit becomes a no-op: drop just it,
+      // never unrelated id-only overrides or their comments.
+      if (match.kind === 'override' && PatchConfigDocument.#isIdOnly(match.map)) {
+        this.#dropRootEntry(match.map);
       }
     }
-    for (const entry of overrideEntries) {
-      if (entry.has('disabled')) {
-        entry.delete('disabled');
-        changed = true;
-      }
+    if (changed) {
+      this.#dirty = true;
     }
-    this.#pruneNoopOverrides();
-    this.#dirty = this.#dirty || changed;
     return portOk({ document: this, changed });
   }
 
-  #disable(id: string, insertRows: YAMLMap[], overrideEntries: YAMLMap[]): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
+  #disable(id: string, matches: readonly RowMatch[]): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
     let changed = false;
-    for (const row of insertRows) {
-      if (row.get('disabled') !== true) {
-        row.set('disabled', this.#document.createNode(true));
+    for (const match of matches) {
+      if (match.map.get('disabled') !== true) {
+        match.map.set('disabled', this.#document.createNode(true));
         changed = true;
       }
     }
-    for (const entry of overrideEntries) {
-      if (entry.get('disabled') !== true) {
-        entry.set('disabled', this.#document.createNode(true));
-        changed = true;
-      }
-    }
-    if (insertRows.length === 0 && overrideEntries.length === 0) {
+    if (matches.length === 0) {
       // Disabling a row this patch does not insert is a legitimate override of a
       // bundle/base row; it is additive and never touches other rows.
       this.#blockStyle();
       this.#root.add(this.#document.createNode({ id, disabled: true }));
       changed = true;
     }
-    this.#dirty = this.#dirty || changed;
+    if (changed) {
+      this.#dirty = true;
+    }
     return portOk({ document: this, changed });
   }
 
   #setConfig(
     id: string,
     config: unknown,
-    insertRows: YAMLMap[],
-    overrideEntries: YAMLMap[],
+    matches: readonly RowMatch[],
   ): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
     let created: Node;
     try {
@@ -484,36 +512,24 @@ export class PatchConfigDocument {
     } catch {
       return portFail('INVALID_INPUT', 'the config value cannot be represented as YAML');
     }
-    if (insertRows.length > 0) {
-      const row = insertRows[insertRows.length - 1];
-      if (row === undefined) {
-        return portFail('INTERNAL_ERROR', 'the target insert row disappeared during the edit');
-      }
-      row.set('config', created);
-    } else if (overrideEntries.length > 0) {
-      const entry = overrideEntries[overrideEntries.length - 1];
-      if (entry === undefined) {
-        return portFail('INTERNAL_ERROR', 'the target override row disappeared during the edit');
-      }
-      entry.set('config', created);
-    } else {
+    // Last-write-wins: edit the LAST matching row in document order, whether it
+    // is an insert row or a later `- id:` override (upstream whole-row replace).
+    const target = matches[matches.length - 1];
+    if (target === undefined) {
       this.#blockStyle();
       this.#root.add(this.#document.createNode({ id, config }));
+    } else {
+      target.map.set('config', created);
     }
     this.#dirty = true;
     return portOk({ document: this, changed: true });
   }
 
-  /** Use block style once a new entry is appended to a flow-parsed (`[]`) root. */
-  #blockStyle(): void {
-    this.#root.flow = false;
-  }
-
-  #remove(id: string, insertRows: YAMLMap[], overrideEntries: YAMLMap[]): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
-    if (insertRows.length === 0 && overrideEntries.length === 0) {
+  #remove(id: string, matches: readonly RowMatch[]): PortOutcome<{ document: PatchConfigDocument; changed: boolean }> {
+    if (matches.length === 0) {
       return portFail('NOT_FOUND', `no patch row with id ${JSON.stringify(id)} was found to remove`);
     }
-    const targeted = new Set<Node>([...insertRows, ...overrideEntries]);
+    const targeted = new Set<Node>(matches.map((match) => match.map));
     const entries = this.#root.items as (Node | null | undefined)[];
     for (let index = entries.length - 1; index >= 0; index -= 1) {
       const entry = entries[index];
@@ -542,34 +558,109 @@ export class PatchConfigDocument {
     return portOk({ document: this, changed: true });
   }
 
-  /** Removes overrides that only carried `disabled` and are now empty no-ops. */
-  #pruneNoopOverrides(): void {
+  /** True when a mapping has exactly one `id` key (no other data). */
+  static #isIdOnly(map: YAMLMap): boolean {
+    return (
+      map.items.length === 1 &&
+      String((map.items[0]?.key as Scalar | null | undefined)?.value ?? '') === 'id'
+    );
+  }
+
+  #dropRootEntry(target: Node): void {
     const entries = this.#root.items as (Node | null | undefined)[];
     for (let index = entries.length - 1; index >= 0; index -= 1) {
-      const entry = entries[index];
-      if (entry === null || entry === undefined || !isMap(entry) || entry.has('insert')) {
-        continue;
-      }
-      const keys = entry.items.map((pair: Pair) => String((pair.key as Scalar | null | undefined)?.value ?? ''));
-      if (keys.length === 1 && keys[0] === 'id') {
+      if (entries[index] === target) {
         entries.splice(index, 1);
+        return;
       }
     }
   }
+
+  /** Use block style once a new entry is appended to a flow-parsed (`[]`) root. */
+  #blockStyle(): void {
+    this.#root.flow = false;
+  }
 }
 
-/** Atomic text write (temp → fsync → rename); never a partially visible file. */
-export const writePatchFileAtomic = (path: string, text: string): void => {
-  mkdirSync(dirname(path), { recursive: true });
-  const temporary = `${path}.tmp-${String(process.pid)}`;
-  const descriptor = openSync(temporary, 'w');
+/** Best-effort directory fsync; some platforms (e.g. Windows) refuse it. */
+const fsyncDirectoryBestEffort = (path: string): void => {
   try {
+    const descriptor = openSync(path, 'r');
+    try {
+      fsyncSync(descriptor);
+    } finally {
+      closeSync(descriptor);
+    }
+  } catch {
+    // Durability of the directory entry stays best-effort where unsupported.
+  }
+};
+
+/**
+ * Atomic text write: unpredictable temp name, `O_CREAT|O_EXCL|O_NOFOLLOW`, mode
+ * 0600, fsync file → rename → best-effort directory fsync, temp cleaned on any
+ * failure. Not exported: the public write entry is anchored ({@link writePatchFileWithinRoot}).
+ */
+const writePatchFileAtomicRaw = (path: string, text: string): void => {
+  const directory = dirname(path);
+  mkdirSync(directory, { recursive: true });
+  const temporary = `${path}.tmp-${randomBytes(16).toString('hex')}`;
+  const noFollow = typeof fsConstants.O_NOFOLLOW === 'number' ? fsConstants.O_NOFOLLOW : 0;
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | noFollow;
+  let descriptor: number | undefined;
+  let renamed = false;
+  try {
+    descriptor = openSync(temporary, flags, 0o600);
     writeSync(descriptor, text);
     fsyncSync(descriptor);
-  } finally {
     closeSync(descriptor);
+    descriptor = undefined;
+    renameSync(temporary, path);
+    renamed = true;
+    fsyncDirectoryBestEffort(directory);
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch {
+        // The descriptor may already be closed if close succeeded above.
+      }
+    }
+    if (!renamed) {
+      rmSync(temporary, { force: true });
+    }
   }
-  renameSync(temporary, path);
+};
+
+/** True when `candidate` is strictly inside `root` (lexical, not realpath). */
+const isStrictlyWithin = (root: string, candidate: string): boolean => {
+  const relativePath = relative(resolve(root), resolve(candidate));
+  return relativePath !== '' && !relativePath.startsWith('..') && !isAbsolute(relativePath);
+};
+
+/**
+ * The only public write entry: verifies `patchPath` is inside `profileRoot`
+ * before touching the filesystem, so a caller can never turn this boundary into
+ * an arbitrary-path writer. Containment is lexical (same intent as core's
+ * `assertWithin`); it is not a realpath sandbox.
+ */
+export const writePatchFileWithinRoot = (
+  profileRoot: string,
+  patchPath: string,
+  text: string,
+): PortOutcome<void> => {
+  if (typeof profileRoot !== 'string' || profileRoot === '') {
+    return portFail('INVALID_INPUT', 'a profile root is required to anchor the patch write');
+  }
+  if (typeof patchPath !== 'string' || !isStrictlyWithin(profileRoot, patchPath)) {
+    return portFail('INVALID_INPUT', 'the patch file path must be inside the profile root');
+  }
+  try {
+    writePatchFileAtomicRaw(patchPath, text);
+    return portOk(undefined);
+  } catch {
+    return portFail('INTERNAL_ERROR', 'the patch file could not be written');
+  }
 };
 
 /** Reads `dsh.profile.patchReload` from a profile `package.json` text. */
@@ -599,11 +690,12 @@ export const activationOf = (scope: PatchChangeScope, reloadMode: PatchReloadMod
   scope === 'composition' || reloadMode !== 'live' ? 'restart-required' : 'live-reload-unverified';
 
 /**
- * Persists one desired-config edit. The returned activation never claims the
- * running process changed; callers surface `saved` + `pending` and offer a
- * restart as the deterministic fallback.
+ * Persists one desired-config edit inside `profileRoot`. The returned activation
+ * never claims the running process changed; callers surface `saved` + `pending`
+ * and offer a restart as the deterministic fallback.
  */
 export const applyPatchOperation = (input: {
+  readonly profileRoot: string;
   readonly patchPath: string;
   readonly text: string;
   readonly operation: PatchEditOperation;
@@ -618,12 +710,11 @@ export const applyPatchOperation = (input: {
   if (!edited.ok) {
     return edited;
   }
-  const activation = activationOf(input.scope ?? 'patch-entry', input.reloadMode);
-  try {
-    writePatchFileAtomic(input.patchPath, edited.value.document.toText());
-  } catch {
-    return portFail('INTERNAL_ERROR', 'the patch file could not be written');
+  const written = writePatchFileWithinRoot(input.profileRoot, input.patchPath, edited.value.document.toText());
+  if (!written.ok) {
+    return written;
   }
+  const activation = activationOf(input.scope ?? 'patch-entry', input.reloadMode);
   return portOk({
     patchPath: input.patchPath,
     operation: input.operation.kind,

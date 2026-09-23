@@ -36,9 +36,11 @@
 
 ## 3. 合法数组解析与无效 patch 的可解释错误
 
-- 文件必须是**顶层 YAML 数组**：`[]`（合法空数组）表示“无 overlay”；0 字节 / 仅注释 / 映射根 / 多文档 / `insert` 非序列 → `INVALID_INPUT`，可解释，不静默。
+- 文件必须是**恰好一个** YAML 文档且**顶层为数组**：`[]`（合法空数组）表示“无 overlay”；0 字节 / 仅注释 / 映射根 / **多文档** / `insert` 非序列 → `INVALID_INPUT`，可解释，不静默。多文档必须以错误拒绝，避免只编辑第一个文档而静默丢弃后续文档（数据丢失）。
 - 这与“用空文件冒充删除”相反：空删除必须写成合法空数组或删除对应 `insert` 行，而不能是 0 字节文件。
 - `insert` 必须是行序列；行必须是映射。身份位置（`id` / `name`）上的**显式 tag / alias / 块标量 / 非字符串**不会被误判为字面包名（与 #107 事实修正、AC4 一致）；`config` 子树里的 `!!js` 等是数据，AST 往返**逐字保留**。
+- **行匹配**：仅按行 `id`、按文件顺序跨 `insert` 行与 `- id:` 覆盖行；重复 id 为 last-write-wins（`config` 写最后一个命中项），与 DSH 层合成一致。不匹配 `name`，重复 id + 不同 `name` 不消歧（已知限制，不作安全声明）。
+- **原子写与锚定**：唯一公开写入口 `writePatchFileWithinRoot(profileRoot, patchPath, text)` 先做词法包含校验；不可预测临时名 + `O_CREAT|O_EXCL|O_NOFOLLOW` + mode 0600 + file fsync → rename，失败清临时文件，rename 后目录 fsync 按平台能力 best-effort。
 - 不把静态影响分析设为本切片门禁。
 
 ## 4. 验收映射（issue #116）
@@ -56,3 +58,4 @@
 
 - 本切片复用 [spec.md](../spec.md) 对 rc.2 patch 结构的既有结论（根为序列、`name` 为包引用、`inject` 为服务名）。
 - 与 S2/S3 的代际不可变模型不冲突：本边界是**独立于事务**的声明面编辑候选，产品写入目标（profile patch 还是 home 用户 patch）与运行中环境的并发策略属产品接线，见 [plan.md](plan.md) 的 blocked 说明。
+- **并发/CAS 本片不解决**：读-改-写无锁，同 id 匹配不区分 `name`；产品接线时必须落实串行化或 revisions CAS，本层不声称并发安全。
