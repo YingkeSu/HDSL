@@ -90,6 +90,7 @@ const actions: RendererActions = {
   loadInstalledPlugins: () => undefined,
   selectInstalledPlugin: () => undefined,
   previewPluginRemoval: () => undefined,
+  loadDshVersions: () => undefined,
 };
 
 const state = (patch: Partial<RendererState>): RendererState => ({ ...INITIAL_STATE, ...patch });

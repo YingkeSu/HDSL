@@ -15,6 +15,7 @@ import {
   DEFAULT_PLUGIN_QUERY,
   type ChangeApplication,
   type ChangePlan,
+  type DshVersionListing,
   type GenerationSummary,
   type ContractError,
   type EnvironmentSummary,
@@ -119,6 +120,8 @@ export interface RendererState {
   readonly installedPlugins: InstalledPluginsView | null;
   /** Selected plugin id in the removal panel. */
   readonly selectedInstalledPluginId: string | null;
+  /** Last succeeded `versions.dsh` upstream DSH version listing, or null. */
+  readonly dshVersions: DshVersionListing | null;
 }
 
 /**
@@ -166,6 +169,8 @@ export interface RendererActions {
   selectInstalledPlugin(pluginId: string | null): void;
   /** Starts `changes.preview` for the selected installed plugin (remove). */
   previewPluginRemoval(): void;
+  /** Starts a read-only upstream DSH version listing (`versions.dsh`, A1/#113). */
+  loadDshVersions(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -199,6 +204,7 @@ export const INITIAL_STATE: RendererState = {
   generations: [],
   installedPlugins: null,
   selectedInstalledPluginId: null,
+  dshVersions: null,
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */

@@ -44,6 +44,7 @@ describe('renderer/main/preload consume the same contract', () => {
       'plugins.installed',
       'generations.list',
       'generations.restore',
+      'versions.dsh',
     ]);
   });
 

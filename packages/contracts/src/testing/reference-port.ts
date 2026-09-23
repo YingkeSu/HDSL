@@ -16,6 +16,7 @@ import type {
   IdempotencyRecord,
   OperationCommand,
   ApplyChangeCommand,
+  DshVersionCommand,
   PluginInspectCommand,
   PreviewChangeCommand,
   RestoreGenerationCommand,
@@ -26,6 +27,7 @@ import type {
 import { portFail, portOk } from '../context.js';
 import type {
   ChangePlan,
+  DshVersionListing,
   EnvironmentSummary,
   ExportResult,
   GenerationSummary,
@@ -63,6 +65,12 @@ export interface ReferenceSeed {
     readonly result?: PluginInspection;
     readonly failure?: ErrorCode;
   };
+  /** Terminal payload (or controlled failure) for `versions.dsh`. */
+  readonly dshVersions?: {
+    readonly result?: DshVersionListing;
+    readonly failure?: ErrorCode;
+    readonly retryAfterSeconds?: number;
+  };
   /** Seeded `plugins.installed` view per environment id (else an empty list). */
   readonly installedPlugins?: Readonly<Record<string, InstalledPluginsView>>;
   /** Terminal payload (or controlled failure) for a remove `changes.preview`. */
@@ -92,6 +100,7 @@ export class ReferenceContractPort implements ContractPort {
   readonly #webUIOriginOverride: string | undefined;
   readonly #pluginSearch: ReferenceSeed['pluginSearch'];
   readonly #pluginInspection: ReferenceSeed['pluginInspection'];
+  readonly #dshVersions: ReferenceSeed['dshVersions'];
   readonly #installedPlugins: ReferenceSeed['installedPlugins'];
   readonly #removal: ReferenceSeed['removal'];
   #environmentCounter = 0;
@@ -116,6 +125,7 @@ export class ReferenceContractPort implements ContractPort {
     this.#webUIOriginOverride = seed.webUIOriginOverride;
     this.#pluginSearch = seed.pluginSearch;
     this.#pluginInspection = seed.pluginInspection;
+    this.#dshVersions = seed.dshVersions;
     this.#installedPlugins = seed.installedPlugins;
     this.#removal = seed.removal;
   }
@@ -319,6 +329,25 @@ export class ReferenceContractPort implements ContractPort {
     return portOk({ operationId: operation.id });
   }
 
+  listDshVersions(_command: DshVersionCommand): PortOutcome<OperationRef> {
+    const config = this.#dshVersions;
+    if (config?.failure !== undefined) {
+      const failed = this.#recordPluginOperation('versions', {
+        status: 'failed',
+        error: config.failure,
+        ...(config.retryAfterSeconds === undefined
+          ? {}
+          : { retryAfterSeconds: config.retryAfterSeconds }),
+      });
+      this.effects.push(`listDshVersions:${failed.id}`);
+      return portOk({ operationId: failed.id });
+    }
+    const result = config?.result ?? defaultDshVersionListing();
+    const operation = this.#recordPluginOperation('versions', { status: 'succeeded', output: result });
+    this.effects.push(`listDshVersions:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
     const environment = this.#environments.get(command.environmentId);
     if (environment === undefined) {
@@ -465,7 +494,7 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore',
+    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore' | 'versions',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;
@@ -546,4 +575,30 @@ export const defaultPluginInspection = (
   },
   fetchedAt: '2026-01-02T03:04:05Z',
   fromCache: false,
+});
+
+/** Deterministic `versions.dsh` fixture: one audited and one unaudited version. */
+export const defaultDshVersionListing = (): DshVersionListing => ({
+  source: { registry: 'https://registry.npmjs.org', packageName: '@deepseek-ai/dsh' },
+  fetchedAt: '2026-01-02T03:04:05Z',
+  distTags: [
+    { tag: 'latest', version: '0.1.5-rc.2' },
+    { tag: 'next', version: '0.1.5-rc.3' },
+  ],
+  versions: [
+    {
+      version: '0.1.5-rc.3',
+      distTags: ['next'],
+      publishedAt: '2026-01-01T00:00:00.000Z',
+      supported: false,
+      catalogCombinationIds: [],
+    },
+    {
+      version: '0.1.5-rc.2',
+      distTags: ['latest'],
+      publishedAt: '2025-12-01T00:00:00.000Z',
+      supported: true,
+      catalogCombinationIds: ['combo-darwin-arm64'],
+    },
+  ],
 });

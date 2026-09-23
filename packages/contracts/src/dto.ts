@@ -190,6 +190,8 @@ export const operationKindSchema = sLiteral(
   'preview',
   'apply',
   'restore',
+  // 1.1 addition (#113, A1): read-only upstream DSH version listing.
+  'versions',
 );
 export type OperationKind = Infer<typeof operationKindSchema>;
 
@@ -252,6 +254,52 @@ export type SubscriptionRef = Infer<typeof subscriptionRefSchema>;
 
 export const runtimeCombinationListSchema = sArray(runtimeCombinationSchema);
 export const environmentSummaryListSchema = sArray(environmentSummarySchema);
+
+// ---------------------------------------------------------------------------
+// 1.1 addition (#113, A1): read-only upstream DSH version discovery. The list
+// is fetched from the public npm registry (no credentials) and marks which
+// upstream versions are covered by the audited runtime catalog. An unaudited
+// version is reported as `supported: false` and is never presented as
+// installable; `latest` is never equated with compatibility.
+// ---------------------------------------------------------------------------
+
+/** Registry dist-tags / catalog mappings kept per version are bounded. */
+export const DSH_UPSTREAM_VERSIONS_MAX = 200;
+export const DSH_VERSION_TAGS_MAX = 16;
+
+/** One upstream version as published on the registry, plus catalog coverage. */
+export const dshUpstreamVersionSchema = sObject({
+  version: artifactVersionSchema,
+  /** Registry dist-tags (e.g. `latest`, `next`) that currently point here. */
+  distTags: sArray(sString({ minLength: 1, maxLength: 64 }), { maxLength: DSH_VERSION_TAGS_MAX }),
+  /** Exact registry publish time, or null when the registry omitted it. */
+  publishedAt: sNullable(sString({ minLength: 1, maxLength: 64 })),
+  /** True only when the audited catalog has a verified combination for it. */
+  supported: sBoolean,
+  /** Audited catalog combination ids for this version (empty when unaudited). */
+  catalogCombinationIds: sArray(catalogCombinationIdSchema, { maxLength: DSH_VERSION_TAGS_MAX }),
+});
+export type DshUpstreamVersion = Infer<typeof dshUpstreamVersionSchema>;
+
+/** Public, credential-free registry the listing came from. */
+export const dshRegistrySourceSchema = sObject({
+  registry: sString({ minLength: 1, maxLength: 128 }),
+  packageName: sString({ minLength: 1, maxLength: 214 }),
+});
+export type DshRegistrySource = Infer<typeof dshRegistrySourceSchema>;
+
+/** Terminal `versions.dsh` payload (ADR 0005 D5 model, read-only). */
+export const dshVersionListingSchema = sObject({
+  source: dshRegistrySourceSchema,
+  /** Exact query time of the registry response. */
+  fetchedAt: sString({ minLength: 1, maxLength: 64 }),
+  distTags: sArray(
+    sObject({ tag: sString({ minLength: 1, maxLength: 64 }), version: artifactVersionSchema }),
+    { maxLength: DSH_VERSION_TAGS_MAX },
+  ),
+  versions: sArray(dshUpstreamVersionSchema, { maxLength: DSH_UPSTREAM_VERSIONS_MAX }),
+});
+export type DshVersionListing = Infer<typeof dshVersionListingSchema>;
 
 export const exportResultSchema = sObject({
   exportId: exportIdSchema,
