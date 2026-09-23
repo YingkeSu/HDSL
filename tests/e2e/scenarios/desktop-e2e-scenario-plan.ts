@@ -8,10 +8,14 @@
  * each is made deterministic, and which negative control proves the assertion
  * can actually fail.
  *
- * Every entry is `blocked` while `apps/desktop/src/main/index.ts` still throws
- * the T006 placeholder (see `support/desktop-candidate.ts`). `harness.test.ts`
- * checks this catalogue for internal consistency; it never runs the scenarios
- * and must never be cited as desktop validation.
+ * Update (T007, 2026-09): `#6` landed and is CLOSED, so the main process, preload
+ * bridge and renderer no longer throw the placeholder. Every entry below keeps
+ * its original planning status; the executed real/injected coverage now lives in
+ * `desktop.real.test.ts`, `desktop.findings.real.test.ts`,
+ * `desktop.injected.real.test.ts`, `desktop.gui.real.test.ts`,
+ * `desktop.browser.real.test.ts`, `desktop.iframe.real.test.ts`,
+ * `desktop.sender-frame.real.test.ts` and `desktop.faults.real.test.ts`.
+ * This catalogue is history, not current execution state.
  *
  * Lane separation is load-bearing: `real-dsh` and `synthetic` scenarios drive
  * the real Electron window, while `ssr-markup` / `demo-mock` are supporting
@@ -60,7 +64,7 @@ export interface PlannedScenario {
 }
 
 const NOT_WIRED =
-  'apps/desktop main/preload 未接线（#6 无候选；main/index.ts 仍为 T006 placeholder，无窗口/IPC/contextBridge）';
+  '原计划场景未按原样执行；#6 已接线并关闭，当前真实执行证据见 tests/e2e/desktop.*.real.test.ts；本条目保留原始计划状态';
 
 export const DESKTOP_E2E_SCENARIOS: readonly PlannedScenario[] = [
   {

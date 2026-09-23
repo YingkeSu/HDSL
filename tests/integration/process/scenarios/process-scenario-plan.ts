@@ -6,6 +6,13 @@
  * candidate public interface exists (#5), together with how each scenario will
  * be made deterministic and whether its evidence is real or injected.
  *
+ * Update (T007, 2026-09): `packages/runtime/src/{process,reconcile,credentials}`
+ * landed and #45/#31 are CLOSED. The entries below keep their original planning
+ * status; the executed controlled/real coverage now lives in
+ * `process.integration.test.ts`, `lock*.integration.test.ts`,
+ * `argv-boundary.integration.test.ts` and `two-environments.real.test.ts`.
+ * This catalogue is history, not current execution state.
+ *
  * Status is `blocked` for every entry until `packages/runtime/src/process`
  * (and `reconcile`, `credentials`) land plus the T005a/T005b sub-slices expose
  * their public surfaces. `harness.test.ts` checks this catalogue for internal
