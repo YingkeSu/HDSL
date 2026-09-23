@@ -17,6 +17,7 @@ import type {
   OperationCommand,
   ApplyChangeCommand,
   DshVersionCommand,
+  EntryPatchCommand,
   ExpectedCompositionCommand,
   PluginInspectCommand,
   PreviewChangeCommand,
@@ -30,6 +31,7 @@ import { portFail, portOk } from '../context.js';
 import type {
   ChangePlan,
   DshVersionListing,
+  EntryPatchResult,
   EnvironmentSummary,
   ExpectedCompositionView,
   ExportResult,
@@ -80,6 +82,11 @@ export interface ReferenceSeed {
     readonly failure?: ErrorCode;
     readonly retryAfterSeconds?: number;
   };
+  /** Terminal payload (or controlled failure) for `entries.patch` (#135). */
+  readonly entryPatch?: {
+    readonly result?: EntryPatchResult;
+    readonly failure?: ErrorCode;
+  };
   /** Seeded `plugins.installed` view per environment id (else an empty list). */
   readonly installedPlugins?: Readonly<Record<string, InstalledPluginsView>>;
   /** Terminal payload (or controlled failure) for a remove `changes.preview`. */
@@ -111,6 +118,7 @@ export class ReferenceContractPort implements ContractPort {
   readonly #pluginInspection: ReferenceSeed['pluginInspection'];
   readonly #dshVersions: ReferenceSeed['dshVersions'];
   readonly #expectedComposition: ReferenceSeed['expectedComposition'];
+  readonly #entryPatch: ReferenceSeed['entryPatch'];
   readonly #installedPlugins: ReferenceSeed['installedPlugins'];
   readonly #removal: ReferenceSeed['removal'];
   #environmentCounter = 0;
@@ -137,6 +145,7 @@ export class ReferenceContractPort implements ContractPort {
     this.#pluginInspection = seed.pluginInspection;
     this.#dshVersions = seed.dshVersions;
     this.#expectedComposition = seed.expectedComposition;
+    this.#entryPatch = seed.entryPatch;
     this.#installedPlugins = seed.installedPlugins;
     this.#removal = seed.removal;
   }
@@ -412,6 +421,22 @@ export class ReferenceContractPort implements ContractPort {
     );
     this.effects.push(`describeExpectedComposition:${operation.id}`);
     return portOk({ operationId: operation.id });
+  }
+
+  patchEntry(command: EntryPatchCommand): PortOutcome<EntryPatchResult> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.state === 'starting' || environment.state === 'stopping') {
+      return portFail('ENVIRONMENT_BUSY', 'the environment is changing state');
+    }
+    const config = this.#entryPatch;
+    if (config?.failure !== undefined) {
+      return portFail(config.failure, 'entry patch fixture failure');
+    }
+    this.effects.push(`patchEntry:${command.environmentId}:${command.operation.kind}`);
+    return portOk(config?.result ?? defaultEntryPatchResult(command.environmentId, command.operation.kind));
   }
 
   previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
@@ -719,4 +744,34 @@ export const defaultExpectedCompositionView = (
   timedOut: false,
   diagnostics: [],
   observedAt: '2026-01-02T03:04:05Z',
+});
+
+/**
+ * Deterministic `entries.patch` fixture (#135). It is always
+ * `saved: true` + `runtime: 'pending'` + `runtimeVerification: 'unavailable'`
+ * and its `activation` follows `patchReload`; it never claims ACTIVE.
+ */
+export const defaultEntryPatchResult = (
+  environmentId: string,
+  operation: EntryPatchResult['operation'],
+): EntryPatchResult => ({
+  environmentId,
+  operation,
+  saved: true,
+  runtime: 'pending',
+  runtimeVerification: 'unavailable',
+  activation: 'restart-required',
+  restartRequired: true,
+  reloadMode: 'startup',
+  rows: [
+    {
+      id: 'timer',
+      kind: 'insert',
+      name: '@deepseek-ai/cordis-plugin-timer',
+      nameKnown: true,
+      disabled: operation === 'disable' ? true : null,
+      hasConfig: operation === 'config',
+    },
+  ],
+  diagnostics: [],
 });

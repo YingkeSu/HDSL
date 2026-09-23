@@ -2,7 +2,7 @@
 
 实现：`packages/runtime/src/plugins/patch-config.ts`（导出见 `packages/runtime/src/index.ts`）。
 
-本契约**不新增** `ContractPort` 方法、preload 白名单方法或 HTTP/Remote 面。它是 runtime 内的适配器契约；产品接线在运行期确认通过前不实现（见 [plan.md](plan.md) §4）。
+本文件把 runtime 内的 desired-config 适配器契约固定下来。自 #135（E1-T1，契约 `1.2`）起，该边界**已**接入 `@hdsl/contracts`（`entries.patch`）、core、main/preload 与 renderer：产品写入目标是**环境共享 home 用户 patch**（`$DSH_HOME/cordis.patch.yml`），**绝不是**每代不可变的 profile 声明源。运行期 ACTIVE/ACK 确认仍为 E1b no-go，产品**永不**把一次文件保存呈现为运行期 ACTIVE；`entries.patch` 的 DTO 不含本地路径，且 `saved`/`runtime`/`runtimeVerification` 为固定字面量。
 
 ## 1. 数据模型
 
@@ -90,7 +90,18 @@ interface PatchWriteResult {
 - 原子写：不可预测临时名 + `O_CREAT|O_EXCL|O_NOFOLLOW`、mode `0o600`、file fsync → rename；失败路径 `finally` 清临时文件；rename 后目录 fsync 按平台能力 best-effort（如 Windows 可能不支持）。
 - 包含校验为词法（与 core `assertWithin` 同一意图），不是 realpath 沙箱；预先存在的目录符号链接逃逸不在本层防御范围。
 
-## 6. 明确排除
+## 7. 产品接线（#135，契约 1.2）
+
+| 层 | 形状 |
+| --- | --- |
+| `@hdsl/contracts` | 方法 `entries.patch`；输入 `{ requestId, environmentId, operation: { kind, rowId, config? } }`；终态 `EntryPatchResult`（严格判别联合：`config` 仅 `kind='config'` 必填）。`API_VERSION` 显式 1.1 → 1.2。 |
+| `@hdsl/core` | `EntryPatchService` + `EntryPatchPort`：解析活动代际的已发布 profile 名、读取其 `package.json` 的 `dsh.profile.patchReload`、把写路径锚定在环境共享 home；同一环境的读-改-写同步串行化并拒绝重入；`starting`/`stopping`（`creating`）→ `ENVIRONMENT_BUSY`，`running` 允许。 |
+| `@hdsl/runtime` | `createEntryPatchPort` 复用 `applyPatchOperation` / `PatchConfigDocument` / `writePatchFileWithinRoot`，`scope` 固定 `patch-entry`，把结果映射为 `EntryPatchResult`（丢弃本地 `patchPath`）。 |
+| desktop | main composition 注入 `EntryPatchService`；renderer 新增 `EntryPatch` 面板与控制器 intent / view-model 状态。 |
+
+**不变的硬约束**：`saved === true` 只表示 desired config 已保存；`runtime` 恒为 `pending`，`runtimeVerification` 恒为 `unavailable`，`activation ∈ {restart-required, live-reload-unverified}`。UI 文案必须含“已保存 / 等待 DSH 应用（未确认 ACTIVE）”，并提供显式重启 fallback；不得显示“已生效 / 已加载”。
+
+## 8. 明确排除
 
 - 不提供 `insert`（新增插件行属包管理 B1 #115）。
 - 不编辑 `package.json` / `pnpm-lock.yaml` / bundles（composition 变更需重启）。

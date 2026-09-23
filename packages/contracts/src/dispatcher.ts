@@ -44,6 +44,7 @@ import {
   changePlanSchema,
   changeApplicationSchema,
   dshVersionListingSchema,
+  entryPatchResultSchema,
   expectedCompositionViewSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
@@ -632,6 +633,34 @@ const execute = (
       );
       publishIfKnown(runtime, reference.operationId);
       return { response: contractOk(API_VERSION, reference), executed: true };
+    }
+    case 'entries.patch': {
+      // Desired-config edit of the environment-shared home user patch (#135).
+      // Existence is a pure guard so an unknown environment cannot poison the
+      // requestId; the port owns the busy checks and the serialized
+      // read-modify-write. The terminal `EntryPatchResult` is returned directly
+      // and is always `saved: true` + `runtime: 'pending'`.
+      const typed = input as MethodInputs['entries.patch'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      markInProgress();
+      const outcome = runtime.port.patchEntry({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        operation: typed.operation,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      return {
+        response: contractOk(
+          API_VERSION,
+          validatePortValue(entryPatchResultSchema, outcome.value, 'entries.patch'),
+        ),
+        executed: true,
+      };
     }
   }
 };

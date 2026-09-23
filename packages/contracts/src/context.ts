@@ -18,6 +18,8 @@ import type {
   InstalledPluginsView,
   BuildAuthorization,
   ChangePlanAction,
+  EntryPatchOperation,
+  EntryPatchResult,
   EnvironmentSummary,
   ExportResult,
   GenerationSummary,
@@ -117,6 +119,13 @@ export interface DshVersionCommand {
 export interface ExpectedCompositionCommand {
   readonly requestId: string;
   readonly environmentId: string;
+}
+
+/** `entries.patch`: one desired-config edit of the environment home user patch. */
+export interface EntryPatchCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly operation: EntryPatchOperation;
 }
 
 /**
@@ -229,6 +238,18 @@ export interface ContractPort {
    * claims the runtime ACTIVE plugin set.
    */
   describeExpectedComposition(command: ExpectedCompositionCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Persists ONE desired-config edit on the environment-shared home user patch
+   * (`$DSH_HOME/cordis.patch.yml`). It never writes a generation's immutable
+   * profile declaration source and never reports the running process as ACTIVE:
+   * the terminal `EntryPatchResult` carries `saved: true` with
+   * `runtime: 'pending'` / `runtimeVerification: 'unavailable'` and an
+   * `activation` that is never an ACTIVE claim. The read-modify-write is
+   * serialized per environment; a `starting`/`stopping` environment is refused
+   * with `ENVIRONMENT_BUSY`.
+   */
+  patchEntry(command: EntryPatchCommand): PortOutcome<EntryPatchResult>;
 
   /**
    * Starts a cancellable `changes.preview` for one environment. The terminal

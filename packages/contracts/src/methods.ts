@@ -20,6 +20,7 @@ import {
 import {
   buildAuthorizationSchema,
   changePlanActionSchema,
+  entryPatchOperationSchema,
   pluginSourceSelectorSchema,
   PLUGIN_QUERY_MAX_LENGTH,
   PLUGIN_QUERY_MIN_LENGTH,
@@ -55,6 +56,10 @@ export const CONTRACT_METHODS = [
   'versions.dsh',
   // 1.1 addition (#118): read-only expected composition from `--dump-config`.
   'compositions.expected',
+  // 1.2 addition (#135, E1-T1): desired-config entry patch for the runtime
+  // entry axis. It edits the environment-shared home user patch ONLY and NEVER
+  // reports the running process as ACTIVE.
+  'entries.patch',
 ] as const;
 
 export type ContractMethod = (typeof CONTRACT_METHODS)[number];
@@ -151,6 +156,11 @@ export const methodInputSchemas = {
     requestId: requestIdSchema,
     environmentId: environmentIdSchema,
   }),
+  'entries.patch': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    operation: entryPatchOperationSchema,
+  }),
 } satisfies Record<ContractMethod, Schema<unknown>>;
 
 export type MethodInputs = {
@@ -204,6 +214,10 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'generations.restore': define('generations.restore', { readOnly: false, idempotent: true }),
   'versions.dsh': define('versions.dsh', { readOnly: false, idempotent: true }),
   'compositions.expected': define('compositions.expected', {
+    readOnly: false,
+    idempotent: true,
+  }),
+  'entries.patch': define('entries.patch', {
     readOnly: false,
     idempotent: true,
   }),

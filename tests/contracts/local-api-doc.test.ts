@@ -4,7 +4,7 @@
  * `specs/001-environment-lifecycle/contracts/local-api.md` is the human-readable
  * summary; `packages/contracts/src/{version,methods,errors}.ts` and the
  * executable fixture table are the authority. These tests fail loudly when the
- * two drift, so the 1.1 freeze cannot silently lose a method, an error code, or
+ * two drift, so the 1.2 freeze cannot silently lose a method, an error code, or
  * a retryability classification.
  */
 import { readFileSync } from 'node:fs';
@@ -49,9 +49,9 @@ const documentedErrors = [...errorTable.matchAll(/^\|\s*([A-Z_]+)\s*\|\s*(是|�
   (match) => ({ code: match[1] as ErrorCode, retryable: match[2] === '是' }),
 );
 
-describe('local-api.md matches the frozen 1.1 contract', () => {
+describe('local-api.md matches the frozen 1.2 contract', () => {
   it('declares the frozen wire version and drops the draft framing', () => {
-    expect(API_VERSION).toBe('1.1');
+    expect(API_VERSION).toBe('1.2');
     expect(doc).toContain(`本地 API 契约 v${API_VERSION}（冻结）`);
     expect(doc).not.toContain('草案');
     expect(doc).not.toContain('实施前修订');

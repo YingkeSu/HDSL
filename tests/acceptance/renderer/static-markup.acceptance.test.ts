@@ -43,6 +43,10 @@ const actions: RendererActions = {
     loadDshVersions: () => undefined,
     switchVersion: () => undefined,
     loadExpectedComposition: () => undefined,
+    setEntryPatchRowId: () => undefined,
+    setEntryPatchConfigText: () => undefined,
+    patchEntry: () => undefined,
+    restartSelected: () => undefined,
 };
 
 const state = (patch: Partial<RendererState>): RendererState => ({ ...INITIAL_STATE, ...patch });
