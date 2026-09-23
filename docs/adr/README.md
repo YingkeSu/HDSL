@@ -8,5 +8,6 @@
 - [0006：插件变更代的 home 派生与运行数据边界](0006-generation-home-derivation.md)（proposed rev 2；#76 D18/E10/E10b 门禁，批准前不改生产实现）
 
 - [0007：本机 macOS 验收、插件候选与内测分发](0007-macos-acceptance-and-internal-distribution.md)
+- [0008：受管进程退出的环境状态投影（推送而非轮询）](0008-managed-process-exit-environment-projection.md)（proposed；#108 实现切片）
 
 新决策按连续编号记录：背景、决策、替代方案、后果、验证状态。更新历史用 superseded 链接，不悄悄改写已实施决策。

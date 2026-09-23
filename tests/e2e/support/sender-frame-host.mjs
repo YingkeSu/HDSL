@@ -114,9 +114,9 @@ const start = async () => {
   });
   host.openWindow({
     webContentsId: window.webContents.id,
-    send: (event) => {
+    send: (channel, event) => {
       if (!window.isDestroyed()) {
-        window.webContents.send('operation.updated', event);
+        window.webContents.send(channel, event);
       }
     },
   });

@@ -68,11 +68,14 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 ## 窄 IPC 与 sender 校验
 
 - 通道：`hdsl:contract`（请求/响应 envelope）、`hdsl:selection`（renderer→main 单向选择）、
-  `operation.updated`（main→renderer 推送）。三者定义在 `apps/desktop/src/ipc-channels.ts`，
+  `operation.updated`（main→renderer 操作进度推送）、`environment.updated`（main→renderer 受管
+  进程退出后的环境状态投影，issue #108）。四者定义在 `apps/desktop/src/ipc-channels.ts`，
   运行时 preload（`src/preload/bridge.cts`，sandbox 下必须是 CJS）用字面量并由
   `tests/desktop/preload-surface.test.ts` 钉死。
-- preload 只暴露 `window.hdsl = { call(request), onOperationUpdated(listener), selectEnvironment(environmentId) }`；
-  无通用 `send`/`invoke`/`on`。
+- preload 只暴露 `window.hdsl = { call(request), onOperationUpdated(listener),
+  onEnvironmentUpdated(listener), selectEnvironment(environmentId) }`；
+  无通用 `send`/`invoke`/`on`。`environment.updated` 只在 core 已把环境置 stopped 且状态确实变化后
+  由 main 广播，renderer 按 `stateVersion` 合并（不轮询、不手动刷新）；该投影不代表插件 `ACTIVE` 代改变。
 - `webPreferences` = `SECURE_WINDOW_DEFAULTS`（`contextIsolation: true`、
   `nodeIntegration: false`、`sandbox: true`）+ `preload: dist/preload/bridge.cjs`。
 - sender 校验与导航共用**精确可信文档 URL**（`src/main/trusted-url.ts`）：仅本进程创建的窗口、
@@ -179,8 +182,8 @@ electron apps/desktop/dist/main/qa-entry.js \
   端口与独立 `--user-data-dir`，轮询 `http://127.0.0.1:<port>/json`，通过 CDP
   `Runtime.evaluate` 断言；成功退出码 0、失败 1，并打印 JSON 结果 + Electron 输出。
 - 稳定就绪信号：等 CDP page target 出现后再等 ~1.5 s，断言
-  `document.getElementById('root').textContent.length > 0`；`window.hdsl` 三成员精确为
-  `call,onOperationUpdated,selectEnvironment`，且 `window.require/process/ipcRenderer` 均 undefined。
+  `document.getElementById('root').textContent.length > 0`；`window.hdsl` 四成员精确为
+  `call,onEnvironmentUpdated,onOperationUpdated,selectEnvironment`，且 `window.require/process/ipcRenderer` 均 undefined。
 - 受控拒绝可观测形式：协议层一律是受控 envelope（`{ ok:false, apiVersion, error:{ code, … } }`），
   CDP 断言 `code`；单实例第二进程是**进程退出**（`requestSingleInstanceLock`）；dataRoot 被占用是
   原生错误框 + 退出（无 envelope），可用退出码/stderr 观测。失锁后的变更调用返回 `ENVIRONMENT_BUSY`。

@@ -11,6 +11,8 @@ import { API_VERSION, contractErrorForCode, contractFail } from '@hdsl/contracts
 import { createReferenceRuntime } from '@hdsl/contracts/testing';
 import {
   DesktopIpcHost,
+  HDSL_ENVIRONMENT_UPDATED_CHANNEL,
+  HDSL_OPERATION_UPDATED_CHANNEL,
   isAuthorizedSender,
   type SenderIdentity,
 } from '../../apps/desktop/src/main/ipc.js';
@@ -29,16 +31,27 @@ const envelope = (method: string, input: unknown): unknown => ({
   input,
 });
 
+interface SentEvent {
+  readonly channel: string;
+  readonly event: unknown;
+}
+
 const buildHost = (maxSubscriptionsPerWindow?: number) => {
   const { port } = createReferenceRuntime();
-  const sent: Record<number, unknown[]> = { 1: [], 2: [] };
+  const sent: Record<number, SentEvent[]> = { 1: [], 2: [] };
   const host = new DesktopIpcHost({
     port,
     policy: { allowedDocumentUrl: DOCUMENT_URL },
     ...(maxSubscriptionsPerWindow === undefined ? {} : { maxSubscriptionsPerWindow }),
   });
-  host.openWindow({ webContentsId: 1, send: (event) => sent[1]?.push(event) });
-  host.openWindow({ webContentsId: 2, send: (event) => sent[2]?.push(event) });
+  host.openWindow({
+    webContentsId: 1,
+    send: (channel, event) => sent[1]?.push({ channel, event }),
+  });
+  host.openWindow({
+    webContentsId: 2,
+    send: (channel, event) => sent[2]?.push({ channel, event }),
+  });
   return { host, port, sent };
 };
 
@@ -140,8 +153,76 @@ describe('DesktopIpcHost subscription scope and quota', () => {
       }),
     );
     expect(created.ok).toBe(true);
-    expect((sent[1] ?? []).length).toBeGreaterThan(0);
+    expect((sent[1] ?? []).some((entry) => entry.channel === HDSL_OPERATION_UPDATED_CHANNEL)).toBe(
+      true,
+    );
     expect(sent[2] ?? []).toHaveLength(0);
+  });
+});
+
+describe('DesktopIpcHost environment projection', () => {
+  it('broadcasts a validated environment summary to every open window', () => {
+    const { host, port, sent } = buildHost();
+    const listed = port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const base = listed.value[0];
+    expect(base).toBeDefined();
+    if (base === undefined) {
+      return;
+    }
+    const environment = {
+      ...base,
+      state: 'stopped' as const,
+      stateVersion: base.stateVersion + 1,
+    };
+    expect(host.broadcastEnvironmentUpdate(environment)).toBe(2);
+    expect(sent[1]).toEqual([{ channel: HDSL_ENVIRONMENT_UPDATED_CHANNEL, event: { environment } }]);
+    expect(sent[2]).toEqual([{ channel: HDSL_ENVIRONMENT_UPDATED_CHANNEL, event: { environment } }]);
+    // The projection must never leak onto the operation-progress channel.
+    expect(sent[1]?.some((entry) => entry.channel === HDSL_OPERATION_UPDATED_CHANNEL)).toBe(false);
+  });
+
+  it('drops an invalid projection instead of forwarding it', () => {
+    const { host, sent } = buildHost();
+    const invalid = { id: 'bad id' } as unknown as Parameters<
+      typeof host.broadcastEnvironmentUpdate
+    >[0];
+    expect(host.broadcastEnvironmentUpdate(invalid)).toBe(0);
+    expect(sent[1]).toEqual([]);
+    expect(sent[2]).toEqual([]);
+  });
+
+  it('keeps delivering to the remaining windows when one sender throws', () => {
+    const { port } = createReferenceRuntime();
+    const host = new DesktopIpcHost({ port, policy: { allowedDocumentUrl: DOCUMENT_URL } });
+    const received: SentEvent[] = [];
+    host.openWindow({
+      webContentsId: 1,
+      send: () => {
+        throw new Error('window destroyed');
+      },
+    });
+    host.openWindow({
+      webContentsId: 2,
+      send: (channel, event) => received.push({ channel, event }),
+    });
+    const listed = port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined) {
+      return;
+    }
+    expect(host.broadcastEnvironmentUpdate(environment)).toBe(1);
+    expect(received).toEqual([
+      { channel: HDSL_ENVIRONMENT_UPDATED_CHANNEL, event: { environment } },
+    ]);
   });
 });
 

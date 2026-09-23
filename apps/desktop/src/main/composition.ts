@@ -18,6 +18,7 @@ import {
   isLoopbackOrigin,
   portFail,
   type ContractPort,
+  type EnvironmentSummary,
   type HostPlatform,
   type OpenWebUIResult,
   type PortOutcome,
@@ -39,6 +40,7 @@ import {
   type CloseReport,
   type DataRootLockSnapshot,
   type DiagnosticsExporter,
+  type ManagedProcessExit,
   type ManagedProcessPort,
   type ManagedRuntimePort,
   type PluginSourcePort,
@@ -141,6 +143,15 @@ export interface DesktopComposition {
   readonly previewRecovery: { readonly terminated: number };
   readonly lockSnapshot: () => DataRootLockSnapshot;
   readonly exporterAvailable: boolean;
+  /**
+   * Registers a listener for environment state changes that were **not** caused
+   * by a renderer request — a managed process exiting on its own (FR-005).
+   * Returns an unsubscribe function. This is the projection source the Electron
+   * entry forwards to every open window; the renderer never has to poll for it.
+   */
+  readonly onEnvironmentChanged: (
+    listener: (environment: EnvironmentSummary) => void,
+  ) => () => void;
   /**
    * True when restart reconciliation left a managed process it could not prove
    * exited. New create/start mutations are then refused by main until the
@@ -262,10 +273,39 @@ export const adaptProcessPort = (manager: ProcessManager): ManagedProcessPort =>
   close: () => manager.close(),
 });
 
+/**
+ * Projects a managed-process exit to a renderer-visible environment summary.
+ *
+ * It lets core apply the transition first (`handleProcessExit`), then reads the
+ * resulting summary and notifies **only when the state actually changed**, so a
+ * duplicate or late exit cannot spam the bridge and a renderer-issued stop stays
+ * authoritative. An unknown environment (or an unchanged state) is a no-op.
+ */
+export const projectProcessExit = (
+  service: Pick<EnvironmentService, 'findEnvironment' | 'handleProcessExit'>,
+  onEnvironmentChanged?: (environment: EnvironmentSummary) => void,
+): ((info: ManagedProcessExit) => void) =>
+  (info) => {
+    const before = service.findEnvironment(info.environmentId);
+    service.handleProcessExit(info);
+    if (onEnvironmentChanged === undefined) {
+      return;
+    }
+    const after = service.findEnvironment(info.environmentId);
+    if (!after.ok) {
+      return;
+    }
+    if (before.ok && before.value.state === after.value.state) {
+      return;
+    }
+    onEnvironmentChanged(after.value);
+  };
+
 /** Builds the real credential port + process manager for a live service. */
 export const buildManagedProcessPort = (
   service: EnvironmentService,
   dataRoot: string,
+  onEnvironmentChanged?: (environment: EnvironmentSummary) => void,
 ): ProcessManager => {
   const credentials = createLaunchCredentialPort({
     load: (environmentId) => service.launchCredentialRequest(environmentId),
@@ -273,9 +313,7 @@ export const buildManagedProcessPort = (
   return createProcessManager({
     dataRoot,
     credentials,
-    onProcessExit: (event) => {
-      service.handleProcessExit(event);
-    },
+    onProcessExit: projectProcessExit(service, onEnvironmentChanged),
     isRecoveryPermitted: () => service.available,
   });
 };
@@ -314,9 +352,25 @@ export const createDesktopComposition = async (
 
   await service.open();
 
+  // Projection seam for state changes the renderer did not request. The Electron
+  // entry registers a broadcaster once its IPC host exists; the exit path only
+  // reads it, so a listener fault can never abort process-exit reconciliation.
+  const environmentChangedListeners = new Set<(environment: EnvironmentSummary) => void>();
+  const notifyEnvironmentChanged = (environment: EnvironmentSummary): void => {
+    for (const listener of [...environmentChangedListeners]) {
+      try {
+        listener(environment);
+      } catch {
+        // A faulty listener must not break the managed-process exit path.
+      }
+    }
+  };
+
   const manager =
     options.manager ??
-    (options.process === undefined ? buildManagedProcessPort(service, options.dataRoot) : undefined);
+    (options.process === undefined
+      ? buildManagedProcessPort(service, options.dataRoot, notifyEnvironmentChanged)
+      : undefined);
   let baseProcess: ManagedProcessPort;
   if (options.process !== undefined) {
     baseProcess = options.process;
@@ -474,6 +528,12 @@ export const createDesktopComposition = async (
     recoveryReasons,
     lockSnapshot: () => service.lockSnapshot(),
     exporterAvailable: true,
+    onEnvironmentChanged: (listener) => {
+      environmentChangedListeners.add(listener);
+      return () => {
+        environmentChangedListeners.delete(listener);
+      };
+    },
     openWebUi,
     close: () => service.close(),
   };

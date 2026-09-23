@@ -26,7 +26,6 @@ import type { DiagnosticsPathChooser } from './exporter.js';
 import {
   DesktopIpcHost,
   HDSL_CONTRACT_CHANNEL,
-  HDSL_OPERATION_UPDATED_CHANNEL,
   HDSL_SELECTION_CHANNEL,
   isAuthorizedSender,
   type SenderIdentity,
@@ -240,9 +239,11 @@ const createLauncherWindow = async (): Promise<void> => {
   applyWindowSecurity(window, TRUSTED_URL_POLICY);
   ipcHost.openWindow({
     webContentsId,
-    send: (event) => {
+    // The host passes the fixed channel explicitly, so operation progress and
+    // the environment-state projection never share one hardcoded literal.
+    send: (channel, event) => {
       if (!window.isDestroyed()) {
-        window.webContents.send(HDSL_OPERATION_UPDATED_CHANNEL, event);
+        window.webContents.send(channel, event);
       }
     },
   });
@@ -370,6 +371,12 @@ const bootstrap = async (options: DesktopAppOptions): Promise<void> => {
       }
       return undefined;
     },
+  });
+  // FR-005 projection: a managed process that exits on its own updates core
+  // state outside any renderer-issued operation. Forward that authoritative
+  // summary to every window so the UI converges without a manual refresh.
+  created.onEnvironmentChanged((environment) => {
+    ipcHost?.broadcastEnvironmentUpdate(environment);
   });
   registerIpc(options);
   await createLauncherWindow();

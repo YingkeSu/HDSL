@@ -26,14 +26,19 @@ import {
   contractErrorForCode,
   contractFail,
   createContractRuntime,
+  environmentSummarySchema,
   isPlainRecord,
   SubscriptionRegistry,
   type ContractPort,
   type ContractResponse,
   type ContractRuntime,
+  type EnvironmentSummary,
+  type EnvironmentUpdatedEvent,
+  type ValidationIssue,
 } from '@hdsl/contracts';
 import {
   HDSL_CONTRACT_CHANNEL,
+  HDSL_ENVIRONMENT_UPDATED_CHANNEL,
   HDSL_OPERATION_UPDATED_CHANNEL,
   HDSL_SELECTION_CHANNEL,
 } from '../ipc-channels.js';
@@ -41,9 +46,20 @@ import { isTrustedDocumentUrl, type TrustedUrlPolicy } from './trusted-url.js';
 
 export {
   HDSL_CONTRACT_CHANNEL,
+  HDSL_ENVIRONMENT_UPDATED_CHANNEL,
   HDSL_OPERATION_UPDATED_CHANNEL,
   HDSL_SELECTION_CHANNEL,
 };
+
+/**
+ * The only push channels this host may deliver on. The Electron entry's `send`
+ * callback receives the channel explicitly, so operation progress and the
+ * environment-state projection can never be sent on each other's channel by a
+ * hardcoded literal. Both are fixed here and never derived from renderer input.
+ */
+export type HdslPushChannel =
+  | typeof HDSL_OPERATION_UPDATED_CHANNEL
+  | typeof HDSL_ENVIRONMENT_UPDATED_CHANNEL;
 
 export const DEFAULT_MAX_SUBSCRIPTIONS_PER_WINDOW = 8;
 
@@ -69,6 +85,8 @@ interface WindowSession {
   readonly runtime: ContractRuntime;
   readonly registry: SubscriptionRegistry;
   readonly maxSubscriptions: number;
+  /** Fixed-channel sender captured by the Electron entry for this window. */
+  readonly send: (channel: HdslPushChannel, event: unknown) => void;
   selection: string | null;
 }
 
@@ -121,19 +139,20 @@ export class DesktopIpcHost {
   /** Registers a window and starts forwarding its operation events to `send`. */
   openWindow(options: {
     readonly webContentsId: number;
-    readonly send: (event: unknown) => void;
+    readonly send: (channel: HdslPushChannel, event: unknown) => void;
     readonly maxSubscriptions?: number;
   }): OpenedWindow {
     this.closeWindow(options.webContentsId);
     const registry = new SubscriptionRegistry();
     const detach = registry.onEvent((event) => {
-      options.send(event);
+      options.send(HDSL_OPERATION_UPDATED_CHANNEL, event);
     });
     const session: WindowSession = {
       webContentsId: options.webContentsId,
       runtime: createContractRuntime({ port: this.#port, subscriptions: registry }),
       registry,
       maxSubscriptions: options.maxSubscriptions ?? this.#defaultMaxSubscriptions,
+      send: options.send,
       selection: null,
     };
     // `detach` is stored on the registry closure via the map value below.
@@ -164,6 +183,36 @@ export class DesktopIpcHost {
 
   hasWindow(webContentsId: number): boolean {
     return this.#sessions.has(webContentsId);
+  }
+
+  /**
+   * Projects one environment state change to every open window on the fixed
+   * `environment.updated` channel. This is how a managed process exiting outside
+   * any renderer-issued operation reaches the UI without polling.
+   *
+   * The summary is re-validated against the shared `EnvironmentSummary` schema
+   * before it crosses the bridge; an invalid projection is dropped (returns 0)
+   * rather than forwarded. The channel is fixed here and is never derived from
+   * renderer input, and a destroyed window cannot abort delivery to the others.
+   * Returns the number of windows that received the event.
+   */
+  broadcastEnvironmentUpdate(environment: EnvironmentSummary): number {
+    const issues: ValidationIssue[] = [];
+    const parsed = environmentSummarySchema(environment, 'environment', issues);
+    if (parsed === undefined) {
+      return 0;
+    }
+    const event: EnvironmentUpdatedEvent = { environment: parsed };
+    let delivered = 0;
+    for (const session of this.#sessions.values()) {
+      try {
+        session.send(HDSL_ENVIRONMENT_UPDATED_CHANNEL, event);
+        delivered += 1;
+      } catch {
+        // A window that has gone away must not break delivery to the rest.
+      }
+    }
+    return delivered;
   }
 
   /** Number of live subscriptions for a window; used by tests and quota checks. */

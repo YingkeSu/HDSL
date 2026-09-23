@@ -3,14 +3,46 @@
  * unsubscribe cutoff and the strict monotonicity guard.
  */
 import {
+  environmentUpdatedEventSchema,
   operationUpdatedEventSchema,
   SubscriptionRegistry,
+  type EnvironmentSummary,
   type OperationUpdatedEvent,
   type SubscriptionRef,
   type ValidationIssue,
 } from '@hdsl/contracts';
 import { contractRequest, createReferenceRuntime, FIXTURE_IDS } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
+
+describe('environment.updated projection', () => {
+  const environment: EnvironmentSummary = {
+    id: 'env-1',
+    name: 'Env 1',
+    revision: 1,
+    stateVersion: 2,
+    state: 'stopped',
+    activeGenerationId: 'gen-1',
+    compositionDigest: 'a'.repeat(64),
+  };
+
+  it('accepts a bounded EnvironmentSummary projection', () => {
+    const issues: ValidationIssue[] = [];
+    const parsed = environmentUpdatedEventSchema({ environment }, 'event', issues);
+    expect(parsed).toEqual({ environment });
+    expect(issues).toEqual([]);
+  });
+
+  it('rejects a projection with an invalid or unknown field', () => {
+    const issues: ValidationIssue[] = [];
+    const parsed = environmentUpdatedEventSchema(
+      { environment: { ...environment, id: 'bad id', secret: 'canary' } },
+      'event',
+      issues,
+    );
+    expect(parsed).toBeUndefined();
+    expect(issues.length).toBeGreaterThan(0);
+  });
+});
 
 describe('subscription registry', () => {
   it('keeps one sequence domain per operation for a multi-operation subscription', () => {

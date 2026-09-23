@@ -83,4 +83,16 @@ describe('production entry has no test hooks', () => {
     expect(signals).not.toContain('process.env');
     expect(signals).not.toContain('node:fs');
   });
+
+  it('forwards the push channel from the ipc host instead of hardcoding one', () => {
+    // #108 review regression: the entry's window sender must forward the fixed
+    // channel the host selected. A hardcoded `operation.updated` literal sent
+    // every environment projection on the operation channel, so the renderer
+    // never refreshed after a managed process exited.
+    const app = source('apps/desktop/src/main/app.ts');
+    expect(app).toContain('send: (channel, event) =>');
+    expect(app).toContain('window.webContents.send(channel, event)');
+    expect(app).not.toMatch(/webContents\.send\(\s*HDSL_OPERATION_UPDATED_CHANNEL/);
+    expect(app).not.toMatch(/webContents\.send\(\s*'operation\.updated'/);
+  });
 });

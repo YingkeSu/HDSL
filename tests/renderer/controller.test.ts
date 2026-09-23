@@ -363,3 +363,70 @@ describe('RendererController pushed events', () => {
     expect(listener).toBeNull();
   });
 });
+
+describe('RendererController environment projection', () => {
+  const runningEnvironment = environmentSummary({ state: 'running', stateVersion: 1 });
+  const stoppedEnvironment = environmentSummary({ state: 'stopped', stateVersion: 2 });
+
+  const projectionClient = () => {
+    const { client, calls } = createStubRendererClient((method) => {
+      switch (method) {
+        case 'catalog.list':
+          return stubOk([]);
+        case 'environments.list':
+          return stubOk([runningEnvironment]);
+        default:
+          return stubFail('INTERNAL_ERROR');
+      }
+    });
+    return { client, calls };
+  };
+
+  it('merges a pushed environment.updated so an unexpected exit is visible without a manual refresh', async () => {
+    let emitEnvironment: ((environment: EnvironmentSummary) => void) | null = null;
+    let detached = false;
+    const events: RendererEventSource = {
+      subscribe: () => () => undefined,
+      subscribeEnvironment: (next) => {
+        emitEnvironment = next;
+        return () => {
+          emitEnvironment = null;
+          detached = true;
+        };
+      },
+    };
+    const { client, calls } = projectionClient();
+    const controller = new RendererController({ client, events });
+    await controller.load();
+    expect(controller.getState().environments[0]?.state).toBe('running');
+
+    emitEnvironment!(stoppedEnvironment);
+    expect(controller.getState().environments[0]?.state).toBe('stopped');
+    // The push path must not need another `environments.list` round trip, so the
+    // renderer never has to poll or wait for a manual refresh.
+    expect(calls.filter((call) => call.method === 'environments.list')).toHaveLength(1);
+
+    await controller.dispose();
+    expect(detached).toBe(true);
+    expect(emitEnvironment).toBeNull();
+  });
+
+  it('ignores a projection that would regress the environment stateVersion', async () => {
+    let emitEnvironment: (environment: EnvironmentSummary) => void = () => undefined;
+    const events: RendererEventSource = {
+      subscribe: () => () => undefined,
+      subscribeEnvironment: (next) => {
+        emitEnvironment = next;
+        return () => undefined;
+      },
+    };
+    const { client } = projectionClient();
+    const controller = new RendererController({ client, events });
+    await controller.load();
+
+    emitEnvironment(stoppedEnvironment);
+    emitEnvironment(environmentSummary({ state: 'running', stateVersion: 0 }));
+    expect(controller.getState().environments[0]?.state).toBe('stopped');
+    await controller.dispose();
+  });
+});

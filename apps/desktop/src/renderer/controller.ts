@@ -61,6 +61,7 @@ import {
   subscriptionRefSchema,
   type ContractError,
   type ContractMethod,
+  type EnvironmentSummary,
   type OperationSnapshot,
   type OperationUpdatedEvent,
   type Schema,
@@ -89,6 +90,14 @@ import {
  */
 export interface RendererEventSource {
   subscribe(listener: (event: OperationUpdatedEvent) => void): () => void;
+  /**
+   * Optional projection of an environment state change that was **not** caused
+   * by a renderer-issued operation (a managed process exiting on its own,
+   * FR-005). When provided, the controller merges the authoritative summary
+   * immediately, so the UI converges without a manual refresh or polling. When
+   * absent the controller behaves exactly as before (no environment push).
+   */
+  subscribeEnvironment?(listener: (environment: EnvironmentSummary) => void): () => void;
 }
 
 export interface RendererControllerOptions {
@@ -144,6 +153,7 @@ export class RendererController implements RendererActions {
   #state: RendererState;
   #pollTimer: ReturnType<typeof setTimeout> | null = null;
   #detachEvents: (() => void) | null = null;
+  #detachEnvironment: (() => void) | null = null;
   #requestCounter = 0;
   #disposed = false;
   /** Bumped whenever the tracked operation or disposal changes. */
@@ -163,10 +173,15 @@ export class RendererController implements RendererActions {
     this.#maxPollRetries = Math.max(1, options.maxPollRetries ?? DEFAULT_MAX_POLL_RETRIES);
     this.#createRequestId = options.createRequestId;
     this.#state = { ...INITIAL_STATE, demo: options.demo ?? false };
-    if (this.#events !== null) {
-      this.#detachEvents = this.#events.subscribe((event) => {
+    const source = this.#events;
+    if (source !== null) {
+      this.#detachEvents = source.subscribe((event) => {
         this.#handleEvent(event);
       });
+      this.#detachEnvironment =
+        source.subscribeEnvironment?.((environment) => {
+          this.#handleEnvironmentProjection(environment);
+        }) ?? null;
     }
   }
 
@@ -734,6 +749,8 @@ export class RendererController implements RendererActions {
     this.#clearPollTimer();
     this.#detachEvents?.();
     this.#detachEvents = null;
+    this.#detachEnvironment?.();
+    this.#detachEnvironment = null;
     await this.#releaseAllSubscriptions();
   }
 
@@ -1093,6 +1110,33 @@ export class RendererController implements RendererActions {
         ? selected
         : (environments[0]?.id ?? null),
     });
+  }
+
+  /**
+   * Merges a main-pushed environment projection (a managed process exiting on
+   * its own) into the environment list. `environments.list` stays the authority;
+   * this channel only closes the push gap, and the monotonic `stateVersion`
+   * means a late event can never regress a newer list read.
+   *
+   * An unknown environment is ignored rather than appended: the projection can
+   * only describe an environment this window already loaded.
+   */
+  #handleEnvironmentProjection(environment: EnvironmentSummary): void {
+    if (this.#disposed) {
+      return;
+    }
+    const current = this.#state.environments;
+    const index = current.findIndex((entry) => entry.id === environment.id);
+    if (index === -1) {
+      return;
+    }
+    const existing = current[index];
+    if (existing !== undefined && environment.stateVersion < existing.stateVersion) {
+      return;
+    }
+    const next = [...current];
+    next[index] = environment;
+    this.#update({ environments: next });
   }
 
   #handleEvent(event: OperationUpdatedEvent): void {

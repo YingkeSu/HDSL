@@ -63,7 +63,9 @@
 
 ## 事件
 
-事件通道 `operation.updated` 由 `operations.subscribe` 建立，携带：`subscriptionId`、`operationId`、`sequence`、`phase`、`status`、`progress?`。`sequence` 是**每 operation** 单调递增计数（与 `Operation.sequence`、`OperationSnapshot.sequence` 同一域），不是订阅内全局计数；多操作订阅时按 operationId 分组递增，事件必带 operationId。百分比未知时不给假进度；事件不含 token、cookie 或本地路径：发布前逐个 `operationUpdatedEventSchema` 校验（`progress` 必须 0–100），`phase` 先脱敏，不合法事件在 dispatcher 边界映射为 `INTERNAL_ERROR`。客户端重连以 `operations.get` 为准；取消不等于系统回滚。preload 白名单只暴露上述订阅/退订方法，不暴露任意通道发送。
+事件通道 `operation.updated` 由 `operations.subscribe` 建立，携带：`subscriptionId`、`operationId`、`sequence`、`phase`、`status`、`progress?`。`sequence` 是**每 operation** 单调递增计数（与 `Operation.sequence`、`OperationSnapshot.sequence` 同一域），不是订阅内全局计数；多操作订阅时按 operationId 分组递增，事件必带 operationId。百分比未知时不给假进度；事件不含 token、cookie 或本地路径：发布前逐个 `operationUpdatedEventSchema` 校验（`progress` 必须 0–100），`phase` 先脱敏，不合法事件在 dispatcher 边界映射为 `INTERNAL_ERROR`。客户端重连以 `operations.get` 为准；取消不等于系统回滚。preload 白名单只暴露上述订阅/退订方法与两个固定事件订阅入口，不暴露任意通道发送。
+
+`environment.updated` 是独立的固定推送通道（1.1 追加，issue #108），用于在**非 renderer 发起**的环境状态变化时投影权威摘要。典型触发：受管进程意外退出，core `handleProcessExit` 把环境置 `stopped`（并失败进行中的 start operation），main 在状态**确实变化**后按 `environmentUpdatedEventSchema` 校验，并以与 `environments.list` 同构、不含秘密与本地路径的 `EnvironmentSummary` 推送给每个窗口。`stateVersion` 单调递增，renderer 合并时可据此拒绝迟到的事件，因此无需轮询、也无需用户手动刷新。未知 `environmentId` 或非法/多余字段的投影在 main 边界丢弃，不跨桥。该通道不改变 `operation.updated` 的既有语义，也不表示插件活动组成（`ACTIVE` 代）发生变化。
 
 订阅注册表与幂等账本在 T003 是**进程级**。`SubscriptionRegistry` 预留不透明 `owner` 接口，供可信调用上下文（例如窗口 id）隔离退订；但 Electron sender 身份校验、按窗口订阅作用域与配额是 **T006** 职责，本版不声称已实现窗口隔离。`operations.subscribe`/`unsubscribe` 的幂等重放：若退订后重放同一 `requestId`，dispatcher 会以**同一** `subscriptionId` 重建订阅再返回原 ref，不返回失效引用。
 

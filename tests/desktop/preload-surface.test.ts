@@ -12,6 +12,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import {
   HDSL_CONTRACT_CHANNEL,
+  HDSL_ENVIRONMENT_UPDATED_CHANNEL,
   HDSL_OPERATION_UPDATED_CHANNEL,
   HDSL_SELECTION_CHANNEL,
 } from '../../apps/desktop/src/ipc-channels.js';
@@ -26,12 +27,19 @@ describe('sandboxed preload bridge', () => {
     expect(bridge).toContain(`'${HDSL_CONTRACT_CHANNEL}'`);
     expect(bridge).toContain(`'${HDSL_SELECTION_CHANNEL}'`);
     expect(bridge).toContain(`'${HDSL_OPERATION_UPDATED_CHANNEL}'`);
+    expect(bridge).toContain(`'${HDSL_ENVIRONMENT_UPDATED_CHANNEL}'`);
     expect(HDSL_OPERATION_UPDATED_CHANNEL).toBe('operation.updated');
+    expect(HDSL_ENVIRONMENT_UPDATED_CHANNEL).toBe('environment.updated');
   });
 
-  it('exposes exactly three members through a single fixed world key', () => {
+  it('exposes exactly four members through a single fixed world key', () => {
     expect(bridge).toContain("exposeInMainWorld('hdsl'");
-    for (const member of ['call(', 'onOperationUpdated(', 'selectEnvironment(']) {
+    for (const member of [
+      'call(',
+      'onOperationUpdated(',
+      'onEnvironmentUpdated(',
+      'selectEnvironment(',
+    ]) {
       expect(bridge).toContain(member);
     }
     // No arbitrary channel or node/electron surface is exposed.
@@ -53,6 +61,7 @@ describe('production renderer wiring', () => {
   it('builds the versioned envelope itself and validates pushed events', () => {
     expect(production).toContain("apiVersion: API_VERSION");
     expect(production).toContain('operationUpdatedEventSchema');
+    expect(production).toContain('environmentUpdatedEventSchema');
     expect(production).not.toContain('tokenUrl');
   });
 });
