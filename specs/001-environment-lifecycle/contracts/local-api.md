@@ -42,7 +42,7 @@
 | environments.create | requestId, name, catalogCombinationId | OperationRef | name 1–80 字符；`catalogCombinationId` 必须映射到 CompositionLock；平台必须匹配 |
 | environments.start | requestId, environmentId, expectedRevision | OperationRef | 重复启动不重复进程；组合修订变化则拒绝 |
 | environments.stop | requestId, environmentId, expectedRevision | OperationRef | 仅终止自己拥有的进程；重复停止幂等 |
-| environments.switchCombination | requestId, environmentId, expectedRevision, catalogCombinationId | OperationRef | 1.1 追加（#114 A2）：把已有环境的活动组成切到另一受审组合。**仅 `stopped` 环境可切换**（操作专属停止前置，不传播为全局规则）；新代安装+验证后原子切指针；提交前失败保旧代且不置 `error`；旧代保留；目标组合已活动 → 幂等 no-op；与 `environments.create` 不共用方法（create 失败清指针，switch 失败必须保指针） |
+| environments.switchCombination | requestId, environmentId, expectedRevision, catalogCombinationId | OperationRef | 1.1 追加（#114 A2）：把已有环境的活动组成切到另一已支持组合。**仅 `stopped` 环境可切换**（操作专属停止前置，不传播为全局规则）；新代安装+验证后原子切指针；提交前失败保旧代且不置 `error`；旧代保留；目标组合已活动 → 幂等 no-op；与 `environments.create` 不共用方法（create 失败清指针，switch 失败必须保指针） |
 | environments.openWebUI | requestId, environmentId | OpenWebUIResult | 仅 main 原生打开属于当前受管进程的已验证 loopback endpoint；renderer 不接收携带 token 的 URL |
 | operations.get | operationId | OperationSnapshot | 支持查询最终状态；携带该 operation 的 `sequence` 以便重连检测缺口 |
 | operations.cancel | requestId, operationId | OperationSnapshot | 尽力取消；提交后返回 CANNOT_CANCEL |
