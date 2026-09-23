@@ -2,7 +2,7 @@
  * OPT-IN real A2 Tier 2 cross-version evidence (#131).
  *
  * Not part of the default unit run. It performs a REAL managed install of the
- * second audited DSH release (`0.1.7-rc.1`) and of the baseline
+ * second supported DSH release (`0.1.7-rc.1`) and of the baseline
  * (`0.1.5-rc.2`) on macOS ARM64, starts each through the real managed process
  * path (SIGTERM stop), and then exercises `generations.restore` across the real
  * data-format boundary to prove the non-blocking `dshCompatibilityWarning`.

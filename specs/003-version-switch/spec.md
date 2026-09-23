@@ -74,7 +74,7 @@ A1（#113）解决「看上游版本、把**已支持组合**装成**新环境**
 - **FR-A2-007**: 同一 `requestId` 重放 MUST 返回原结果；目标组合已活动 MUST 为幂等 no-op
   （不产生新代、不动 revision）。
 - **FR-A2-008**: catalog MUST 只把有安装/启动证据的 DSH 版本标为已支持；`versions.dsh`
-  的 `supported`/`catalogCombinationIds` MUST 从受审组合派生，dist-tag（`latest`/`next`/
+  的 `supported`/`catalogCombinationIds` MUST 从已支持组合派生，dist-tag（`latest`/`next`/
   `alpha`）MUST NOT 构成支持。新增组合 MUST 自带独立闭包，且 MUST NOT 改写既有组合字节。
 
 ## 不变量

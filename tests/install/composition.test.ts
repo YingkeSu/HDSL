@@ -71,7 +71,7 @@ describe('composition digest', () => {
 });
 
 describe('audited catalog', () => {
-  it('lists the verified macOS ARM64 combinations for both audited DSH releases', () => {
+  it('lists the verified macOS ARM64 combinations for both supported DSH releases', () => {
     expect(CATALOG_REVISION).toBe('a2-tier2-2026-09-24.1');
     expect(VERIFIED_COMBINATIONS).toHaveLength(4);
     for (const combination of VERIFIED_COMBINATIONS) {
@@ -121,7 +121,7 @@ describe('audited catalog', () => {
     expect(VERIFIED_DSH_RELEASES.map((entry) => entry.version)).toEqual([DSH_VERSION, DSH_VERSION_TIER2]);
   });
 
-  it('exposes both audited DSH dependency closures without lock drift', () => {
+  it('exposes both supported DSH dependency closures without lock drift', () => {
     const expectedPackageCounts = new Map<string, number>([
       [DSH_VERSION, 585],
       [DSH_VERSION_TIER2, 586],

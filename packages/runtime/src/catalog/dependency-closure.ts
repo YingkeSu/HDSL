@@ -1,7 +1,7 @@
 /**
- * The audited DSH dependency closures.
+ * The supported DSH dependency closures.
  *
- * Each audited DSH release declares dozens of direct dependencies and resolves
+ * Each supported DSH release declares dozens of direct dependencies and resolves
  * to hundreds of packages, so installing only the top-level tarball does not
  * produce a runnable CLI. The frozen `CompositionLock` shape has no field for a
  * transitive tree, so each closure is shipped as an internal catalog asset next
@@ -17,7 +17,7 @@
  * The installer copies package.json + package-lock.json into the generation and
  * runs the managed Node's `npm ci`, so the closure is exact and every tarball's
  * npm `integrity` is verified by npm. `closure.json` binds the asset to the
- * catalog's audited DSH bytes and records the lock hash, so replacing the lock
+ * catalog's pinned DSH bytes and records the lock hash, so replacing the lock
  * cannot silently change what a rebuild installs: a swapped lock fails the
  * recorded-hash check before `npm ci` runs.
  *

@@ -98,12 +98,12 @@ planned → staged → verified → committed(activeGenerationId 原子写入) �
 
 ## 7. Catalog 扩展（#131，无 schema 变更）
 
-- `catalog.list` 现在返回 4 个已受审组合：Node `22.19.0`/`24.21.0` × DSH
+- `catalog.list` 现在返回 4 个已支持组合：Node `22.19.0`/`24.21.0` × DSH
   `0.1.5-rc.2`/`0.1.7-rc.1`。组合 id 仍为 opaque/path-safe（`.` 替换为 `_`），
   既有 rc.2 组合 id 与字节不变。
 - `versions.dsh` 的 `supported`/`catalogCombinationIds` 仍从 `catalog.list` 的
   `compatibility.status === 'verified'` 组合派生；`latest`/`next`/`alpha` dist-tag
-  不构成支持（未经审计的版本保持 `supported: false`）。
+  不构成支持（未纳入支持范围的版本保持 `supported: false`）。
 - 新增组合自带独立依赖闭包资产（`catalog/dsh-0.1.7-rc.1/{package.json,
   package-lock.json,closure.json}`）；`dshSha256`/`lockSha256`/`rootIntegritySha512`/
   `packageCount` 在构建/安装时校验，不静默升级既有 rc.2 组合。

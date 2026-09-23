@@ -90,9 +90,9 @@ describe.skipIf(!enabled)('real managed install (opt-in evidence)', () => {
         expect(manifest.preflight.skipped).toBe(false);
         expect(manifest.preflight.passed).toBe(true);
         expect(manifest.closure).not.toBeNull();
-        const auditedClosure = readDependencyClosure(combination.dsh.version);
-        expect(auditedClosure).toBeDefined();
-        expect(manifest.closure?.packageCount).toBe(auditedClosure?.packageCount);
+        const supportedClosure = readDependencyClosure(combination.dsh.version);
+        expect(supportedClosure).toBeDefined();
+        expect(manifest.closure?.packageCount).toBe(supportedClosure?.packageCount);
         expect(manifest.node.version).toBe(combination.node.version);
         expect(manifest.dsh.version).toBe(combination.dsh.version);
 

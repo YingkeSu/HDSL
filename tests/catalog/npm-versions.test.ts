@@ -192,10 +192,10 @@ describe('createNpmDshVersionSource', () => {
   });
 });
 
-describe('real audited catalog coverage (A2 Tier 2 / #131)', () => {
-  it('marks exactly the two audited DSH releases supported, regardless of dist-tags', async () => {
+describe('real supported catalog coverage (A2 Tier 2 / #131)', () => {
+  it('marks exactly the two supported DSH releases, regardless of dist-tags', async () => {
     // Source facts: `latest` still points at the baseline line while `next`/`alpha`
-    // point at unaudited versions. Support must come from the combination table.
+    // point at unsupported versions. Support must come from the combination table.
     const body = {
       'dist-tags': { latest: '0.1.5-rc.3', next: '0.1.7-rc.1', alpha: '0.1.7-alpha.2' },
       versions: {
@@ -227,7 +227,7 @@ describe('real audited catalog coverage (A2 Tier 2 / #131)', () => {
       'darwin-arm64-node24_21_0-dsh0_1_7-rc_1',
     ]);
 
-    // Dist-tags and unaudited versions must not fabricate support.
+    // Dist-tags and unlisted versions must not fabricate support.
     expect(byVersion.get('0.1.5-rc.3')?.supported).toBe(false);
     expect(byVersion.get('0.1.7-alpha.2')?.supported).toBe(false);
     expect(auditedDshVersions(VERIFIED_COMBINATIONS)).toEqual(['0.1.5-rc.2', '0.1.7-rc.1']);

@@ -145,9 +145,9 @@ P1（issue #37）已按修复不变量重做：
 
 ## #131 更新（A2 Tier 2）：安装矩阵扩展到 4 组合
 
-本文件的 DSH `0.1.5-rc.2` 证据仍有效且字节未变。A2 Tier 2（#131）新增第二个已受审
+本文件的 DSH `0.1.5-rc.2` 证据仍有效且字节未变。A2 Tier 2（#131）新增第二个已支持
 DSH 版本 `0.1.7-rc.1`（独立闭包资产
 `packages/runtime/catalog/dsh-0.1.7-rc.1/{package.json,package-lock.json,closure.json}`），
-并使 `tests/install/real-install.evidence.test.ts` 覆盖全部 4 个已受审组合
+并使 `tests/install/real-install.evidence.test.ts` 覆盖全部 4 个已支持组合
 （Node `22.19.0`/`24.21.0` × DSH `0.1.5-rc.2`/`0.1.7-rc.1`）。真实结果与逐组合摘要见
 [version-switch-validation.md §5.3](version-switch-validation.md#53-受管安装矩阵hdsl_real_install4-组合)。

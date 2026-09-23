@@ -34,7 +34,7 @@ export const CATALOG_REVISION = 'a2-tier2-2026-09-24.1';
 
 /**
  * Baseline DSH release (T001). Kept as the named constants existing callers use;
- * `VERIFIED_DSH_RELEASES` is the authoritative list of audited releases.
+ * `VERIFIED_DSH_RELEASES` is the authoritative list of supported releases.
  */
 export const DSH_VERSION = '0.1.5-rc.2';
 export const DSH_ARTIFACT_URL =
@@ -43,8 +43,8 @@ export const DSH_ARTIFACT_SHA256 =
   'f4c54839d69e82bf1c3a5a41a910c3ce1405cd9e9d97d753c0c04f406c7d7480';
 
 /**
- * A2 Tier 2 DSH release (#131): the first audited DSH version that forms a real
- * data-format boundary against the baseline (`SESSION_FORMAT_VERSION` 4 vs 3).
+ * A2 Tier 2 DSH release (#131): the first supported DSH version whose session
+ * format differs from the baseline (`SESSION_FORMAT_VERSION` 4 vs 3).
  * Source facts were verified read-only against the public npm registry and the
  * upstream tag `dsh-v0.1.7-rc.1`; see `docs/research/dsh-compatibility.md` R007.
  */
@@ -145,7 +145,7 @@ const buildCombination = (
 };
 
 /**
- * The verified macOS ARM64 catalog: Node 22.19.0 / 24.21.0 for both audited DSH
+ * The verified macOS ARM64 catalog: Node 22.19.0 / 24.21.0 for both supported DSH
  * releases (baseline `0.1.5-rc.2` first, then `0.1.7-rc.1`). Existing baseline
  * combination ids/bytes are unchanged.
  */

@@ -93,7 +93,7 @@ contract dispatcher；离线合成 tarball，仍校验 SHA-256；两个组合共
 
 ## 5. Tier 2 真实跨版本证据（#131，已运行）
 
-范围：把 `@deepseek-ai/dsh@0.1.7-rc.1` 纳入**已受审组合**（新增独立组合与闭包，不改
+范围：把 `@deepseek-ai/dsh@0.1.7-rc.1` 纳入**已支持组合**（新增独立组合与闭包，不改
 基线字节），并用真实 macOS ARM64 安装/启动与 `generations.restore` 证明降级提示的真实
 触发路径。只读来源复核见 [dsh-compatibility.md R007](../research/dsh-compatibility.md#r007)。
 
@@ -159,7 +159,7 @@ HDSL_REAL_CROSS_VERSION_DATA_ROOT=/tmp/hdsl-131-evidence \
 
 ### 5.3 受管安装矩阵（`HDSL_REAL_INSTALL`，4 组合）
 
-同一 `tests/install/real-install.evidence.test.ts` 已扩展为覆盖全部 4 个已受审组合
+同一 `tests/install/real-install.evidence.test.ts` 已扩展为覆盖全部 4 个已支持组合
 （此前只覆盖 rc.2 × 两个 Node）。命令：
 
 ```sh
