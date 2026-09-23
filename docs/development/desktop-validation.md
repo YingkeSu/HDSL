@@ -10,7 +10,7 @@
 > - `E2E-FAULT-EXIT-01`：真实 SIGKILL 受管 DSH 后，**生产契约收敛 `stopped` 且真实渲染器自动收敛 `已停止`**（不再需要手动刷新）；
 > - `E2E-APP-CRASH-RESTART-01`（新增）：SIGKILL 真实 Electron 主进程后，detached 受管 DSH 存活；重启实例接管陈旧 dataRoot lease，按 pid 采纳同一进程（真实 UI `运行中`），并经真实停止按钮杀掉它。
 >
-> 真实 lane：`HDSL_E2E_FAULTS=1 pnpm exec vitest run tests/e2e/desktop.faults.real.test.ts` → **2 passed / 1 file（119.27s）**，无 `hdsl-e2e-run-*` 残留、无 keychain 残留。真实 UI 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 仍不可达（产品无 hook），已去重登记 [#123](https://github.com/YingkeSu/HDSL/issues/123)。
+> 真实 lane：`HDSL_E2E_FAULTS=1 pnpm exec vitest run tests/e2e/desktop.faults.real.test.ts` → **2 passed / 1 file（119.27s）**，无 `hdsl-e2e-run-*` 残留、无 keychain 残留。真实 UI 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 在首条切片**不做 UI 验收**（[#123](https://github.com/YingkeSu/HDSL/issues/123) 决议：产品入口固定 `--port 0`、就绪预算内部固定；不加测试专用 hook），只按 D 层 + 契约层验收。
 
 ## 执行矩阵（2cdea54）
 
