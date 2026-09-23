@@ -51,6 +51,16 @@ export {
   HDSL_SELECTION_CHANNEL,
 };
 
+/**
+ * The only push channels this host may deliver on. The Electron entry's `send`
+ * callback receives the channel explicitly, so operation progress and the
+ * environment-state projection can never be sent on each other's channel by a
+ * hardcoded literal. Both are fixed here and never derived from renderer input.
+ */
+export type HdslPushChannel =
+  | typeof HDSL_OPERATION_UPDATED_CHANNEL
+  | typeof HDSL_ENVIRONMENT_UPDATED_CHANNEL;
+
 export const DEFAULT_MAX_SUBSCRIPTIONS_PER_WINDOW = 8;
 
 /** Identity of an IPC caller, derived from the Electron event by the entry glue. */
@@ -76,7 +86,7 @@ interface WindowSession {
   readonly registry: SubscriptionRegistry;
   readonly maxSubscriptions: number;
   /** Fixed-channel sender captured by the Electron entry for this window. */
-  readonly send: (event: unknown) => void;
+  readonly send: (channel: HdslPushChannel, event: unknown) => void;
   selection: string | null;
 }
 
@@ -129,13 +139,13 @@ export class DesktopIpcHost {
   /** Registers a window and starts forwarding its operation events to `send`. */
   openWindow(options: {
     readonly webContentsId: number;
-    readonly send: (event: unknown) => void;
+    readonly send: (channel: HdslPushChannel, event: unknown) => void;
     readonly maxSubscriptions?: number;
   }): OpenedWindow {
     this.closeWindow(options.webContentsId);
     const registry = new SubscriptionRegistry();
     const detach = registry.onEvent((event) => {
-      options.send(event);
+      options.send(HDSL_OPERATION_UPDATED_CHANNEL, event);
     });
     const session: WindowSession = {
       webContentsId: options.webContentsId,
@@ -196,7 +206,7 @@ export class DesktopIpcHost {
     let delivered = 0;
     for (const session of this.#sessions.values()) {
       try {
-        session.send(event);
+        session.send(HDSL_ENVIRONMENT_UPDATED_CHANNEL, event);
         delivered += 1;
       } catch {
         // A window that has gone away must not break delivery to the rest.

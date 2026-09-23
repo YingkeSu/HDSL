@@ -26,7 +26,6 @@ import type { DiagnosticsPathChooser } from './exporter.js';
 import {
   DesktopIpcHost,
   HDSL_CONTRACT_CHANNEL,
-  HDSL_OPERATION_UPDATED_CHANNEL,
   HDSL_SELECTION_CHANNEL,
   isAuthorizedSender,
   type SenderIdentity,
@@ -240,9 +239,11 @@ const createLauncherWindow = async (): Promise<void> => {
   applyWindowSecurity(window, TRUSTED_URL_POLICY);
   ipcHost.openWindow({
     webContentsId,
-    send: (event) => {
+    // The host passes the fixed channel explicitly, so operation progress and
+    // the environment-state projection never share one hardcoded literal.
+    send: (channel, event) => {
       if (!window.isDestroyed()) {
-        window.webContents.send(HDSL_OPERATION_UPDATED_CHANNEL, event);
+        window.webContents.send(channel, event);
       }
     },
   });
