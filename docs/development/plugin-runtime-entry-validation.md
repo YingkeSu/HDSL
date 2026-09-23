@@ -86,6 +86,7 @@ python3 scripts/check_repository.py
 
 ## 3. 未测 / blocked
 
-- **运行期 ACTIVE 确认 blocked**：无经验证的公开只读确认面；`pluginInventory/list` 需官方 WebUI 会话，HDSL 不伪造会话、不新增私有 bridge。
+- **运行期 ACTIVE 确认 blocked**：无经验证的公开只读确认面；`pluginInventory/list` 需官方 WebUI 会话，HDSL 不伪造会话、不新增私有 bridge。E1b 已把该结论查实并给出精确证据：见 [E1b 调查](../research/e1b-runtime-confirmation-investigation.md)（no-go：Remote-only + 每条 RPC 需浏览器会话；HDSL 从不把 DSH WebUI 载入自己的窗口，renderer 为 `file://`，对 `/api` 请求被 403；即便自铸会话，inventory 只有 `entryId/moduleName/enabled/fiberPhase`，无法确认 config 变更）。
+- **“预热窗口”归因修正**：E1b 复现表明先前观察到的“ready 后约 12s 预热”主要不是 HMR 预热，而是**非原子写（截断+写）与 watcher 的竞态**：截断瞬间被 `parsePatchList` 视为非法数组，refresh 失败只进 in-process 事件（`hmr/config-update-failed`），launcher 无任何可见信号。改用原子 temp+rename 后，Node 24.21.0 与 25.6.1 均在首次原子写（0s / attempts=1）内应用。这印证 AC1 的原子写约束；产品口径不变（写成功仍不得声称 ACTIVE）。详见 [E1b 调查 §5.1](../research/e1b-runtime-confirmation-investigation.md)。
 - 未接入 `contracts`/preload/renderer（产品接线 blocked，见 [plan.md](../../specs/002-plugin-transactions/e1-runtime-entry/plan.md) §4）。
 - 仅 loopback 未证；Windows/Linux 未测。
