@@ -43,6 +43,7 @@
 | 插件卸载、内置保护与合法保留（#77 S3） | [验证记录](development/plugin-remove-validation.md)、[服务核验边界](development/plugin-remove-service-verification.md) |
 | 显式构建授权（#78 S4） | [验证边界与证据分层](development/plugin-build-authorization-validation.md)、[GitHub fixture 发布/实测记录](development/plugin-build-authorization-github-fixture-publication.md) |
 | 运行期 entry（E1 #116） | [desired-config 边界 + 合法非空数组移除实验](development/plugin-runtime-entry-validation.md)（opt-in、隔离、同 PID 卸载） |
+| 插件 pnpm transport 规格（#141） | [固定 commit 的官方 codeload tarball](development/plugin-transport-spec.md)（transport ≠ 来源；旧 plan `PLAN_STALE`） |
 | 期望组成查看（E2 #118） | [只读 `--dump-config` 解析验证记录](development/expected-composition-validation.md)（opt-in 真实受管 dump；期望 ≠ 运行期 ACTIVE） |
 | 同环境版本切换（A2 #114） | [测试与边界](development/version-switch-validation.md)（确定性事务/回滚/恢复证据；真实 opt-in 未测） |
 
