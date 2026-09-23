@@ -215,17 +215,19 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
   3. 时序门禁：运行中 apply → `ENVIRONMENT_BUSY`；停止并重启后加载集合与新代际记录一致，卸载后不再包含该包。
   该观测是**验证 seam**，本 MVP 不因此新增 `--dump-config` 类 IPC 方法。
 
-### D21（S3 增量，待评审）：HDSL 命名空间服务声明与核验边界
+### D21（S3 增量，待评审；**政策已 superseded**）：HDSL 命名空间服务声明与核验边界
+
+> **政策 superseded（2026-09-23，[#112](https://github.com/YingkeSu/HDSL/issues/112)）**：下方第 2、4、5、6、7 条的“`unknown` ⇒ 一律阻塞卸载”与旧 UI 文案（“无法验证服务依赖，暂不能卸载”）已不再作为产品门禁。当前口径：服务核验只作为 `riskItems` **信息项**，`unknown` 不阻塞卸载（`unknown ≠ 危险`）；**保留**事实基线（记录格式、`known empty` 语义、精确 commit+摘要重验）与“**无静态引用 ≠ 无影响**”的限制陈述。以下条目原文按历史时标保留，仅作记录，不得据此实现。
 
 **背景（固定 rc.2 事实，见 §9.5a）**：`package.json` 无服务端 service provider/consumer 声明；patch 只有消费侧服务名（`inject`）；提供方在**代码**里，故 patch 无法把服务名映射到包名。为在**不执行插件代码、不扫描任意 JS** 的前提下让卸载可用，采用 **(a) 受限声明 + HDSL 核验** 边界。
 
 1. **元数据来源（HDSL 命名空间，非上游字段）**：插件可**可选**声明 `hdsl.services.provides`（HDSL 自有命名空间；**不得**表述为 DSH/上游官方字段，也不得复用 `dsh.*` 命名空间冒充官方）。该声明**语义仅是 HDSL 卸载分析的声明范围**，**不是**运行时沙箱/隔离/安全保证。
-2. **可信边界**：自报列表**不构成证明**。只有 HDSL 生成并保存的**核验记录**才使声明成为 known：记录绑定 `{repository, exact commitSha, 声明内容摘要, 源 manifest 摘要, 核验来源与 SHA, 独立 review 出处}`。三态而非两态：**(i) 显式 `provides: []` + 独立核验记录 ⇒ `known empty`**（**不是 unknown**，否则受控 fixture 不可卸载）；(ii) 缺失声明、空字符串、或声明存在但**未核验/摘要不匹配** ⇒ **unknown**；(iii) 显式非空 `provides` + 核验 + 与保留 consumers 相交 ⇒ 拦截。**不得**把“无声明”一律当成有证空。
+2. **可信边界**（**注：其 “unknown 不得卸载” 结果已被 #112 supersede，见上；记录/核验的事实基线保留**）：自报列表**不构成证明**。只有 HDSL 生成并保存的**核验记录**才使声明成为 known：记录绑定 `{repository, exact commitSha, 声明内容摘要, 源 manifest 摘要, 核验来源与 SHA, 独立 review 出处}`。三态而非两态：**(i) 显式 `provides: []` + 独立核验记录 ⇒ `known empty`**（**不是 unknown**，否则受控 fixture 不可卸载）；(ii) 缺失声明、空字符串、或声明存在但**未核验/摘要不匹配** ⇒ **unknown**；(iii) 显式非空 `provides` + 核验 + 与保留 consumers 相交 ⇒ 拦截。**不得**把“无声明”一律当成有证空。
 3. **核验来源（MVP）**：受控 fixture 的已确认记录（known empty）见 [plugin-remove-service-verification.md](../development/plugin-remove-service-verification.md)（含精确源码 permalink、逐文件/manifest/tree 摘要与审查边界；换 commit 即失效）。受控、经独立 review 的**精确源码**（当前 fixture **不提供服务**，即其 provides 记录为空/无）；HDSL 记录出处与 SHA。**任何源码升级（新 commit/新摘要）使既有记录失效**。不建立远程市场、不自动扫描任意 JS、不做 JS 模式猜测。
-4. **卸载判定（(i) 有限支持边界，不建覆盖图）**：`knownProviders(被移除插件) ∩ 保留 patch consumers` → `REFERENCED_BY_OTHER`（安全来源标识，无本地路径）；**unknown ⇒ 一律明确阻塞**（与是否存在保留 consumer 无关：扫描未发现消费者不等于不存在代码级依赖；不默认可卸载）；**不阻塞** 仅限“**target 为 known 且与保留 consumers 不相交**”——**绝不**从“存在其它 provider”或“扫描为空”推出未知 target 安全；`known empty` 与 `known 不相交` ⇒ 放行。受限码映射见 D21 变更说明（在冻结错误码集内用 `REFERENCED_BY_OTHER` + 可解释 detail，不新增公开错误码）。
-5. **未知 UX**：UI 必须呈现“**无法验证服务依赖，暂不能卸载**”，**不得**呈现为“插件安全/无影响/无引用”；也不得把 unknown 静默当通过。
-6. **安装保留与卸载重验**：核验记录在安装期建立并保留（内部记录，尽量不新增公开契约字段；确需公开时再同步契约与 fixtures）；卸载时**按精确 commit + 摘要重验**，漂移 → `PLAN_STALE`/unknown 阻塞。
-7. **既有代兼容策略**：本边界之前安装的代/插件**没有记录** ⇒ 其服务轴为 unknown；这些代仍可运行，但其卸载在服务轴按 unknown 阻塞，除非可完成核验；不做“默认无服务”的静默放行、不造假 trust 恒真。
+4. **卸载判定（(i) 有限支持边界，不建覆盖图）**（**注：本条结论已被 #112 supersede，见上**）：`knownProviders(被移除插件) ∩ 保留 patch consumers` → `REFERENCED_BY_OTHER`（安全来源标识，无本地路径）；**unknown ⇒ 一律明确阻塞**（与是否存在保留 consumer 无关：扫描未发现消费者不等于不存在代码级依赖；不默认可卸载）；**不阻塞** 仅限“**target 为 known 且与保留 consumers 不相交**”——**绝不**从“存在其它 provider”或“扫描为空”推出未知 target 安全；`known empty` 与 `known 不相交` ⇒ 放行。受限码映射见 D21 变更说明（在冻结错误码集内用 `REFERENCED_BY_OTHER` + 可解释 detail，不新增公开错误码）。
+5. **未知 UX**（**注：本条结论已被 #112 supersede，见上**）：UI 必须呈现“**无法验证服务依赖，暂不能卸载**”，**不得**呈现为“插件安全/无影响/无引用”；也不得把 unknown 静默当通过。
+6. **安装保留与卸载重验**（**注：本条结论已被 #112 supersede，见上；精确 commit+摘要重验保留，漂移结果改为 `PLAN_STALE`/信息项，不再 unknown 阻塞**）：核验记录在安装期建立并保留（内部记录，尽量不新增公开契约字段；确需公开时再同步契约与 fixtures）；卸载时**按精确 commit + 摘要重验**，漂移 → `PLAN_STALE`（并作 `riskItems` 信息项）。
+7. **既有代兼容策略**（**注：本条结论已被 #112 supersede，见上**）：本边界之前安装的代/插件**没有记录** ⇒ 其服务轴为 unknown；这些代仍可运行，其卸载**不再**因服务轴 unknown 而阻塞（只作 `riskItems` 信息项）；不做“默认无服务”的静默放行、不造假 trust 恒真。
 8. **范围与诚实声明**：这是**当前 MVP 的支持边界**；#77/#73 必须写明“受限子集 + 上游无声明性服务元数据”的剩余限制，**不声称任意第三方插件均可无损卸载**。若受限记录引入新的重大产品复杂性（例如为收敛过报需要对“保留 consumer 是否已被其它 known provider 覆盖”做闭包判定），须先具体报告再决定范围。
 
 ### D16 离线、限流与缓存语义
@@ -441,7 +443,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 2. **#76 AC**："预览输出完整 commit SHA"需补一句来源语义：`link:`/`file:`/本地路径不是合法源（`INVALID_INPUT`），本地可控 Git remote 仅用于测试 adapter，产品源只有 GitHub 公开仓库。
 3. **#73/#76 受管执行器**："受管 pnpm 版本与显式调用"需注明版本为**待实证候选**（候选 `11.7.0`），不得以宿主 pnpm 作为锁定证据（对齐 E1）。
 4. **#76/#77 "重启生效/卸载后不再启用"（已按评审必修 2 降级）**：生效判据为**活动代际 + 受管 DSH 离线解析出的组合树**；该组合树与"运行期实际加载集合"的等价性待实证（E9），**文件检查不构成生效证据**，且不得先于实证写成唯一生效 AC。
-5a. **#77 服务耦合事实基线（只读实测，未执行插件代码）**：固定 rc.2 的 `package.json` 只暴露 `dsh.bundle`（bundle patch）、`dsh.client`（**client 侧**按**包名** inject，platform web）、`dsh.configTrees`、`dsh.sessionFormatMigration`；**没有**服务端 service provider/consumer 声明。patch 行只有消费侧服务名（`inject: [webStartup]` 等）。最小真实反例：`dsh-web-app`/`dsh-headless` 的行 `inject: [webStartup]`，而 `webStartup` 由 `dsh-cmdline` 的**代码**提供（`provideCmdline`），manifest 无任何链接 → 由此类 patch 无法把服务名映射到包名。候选可实现子集：(a) 第三方插件声明 `dsh.services.provides`（安装期校验，preview 可可靠映射；未声明且保留层有 inject → 明确 unknown 阻塞）；(b) 对已安装条目做**有界、文档化**的声明性模式提取（非执行，需限定例外）；(c) 无法证明安全时走授权门（S4 类，当前关闭）；(d) 一律 unknown 阻塞（满足 AC 但阻塞常规 patch，不推荐）。待 owner 裁决。
+5a. **#77 服务耦合事实基线（只读实测，未执行插件代码）**：固定 rc.2 的 `package.json` 只暴露 `dsh.bundle`（bundle patch）、`dsh.client`（**client 侧**按**包名** inject，platform web）、`dsh.configTrees`、`dsh.sessionFormatMigration`；**没有**服务端 service provider/consumer 声明。patch 行只有消费侧服务名（`inject: [webStartup]` 等）。最小真实反例：`dsh-web-app`/`dsh-headless` 的行 `inject: [webStartup]`，而 `webStartup` 由 `dsh-cmdline` 的**代码**提供（`provideCmdline`），manifest 无任何链接 → 由此类 patch 无法把服务名映射到包名。候选可实现子集：(a) 第三方插件声明 `dsh.services.provides`（安装期校验，preview 可可靠映射；未声明且保留层有 inject → 明确 unknown 阻塞）；(b) 对已安装条目做**有界、文档化**的声明性模式提取（非执行，需限定例外）；(c) 无法证明安全时走授权门（S4 类，当前关闭）；(d) 一律 unknown 阻塞（满足 AC 但阻塞常规 patch，不推荐）。待 owner 裁决。**政策更新（2026-09-23，#112）**：上述候选中的“unknown ⇒ 阻塞”路线已不采用；D21 服务门禁作为卸载门禁被 supersede，当前仅作 `riskItems` 信息项。
 5. **#77 内置保护（已按评审非阻断发现降级）**：内置集合按**当前受管 DSH 安装解析**（F12a）；负控必须使用当前安装的真实 in-box 名，不得用同名 profile 替身。**不引用**"启用列表出现未声明条目 → 加载失败"或"解析顺序"（F12b 无仓库出处）。
 6. **（可选新增）** 把插件事务的**相位名与故障注入形状**（QA §14.2/§14.3，对齐既有 `CreationFaults.failBeforeCommit`/`pauseBeforeCommit`）显式挂到 #76，便于 QA 在每个提交边界做抛错与 `SIGKILL` 注入。
 7. **（承接登记 + #76 硬门禁）**：(a) 002 规格动工时的差异清单迁移（§6）登记为 002 任务的一部分；(b) **#76 硬门禁**：#76 开工前必须完成 home 派生机制、含密文件处理、可变运行数据归属与旧代恢复语义的决策与实证（owner = **#76 实现设计**，见 D18/E10）；在决策与实证完成前 **#76 视为门禁未满足**，且本 P0 不宣称该保证已实现。本片不建 issue，登记由需求 owner 路由。

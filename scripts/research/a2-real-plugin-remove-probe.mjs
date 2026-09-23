@@ -166,7 +166,7 @@ try {
   record('remove preview lists the dependency entry + enabled reference', removePlan.removals.some((e) => e.includes('dependency entry')) && removePlan.removals.some((e) => e.includes('enabled bundle reference')));
   record('remove preview retains the user patch layer + environment data', removePlan.retention.some((e) => e.includes('user patch layer')) && removePlan.retention.some((e) => e.includes('environment data')));
 
-  // ---- negative control: unknown service (controlled tamper of OUR temp lock) ----
+  // ---- negative control: unknown service axis is informational, NOT a blocker ----
   const lockPathInstalled = generationPaths(layout, environment.id, installedGeneration).lockPath;
   const originalLockBytes = readFileSync(lockPathInstalled, 'utf8');
   const tampered = JSON.parse(originalLockBytes);
@@ -174,8 +174,10 @@ try {
   writeFileSync(lockPathInstalled, `${JSON.stringify(tampered)}\n`);
   const unknownPreview = previewService.previewChange({ requestId: 'req-remove-unknown', environmentId: environment.id, expectedRevision: environment.revision, action: { kind: 'remove', pluginId: 'hdsl-plugin-e2e-fixture' } });
   const unknownOp = unknownPreview.ok ? await waitPreviewOperation(previewService, unknownPreview.value.operationId, 5 * 60_000) : undefined;
-  const unknownBlocked = unknownOp?.status === 'succeeded' && (unknownOp.output?.blockingReferences ?? []).some((r) => r.detail.includes('service dependencies for this plugin are not verified'));
-  record('negative control: unverified service binding BLOCKS (unknown, no applyability)', unknownBlocked === true);
+  const unknownBlocks = (unknownOp?.output?.blockingReferences ?? []).some((r) => r.detail.includes('service dependencies for this plugin are not verified'));
+  const unknownIsRiskInfo = (unknownOp?.output?.riskItems ?? []).some((r) => r.includes('not verified'));
+  record('negative control: unverified service binding does NOT block (unknown != danger, #112)', unknownOp?.status === 'succeeded' && unknownBlocks === false);
+  record('negative control: unverified service binding is reported as risk information', unknownIsRiskInfo === true);
   writeFileSync(lockPathInstalled, originalLockBytes);
 
   // ---- negative control: real in-box bundle name ----

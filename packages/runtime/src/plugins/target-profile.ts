@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import { isPlainRecord, portFail, portOk, type PluginSourceSelector, type PortOutcome } from '@hdsl/contracts';
 import type { GitProvider } from './preview-resolution.js';
 import type { PluginExecutorPort } from './executor.js';
-import { declaresBundle, reconcileProfileBundles } from './profile-bundles.js';
+import { declaresBundle, reconcileProfileBundles, unresolvedBundleRisk } from './profile-bundles.js';
 
 export interface TargetProfileInput {
   readonly source: PluginSourceSelector;
@@ -46,6 +46,12 @@ export interface TargetProfileResolution {
   readonly targetWorkspaceText: string | null;
   /** Binding digest over package.json + workspace config (not the lock). */
   readonly targetDeclarationSha256: string;
+  /**
+   * Risk statements for bundle declarations that could not be read. The caller
+   * MUST surface these in the plan `riskItems`; an unreadable declaration leaves
+   * the bundle entry untouched and must not read as "reconciled".
+   */
+  readonly bundleRiskItems: readonly string[];
 }
 
 const sha256 = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
@@ -129,6 +135,7 @@ export const resolveTargetProfileLock = async (
     dependencies: [{ name: pluginName, declaresBundle: declaresBundle(sourceManifest) }],
   });
   const bundles = reconciled.bundles;
+  const bundleRiskItems = reconciled.unresolved.map(unresolvedBundleRisk);
   const targetDeclarationText = `${JSON.stringify(
     { ...declaration, dependencies, dsh: { ...dsh, profile: { ...profile, bundles } } },
     null,
@@ -195,6 +202,7 @@ export const resolveTargetProfileLock = async (
       targetDeclarationText,
       targetWorkspaceText: workspace,
       targetDeclarationSha256,
+      bundleRiskItems,
     });
   } catch {
     return portFail('INTERNAL_ERROR', 'the target profile could not be resolved in isolation');

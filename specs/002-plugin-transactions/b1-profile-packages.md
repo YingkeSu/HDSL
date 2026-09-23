@@ -25,11 +25,11 @@ HDSL = DSH 启动器 + 版本管理器 + 包依赖/bundles 的便捷管理。本
 ## 本片改动
 
 1. **bundle reconcile 基准**（`packages/runtime/src/plugins/profile-bundles.ts`，纯函数、可单测）：
-   - 依赖包 manifest 声明 `dsh.bundle.patch` ⇒ 入 bundle 层；
+   - 依赖包 manifest 声明 `dsh.bundle.patch`（非空字符串）⇒ 入 bundle 层；
    - 依赖被移除或**失去声明** ⇒ 出 bundle 层；
    - 非 profile 依赖的 bundle 条目（模板 in-box bundle）保持不动；
-   - 声明**不可读**（unknown）⇒ 保持原状并记为 `unresolved`，**不猜、不 `unknown ⇒ 禁止`**。
-   - 接入点：`target-profile.ts`（安装目标声明，只有声明 bundle 的来源才入层）与 `removal.ts`（卸载剪枝）。
+   - 声明**不可读**（`dsh.bundle` 存在但 `patch` 缺失/为 `null`/空串/非字符串，或 `dsh`/`dsh.bundle` 形态畸形）⇒ 保持原状并记为 `unresolved`，**不猜、不 `unknown ⇒ 禁止`**；调用方必须把 `unresolved` 消费成 `riskItems`（`unresolvedBundleRisk`），**不得丢弃**，以免静默伪称 bundle 已对账。
+   - 接入点：`target-profile.ts`（安装目标声明，只有声明 bundle 的来源才入层，`unresolved` 汇入 `PluginPreviewResolution.riskItems`）与 `removal.ts`（卸载剪枝）；仅移除显式目标，**非字符串条目原样保留**。
 2. **restart 语义进入操作终态**（`packages/core/src/plugin-preview.ts`）：install/remove 计划
    `riskItems` 均显式包含 `CHANGE_PLAN_RESTART_REQUIRED`，说明改依赖/bundles 无 watcher、需重启生效
    （#111 G6）；UI 已有的“重启环境后生效”文案由该终态可推导。

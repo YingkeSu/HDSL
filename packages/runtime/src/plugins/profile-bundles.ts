@@ -74,6 +74,22 @@ export const declaresBundle = (manifest: unknown): boolean | null => {
   return typeof patch === 'string' && patch !== '' ? true : null;
 };
 
+/** Contract cap for one `ChangePlan.riskItems` entry (each item max 256). */
+export const RISK_ITEM_MAX_LENGTH = 256;
+
+/**
+ * The risk statement for a bundle declaration that could not be read. Callers
+ * MUST surface this (plan `riskItems`) instead of dropping `unresolved`: an
+ * unreadable declaration leaves the entry untouched, which is NOT the same as
+ * "the bundle layer was reconciled".
+ */
+export const unresolvedBundleRisk = (name: string): string => {
+  const statement = `the bundle declaration of ${name} could not be read (dsh.bundle.patch is not a non-empty string); its dsh.profile.bundles entry was left unchanged, not silently reconciled`;
+  return statement.length <= RISK_ITEM_MAX_LENGTH
+    ? statement
+    : `${statement.slice(0, RISK_ITEM_MAX_LENGTH - 1)}…`;
+};
+
 /**
  * Reconciles a profile's bundle layer from the current declaration and the
  * observed dependency declarations. It never invents an entry for an unknown

@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  CHANGE_PLAN_RESTART_REQUIRED,
   ChangeApplyService,
   ChangePreviewService,
   EnvironmentStore,
@@ -404,6 +405,8 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(plan.removals.some((entry) => entry.includes('enabled bundle reference'))).toBe(true);
     expect(plan.retention).toContain('direct dependency shared-dep');
     expect(plan.retention).toContain('user patch layer (home cordis.patch.yml)');
+    // B4: dependency/bundle changes need a restart; the risk is in the plan output.
+    expect(plan.riskItems).toContain(CHANGE_PLAN_RESTART_REQUIRED);
 
     const applied = await applyPlan(fixture, plan);
     expect(applied.status).toBe('succeeded');
@@ -456,6 +459,41 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     const applied = await applyPlan(fixture, plan);
     expect(applied.status).toBe('succeeded');
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
+  });
+
+  it('rejects a statically referenced removal at apply with REFERENCED_BY_OTHER and no side effect', async () => {
+    // B2: a plan whose `blockingReferences` is non-empty (another layer statically
+    // references the target) must NEVER be applied by a programmatic caller. This
+    // pins the core apply guard, not just the removal port's identical guard.
+    const fixture = build({ userPatch: `- insert:\n    - id: ref-row\n      name: ${FIXTURE}\n` });
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    expect(plan.blockingReferences.some((entry) => entry.kind === 'userPatch')).toBe(true);
+
+    let applyCalls = 0;
+    const countingPort: PluginRemovalPort = {
+      ...fixture.removalPort,
+      applyRemoval: async (input, signal) => {
+        applyCalls += 1;
+        return fixture.removalPort.applyRemoval(input, signal);
+      },
+    };
+    const service = fixture.apply(countingPort);
+    const rejected = service.applyChange({
+      requestId: 'req-apply-statically-blocked',
+      environmentId: ENVIRONMENT_ID,
+      expectedRevision: plan.baseRevision,
+      planId: plan.planId,
+      buildAuthorization: null,
+    });
+    expect(rejected.ok).toBe(false);
+    if (!rejected.ok) expect(rejected.code).toBe('REFERENCED_BY_OTHER');
+    // No executor run, no plan consumption, no pointer/revision change.
+    expect(applyCalls).toBe(0);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
+    expect(fixture.preview.plans.read(plan.planId)?.consumedBy).toBeNull();
   });
 
   it('rejects a source-identity drift at apply even when the pruned declaration and lock are unchanged', async () => {

@@ -111,6 +111,9 @@ export const createResolvingPreviewPort = (options: ResolvingPreviewOptions): Re
       scriptAssessment,
       requiresBuildAuthorization: enumerationComplete ? merged.length > 0 : built.value.requiresBuildAuthorization,
       dependencyClosureEnumerated: enumerationComplete,
+      // B3 (#115): an unreadable bundle declaration is surfaced as a risk item so
+      // the caller cannot silently treat the bundle layer as reconciled.
+      riskItems: [...built.value.riskItems, ...target.value.bundleRiskItems],
       targetLockText: target.value.targetLockText,
       targetDeclarationText: target.value.targetDeclarationText,
       targetWorkspaceText: target.value.targetWorkspaceText,

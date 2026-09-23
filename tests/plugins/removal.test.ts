@@ -228,6 +228,42 @@ describe('resolvePluginRemoval', () => {
     expect(noConsumers.value.riskItems.some((item) => item.includes('not verified'))).toBe(true);
   });
 
+  it('keeps the "(not a removal blocker)" suffix when an informational service note is truncated to the contract limit', () => {
+    const longDetail = 'x'.repeat(256);
+    const outcome = resolvePluginRemoval(input({
+      serviceVerification: { status: 'known', provides: ['webStartup'] },
+      referenceSources: [
+        { kind: 'bundle', detail: longDetail, references: [], services: ['webStartup'], unresolved: false },
+      ],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.blockingReferences).toEqual([]);
+    const note = outcome.value.riskItems.find((item) => item.includes('webStartup'));
+    expect(note).toBeDefined();
+    expect(note?.length).toBeLessThanOrEqual(256);
+    expect(note).toContain('(not a removal blocker)');
+  });
+
+  it('preserves non-string dsh.profile.bundles entries verbatim while pruning (never silently drops them)', () => {
+    // A malformed-but-present entry must not be deleted as a side effect of an
+    // unrelated removal; only the explicit target leaves the layer.
+    const custom = `${JSON.stringify({
+      name: 'dsh-profile-web',
+      dependencies: { 'demo-plugin': 'github:octo/demo#abc' },
+      dsh: { profile: { bundles: ['@deepseek-ai/dsh-base', 'demo-plugin', { legacy: true }, 42] } },
+    })}\n`;
+    const outcome = resolvePluginRemoval(input({
+      declarationText: custom,
+      installed: [{ id: 'demo-plugin', version: '1.0.0' }],
+    }));
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const pruned = JSON.parse(outcome.value.prunedDeclarationText) as { dsh: { profile: { bundles: unknown[] } } };
+    expect(pruned.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-base', { legacy: true }, 42]);
+    expect(pruned.dsh.profile.bundles).not.toContain('demo-plugin');
+  });
+
   it('warns (never blocks) about patch-injected service overlap and never treats services as packages', () => {
     const outcome = resolvePluginRemoval(input({
       serviceVerification: { status: 'known', provides: [] },

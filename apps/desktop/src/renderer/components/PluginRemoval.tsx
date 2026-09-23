@@ -8,28 +8,21 @@
  * real composition member (no wildcard, no free-text package name). The remove
  * plan is read only from the terminal `changes.preview` output.
  *
- * Honesty constraints (ADR 0005 D15/D21/D20):
- * - a `blockingReferences` entry with an unverified service dependency shows
- *   "无法验证服务依赖，暂不能卸载" and NEVER "插件安全/无影响";
+ * Honesty constraints (ADR 0005 D15/D20; the service-verification gate was
+ * superseded by #112):
+ * - `blockingReferences` only carry factual conflicts (another layer's static
+ *   reference, or an unresolvable patch construct), and the copy never says
+ *   "插件安全/无影响"; service verification is an informational `riskItems`
+ *   entry, not a blocker, and `unknown` is not danger;
  * - a builtin target is refused with `BUILTIN_BUNDLE_PROTECTED` and there is no
  *   confirm button;
  * - retaining shared/transitive dependencies is EXPECTED and is shown as such.
  */
 import type { ReactElement } from 'react';
-import type { ChangePlan, ContractError } from '@hdsl/contracts';
+import type { ContractError } from '@hdsl/contracts';
 import { selectedEnvironment, selectedInstalledPlugin, type RendererActions, type RendererState } from '../view-model.js';
 
-const UNVERIFIED_SERVICE_MARKER = 'service dependencies for this plugin are not verified';
-
-const isUnverifiedService = (plan: ChangePlan): boolean =>
-  plan.blockingReferences.some((reference) => reference.detail.includes(UNVERIFIED_SERVICE_MARKER));
-
-const blockerLabel = (plan: ChangePlan): string => {
-  if (isUnverifiedService(plan)) {
-    return '无法验证服务依赖，暂不能卸载。';
-  }
-  return '移除会破坏其它 bundle 或配置解析。';
-};
+const blockerLabel = (): string => '移除会破坏其它 bundle 或配置解析。';
 
 const removalErrorHint = (error: ContractError): string => {
   switch (error.code) {
@@ -78,7 +71,7 @@ export function PluginRemoval({ state, actions }: { state: RendererState; action
       <h2 id="plugin-removal-heading">卸载与合法保留（S3）</h2>
       <p className="muted">
         从活动代际记录中精确选择要移除的插件。预览会列出将移除的直接依赖与启用引用、将保留的依赖与数据，
-        并在会破坏其它 bundle/配置解析或服务依赖无法核验时明确拦截。
+        并在会破坏其它 bundle/配置解析时明确拦截；服务依赖核验缺失只作为风险说明，不阻断卸载。
       </p>
       <p className="muted" role="note">
         卸载只移除本次事务的直接依赖条目与启用引用，不做通配清理；共享/传递依赖按完全 pin 的 lockfile 保留是预期行为。
@@ -172,7 +165,7 @@ export function PluginRemoval({ state, actions }: { state: RendererState; action
 
           {blocked ? (
             <div role="alert">
-              <p>{blockerLabel(plan)}</p>
+              <p>{blockerLabel()}</p>
               <ul>
                 {plan.blockingReferences.map((reference) => (
                   <li key={`${reference.kind}:${reference.detail}`}>

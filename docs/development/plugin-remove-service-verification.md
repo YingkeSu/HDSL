@@ -42,7 +42,7 @@
 
 ## 边界（不得外推）
 
-- **仅对该精确 commit + 表中所列受管 runtime/loader 身份有效**：换 commit、换任一文件或 manifest 摘要不匹配 ⇒ 记录失效；**受管 DSH/cordis/loader 身份（版本或摘要）变更亦使“动态加载边界”结论失效**（本期不做跨版本支持，需按新版本重新核验）。任何失效情形判定回落为 **unknown 阻塞**（ADR 0005 D21）。lookup 从当前受管代的 install manifest/catalog 建立 runtime 身份并与记录逐项比较。
+- **仅对该精确 commit + 表中所列受管 runtime/loader 身份有效**：换 commit、换任一文件或 manifest 摘要不匹配 ⇒ 记录失效；**受管 DSH/cordis/loader 身份（版本或摘要）变更亦使“动态加载边界”结论失效**（本期不做跨版本支持，需按新版本重新核验）。任何失效情形判定回落为 **unknown**，只作为 `riskItems` 信息项、**不再阻塞卸载**（ADR 0005 D21 政策已由 [#112](https://github.com/YingkeSu/HDSL/issues/112) supersede）。lookup 从当前受管代的 install manifest/catalog 建立 runtime 身份并与记录逐项比较。
 - **不是任意插件的安全保证**：“`apply()` 无参数”是本 fixture 的**完整小源码审查**结论，**不得**泛化为“任何 JS 都无法注册服务”。对其它插件，服务提供方仍须逐插件核验（显式声明 + 独立核验记录）。
 - 本记录**未**执行 fixture、**未**证明运行期加载/服务解析行为；运行期生效仍以「活动代际记录 + 受管 DSH 离线解析组合树」与真实重启验收为准。
 - 本记录**不**构成运行时沙箱/隔离承诺（ADR 0005 D21 语义：仅 HDSL 卸载分析的声明/核验范围）。

@@ -176,8 +176,25 @@ export type PluginRemovalOutcome =
   | { readonly ok: true; readonly value: PluginRemovalResolution }
   | { readonly ok: false; readonly code: 'NOT_FOUND' | 'BUILTIN_BUNDLE_PROTECTED' | 'REFERENCED_BY_OTHER' | 'INTERNAL_ERROR'; readonly message: string };
 
-/** Bounds an informational risk string to the frozen contract limit (256). */
-const boundRisk = (value: string): string => (value.length <= 256 ? value : value.slice(0, 256));
+/** Contract cap for one `ChangePlan.riskItems` entry (each item max 256). */
+const RISK_ITEM_MAX_LENGTH = 256;
+
+/**
+ * Bounds a service note while ALWAYS keeping its trailing semantics: truncating a
+ * long consumer detail must never drop `(not a removal blocker)` and make a
+ * purely informational fact read like a blocker.
+ */
+const boundServiceNote = (detail: string, provided: string): string => {
+  const suffix = ' (not a removal blocker)';
+  // The service name is kept at the FRONT and the semantics suffix at the END, so
+  // truncating a long consumer detail loses neither the identifier nor the
+  // "not a blocker" fact.
+  const head = `informational: Cordis service "${provided}" is provided by this plugin and consumed by ${detail}`;
+  if (head.length + suffix.length <= RISK_ITEM_MAX_LENGTH) {
+    return `${head}${suffix}`;
+  }
+  return `${head.slice(0, RISK_ITEM_MAX_LENGTH - suffix.length - 1)}…${suffix}`;
+};
 
 /**
  * Pure resolution of a remove preview. Never touches the filesystem: the caller
@@ -307,9 +324,7 @@ export const resolvePluginRemoval = (input: PluginRemovalInput): PluginRemovalOu
       const consumer = injectedElsewhere.get(provided);
       if (consumer !== undefined) {
         const detail = isSafeDetail(consumer.detail) ? consumer.detail : `unresolvable ${consumer.kind} reference source`;
-        informationalServiceNotes.push(
-          boundRisk(`informational: ${detail} consumes the Cordis service "${provided}" this plugin provides (not a removal blocker)`),
-        );
+        informationalServiceNotes.push(boundServiceNote(detail, provided));
       }
     }
   } else {

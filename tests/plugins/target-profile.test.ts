@@ -119,6 +119,54 @@ describe('resolveTargetProfileLock', () => {
     expect(target.dsh.profile.bundles).not.toContain('plain-dep');
   });
 
+  it('reports an unreadable bundle declaration in bundleRiskItems and never guesses it into bundles', async () => {
+    const { declaration, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
+    // dsh.bundle is present but its patch is not a non-empty string: parsed
+    // UNKNOWN, not "no bundle". The entry must be left untouched and reported.
+    const malformed = JSON.stringify({ name: 'weird-dep', version: '1.0.0', dsh: { bundle: { patch: null } } });
+    const outcome = await resolveTargetProfileLock(
+      { resolveManifest: async () => ({ ok: true, value: { commitSha: COMMIT, manifestText: malformed, lockText: null } }) },
+      executor(calls, join(declaration, 'hdsl-e2e-marker')),
+      { source: { owner: 'octo', name: 'weird-demo' }, commitSha: COMMIT, declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    const target = JSON.parse(outcome.value.targetDeclarationText) as {
+      dependencies: Record<string, string>;
+      dsh: { profile: { bundles: string[] } };
+    };
+    expect(target.dependencies['weird-dep']).toBe(`github:octo/weird-demo#${COMMIT}`);
+    expect(target.dsh.profile.bundles).not.toContain('weird-dep');
+    expect(outcome.value.bundleRiskItems).toHaveLength(1);
+    expect(outcome.value.bundleRiskItems[0]).toContain('not silently reconciled');
+    expect(outcome.value.bundleRiskItems[0]?.length).toBeLessThanOrEqual(256);
+  });
+
+  it('threads an unreadable bundle declaration into the resolving preview riskItems (no silent reconcile)', async () => {
+    const { declaration, staging, nodeExecutable } = build();
+    const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
+    const malformed = JSON.stringify({ name: 'weird-dep', version: '1.0.0', dsh: { bundle: { patch: null } } });
+    const port = createResolvingPreviewPort({
+      gitProvider: { resolveManifest: async () => ({ ok: true, value: { commitSha: COMMIT, manifestText: malformed, lockText: null } }) },
+      executor: executor(calls, join(declaration, 'hdsl-e2e-marker')),
+      executorIdentity: { id: 'pnpm', version: '11.7.0', sha256: '1'.repeat(64), entrySha256: '2'.repeat(64), treeSha256: '3'.repeat(64) },
+    });
+    const outcome = await port.previewSource(
+      { owner: 'octo', name: 'weird-demo' },
+      new AbortController().signal,
+      { declarationDirectory: declaration, stagingDirectory: staging, nodeExecutable },
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) {
+      return;
+    }
+    expect(outcome.value.riskItems.some((item) => item.includes('could not be read'))).toBe(true);
+  });
+
   it('fails closed when the source commit changed during resolution', async () => {
     const { declaration, staging, nodeExecutable } = build();
     const calls: { args: readonly string[]; cwd: string; nodeExecutable: string }[] = [];
