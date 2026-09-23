@@ -154,7 +154,7 @@ export interface DesktopComposition {
   ) => () => void;
   /**
    * True when restart reconciliation left a managed process it could not prove
-   * exited. New create/start mutations are then refused by main until the
+   * exited. New create/start/switch mutations are then refused by main until the
    * residue is resolved; stop/read/export remain available.
    */
   readonly recoveryBlocked: boolean;
@@ -174,6 +174,10 @@ export interface DesktopComposition {
 export const RECOVERY_BLOCKED_METHODS: ReadonlySet<string> = new Set([
   'environments.create',
   'environments.start',
+  // A switch installs a new generation, moves the active pointer and converges
+  // the shared home; an unverifiable managed process (possibly still running)
+  // must not race that, exactly like create/start.
+  'environments.switchCombination',
 ]);
 
 /**

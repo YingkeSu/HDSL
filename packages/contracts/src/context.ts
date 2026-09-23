@@ -76,7 +76,7 @@ export interface RevisionCommand {
 
 /**
  * `environments.switchCombination`: switches an environment's active
- * composition to another audited catalog combination. The port receives the
+ * composition to another supported, evidence-backed catalog combination. The port receives the
  * already-resolved `RuntimeCombination` (the dispatcher resolves the
  * `catalogCombinationId` and rejects unsupported/mismatched ones first).
  */
@@ -187,7 +187,7 @@ export interface ContractPort {
   startEnvironment(command: RevisionCommand): PortOutcome<OperationRef>;
   stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef>;
   /**
-   * Switches an existing, STOPPED environment to another audited catalog
+   * Switches an existing, STOPPED environment to another supported catalog
    * combination: install + verify the new generation, then atomically switch
    * the active-generation pointer. A pre-commit failure keeps the old
    * generation; it never auto-stops or auto-restarts a process.

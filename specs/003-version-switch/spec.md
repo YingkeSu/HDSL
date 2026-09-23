@@ -45,7 +45,7 @@ A1（#113）解决「看上游版本、把**已支持组合**装成**新环境**
    逐字节不动；Node 轴（同 DSH）**不**产生数据兼容提示。
 5. Given 环境 `running`，When 请求切换，Then 受控 `ENVIRONMENT_BUSY`，不切指针、
    不停进程；停止是独立步骤。
-6. Given 未知/未受审组合或非 macOS ARM64 组合，When 切换，Then 受控
+6. Given 未知/未支持组合或非 macOS ARM64 组合，When 切换，Then 受控
    `NOT_FOUND`/`UNSUPPORTED_COMBINATION`，不虚报支持。
 7. Given 环境无「最近成功启动 DSH 版本」记录，When 回退，Then 不产生提示（未知 ≠ 不安全）。
 

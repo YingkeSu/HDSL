@@ -27,7 +27,7 @@ contract dispatcher；离线合成 tarball，仍校验 SHA-256；两个组合共
 | 下载失败（提交前） | `DOWNLOAD_FAILED`、X 指针不变 |
 | 指针切后崩溃 | `recover()` finalize 到 Y、X 保留、journal 清理、operation succeeded |
 | profile 发布后指针切前崩溃 | `recover()` 回滚、指针仍 X、X 保留、operation failed |
-| 孤儿 switch operation（无 journal） | 受控失败、环境**不**置 `error`、指针仍 X |
+| 孤儿 switch operation（无 journal） | 受控失败、环境**不**置 `error`、指针仍 X、`in-progress` 幂等账本结清（重放返回受控失败而非 `ENVIRONMENT_BUSY`） |
 | running 守卫 | `ENVIRONMENT_BUSY`、不切指针、状态仍 running、无新代 |
 | 切换期间的 start/第二 switch | `ENVIRONMENT_BUSY`（未决 journal 互斥） |
 | 未知/不支持组合 | `NOT_FOUND`/`UNSUPPORTED_COMBINATION`，无副作用 |
@@ -62,3 +62,7 @@ contract dispatcher；离线合成 tarball，仍校验 SHA-256；两个组合共
 - 第二个 DSH 版本与 `packages/runtime/src/catalog/**` **未**改动。
 - 跨服务互斥：`switchCombination` 与 apply/restore 通过各自的 journal 命名空间互斥；
   未新增跨进程全局锁（沿用既有 data-root lease 与单事务不变量）。
+- 孤儿 `in-progress` switch 账本（账本写入与 journal 写入之间崩溃）由 `recover()` 在无
+  活跃 switch 事务时结清为受控失败；create 侧同形窗口不在本切片范围（既有行为）。
+- 提交前失败/回滚只删新 stage 代目录；已发布但未被引用的 `hdsl-<gen>` profile 保留在
+  共享 home（沿用 MF1 无 GC 决策），属已知残留。

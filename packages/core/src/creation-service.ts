@@ -660,7 +660,7 @@ tryReadInstallManifest(
   }
 
   /**
-   * Switches an existing, STOPPED environment to another audited catalog
+   * Switches an existing, STOPPED environment to another supported catalog
    * combination (#114 / A2).
    *
    * D1: only a `stopped` environment may switch; `starting`/`running`/
@@ -1182,6 +1182,33 @@ tryReadInstallManifest(
   }
 
   /**
+   * Settles orphaned `in-progress` `environments.switchCombination` ledger
+   * entries (crash between the ledger write and the journal write). A replay
+   * then gets a controlled failure instead of `ENVIRONMENT_BUSY` forever. The
+   * ledger carries no environment id, so this is only safe when no switch
+   * transaction is live (checked by the caller).
+   */
+  #settleOrphanSwitchLedgers(): void {
+    for (const { requestId, record } of this.#idempotency.list()) {
+      if (record.state !== 'in-progress' || record.method !== 'environments.switchCombination') {
+        continue;
+      }
+      this.#idempotency.write(requestId, {
+        state: 'completed',
+        method: record.method,
+        fingerprint: record.fingerprint,
+        outcome: {
+          ok: false,
+          error: contractError(
+            'INTERNAL_ERROR',
+            'the switch request was interrupted before it started; retry with a new requestId',
+          ),
+        },
+      });
+    }
+  }
+
+  /**
    * Records the last generation that reached `running` and its DSH version
    * (D5). Additive: old records without these fields read as "unknown".
    */
@@ -1479,6 +1506,23 @@ tryReadInstallManifest(
     // could delete unrelated `hdsl-*` profiles or a just-published generation
     // when the retain set is momentarily empty. Journal-keyed GC ships with the
     // full transaction wiring (pending, uncommitted transaction + no reference).
+
+    // Narrow orphan-ledger reconciliation for `environments.switchCombination`.
+    // The dispatcher writes the `in-progress` ledger and core writes the journal
+    // in ONE synchronous block, so a crash between them can leave an orphaned
+    // `in-progress` switch request with no journal/operation. The pointer cannot
+    // have moved (the journal precedes the pointer write), so a controlled
+    // failure is the honest terminal result and the same requestId no longer
+    // returns ENVIRONMENT_BUSY forever. Only run when no switch transaction is
+    // live, so a concurrently-started request is never settled early.
+    const liveSwitch =
+      journals.some((journal) => journalKind(journal) === 'switch') ||
+      this.#operations
+        .list()
+        .some((operation) => operation.kind === 'switch' && !isTerminalStatus(operation.status));
+    if (!liveSwitch) {
+      this.#settleOrphanSwitchLedgers();
+    }
 
     return {
       reconciled: details.length,

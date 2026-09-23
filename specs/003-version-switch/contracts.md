@@ -9,7 +9,7 @@
 
 | 方法 | 输入 | 返回 | 约束 |
 | --- | --- | --- | --- |
-| `environments.switchCombination` | `requestId`, `environmentId`, `expectedRevision`, `catalogCombinationId` | `OperationRef`（`kind: 'switch'`） | 环境必须存在、revision 匹配、组合受审且平台匹配；**仅 `stopped` 环境可切换**；提交点后 `operations.cancel` → `CANNOT_CANCEL` |
+| `environments.switchCombination` | `requestId`, `environmentId`, `expectedRevision`, `catalogCombinationId` | `OperationRef`（`kind: 'switch'`） | 环境必须存在、revision 匹配、组合已支持且平台匹配；**仅 `stopped` 环境可切换**；提交点后 `operations.cancel` → `CANNOT_CANCEL` |
 
 `catalogCombinationId` 到 `CompositionLock` 的映射、平台匹配与 `UNSUPPORTED_COMBINATION`
 判定与 `environments.create` 完全一致（dispatcher 纯守卫，无副作用）。
@@ -83,7 +83,7 @@ planned → staged → verified → committed(activeGenerationId 原子写入) �
 | 情形 | code |
 | --- | --- |
 | 未知 `environmentId` / 无活动代 | `NOT_FOUND` |
-| 未知/未受审/平台不匹配组合 | `NOT_FOUND` / `UNSUPPORTED_COMBINATION` |
+| 未知/未支持/平台不匹配组合 | `NOT_FOUND` / `UNSUPPORTED_COMBINATION` |
 | `expectedRevision` 不匹配 | `REVISION_CONFLICT` |
 | 环境非 `stopped`，或已有未决事务/journal | `ENVIRONMENT_BUSY` |
 | 提交点后取消 | `CANNOT_CANCEL` |

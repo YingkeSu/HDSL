@@ -39,10 +39,19 @@ import {
 } from '../install/synthetic.js';
 
 const nodeTarball = syntheticNodeTarball('22.0.0');
+const nodeTarballB = syntheticNodeTarball('24.0.0');
 const dshTarball = syntheticDshTarball('0.1.5-rc.2');
 const combination = syntheticCombination({
   nodeVersion: '22.0.0',
   nodeTarball,
+  dshVersion: '0.1.5-rc.2',
+  dshTarball,
+});
+// Same DSH version, different Node: a real switch target for the recovery gate.
+const combinationB = syntheticCombination({
+  id: 'comp-node24',
+  nodeVersion: '24.0.0',
+  nodeTarball: nodeTarballB,
   dshVersion: '0.1.5-rc.2',
   dshTarball,
 });
@@ -81,6 +90,7 @@ const fakeProcess = (overrides: Partial<ManagedProcessPort> = {}): ManagedProces
 const syntheticRuntime = () => {
   const artifacts = freshRoot('hdsl-comp-artifacts-');
   writeLocalArtifact(artifacts, sha256(nodeTarball), nodeTarball);
+  writeLocalArtifact(artifacts, sha256(nodeTarballB), nodeTarballB);
   writeLocalArtifact(artifacts, sha256(dshTarball), dshTarball);
   return createRuntimePort({
     closureInstall: false,
@@ -111,6 +121,7 @@ const compose = async (
     process?: ManagedProcessPort;
     manager?: ProcessManager;
     opener?: VerifiedWebUiOpener;
+    catalog?: readonly RuntimeCombination[];
   } = {},
 ) => {
   const contexts: VerifiedWebUiContext[] = [];
@@ -123,7 +134,7 @@ const compose = async (
   const composition = await createDesktopComposition({
     dataRoot,
     appInfo,
-    catalog: [combination as RuntimeCombination],
+    catalog: options.catalog ?? [combination as RuntimeCombination],
     runtime: syntheticRuntime(),
     allowArtifactsOnly: true,
     process: options.process ?? fakeProcess(),
@@ -327,13 +338,76 @@ describe('createDesktopComposition', () => {
 });
 
 describe('restart recovery gate', () => {
-  it('blocks new create/start but leaves stop, reads and export available', () => {
+  it('blocks new create/start/switch but leaves stop, reads and export available', () => {
     expect(isBlockedByRecovery('environments.create', true)).toBe(true);
     expect(isBlockedByRecovery('environments.start', true)).toBe(true);
+    expect(isBlockedByRecovery('environments.switchCombination', true)).toBe(true);
     expect(isBlockedByRecovery('environments.stop', true)).toBe(false);
     expect(isBlockedByRecovery('operations.get', true)).toBe(false);
     expect(isBlockedByRecovery('diagnostics.export', true)).toBe(false);
     expect(isBlockedByRecovery('environments.start', false)).toBe(false);
+  });
+
+  it('refuses switchCombination after an unverifiable recovery and never moves the pointer', async () => {
+    const dataRoot = freshRoot('hdsl-comp-switch-gate-');
+    const first = await compose(dataRoot, {
+      catalog: [combination as RuntimeCombination, combinationB as RuntimeCombination],
+    });
+    await createEnvironment(first.composition, 'gate-env');
+    const listed = first.composition.port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined) {
+      return;
+    }
+    const generationX = environment.activeGenerationId as string;
+    const revision = environment.revision;
+    await first.composition.close();
+
+    const reopened = await compose(dataRoot, {
+      catalog: [combination as RuntimeCombination, combinationB as RuntimeCombination],
+      process: fakeProcess({
+        recover: () =>
+          Promise.resolve({ entries: [{ environmentId: environment.id, resolution: 'unverifiable' }] }),
+      }),
+    });
+    expect(reopened.composition.recoveryBlocked).toBe(true);
+
+    // The unverifiable recovery still leaves the environment `stopped`, which
+    // the stopped-only switch guard alone would accept. The recovery gate is
+    // what must refuse the switch.
+    const recovered = reopened.composition.port.findEnvironment(environment.id);
+    expect(recovered.ok && recovered.value.state).toBe('stopped');
+    expect(
+      isBlockedByRecovery('environments.switchCombination', reopened.composition.recoveryBlocked),
+    ).toBe(true);
+
+    // Mirror app.ts beforeDispatch: a blocked method returns ENVIRONMENT_BUSY
+    // without ever reaching the port.
+    let reachedPort = false;
+    let response;
+    if (isBlockedByRecovery('environments.switchCombination', reopened.composition.recoveryBlocked)) {
+      response = portFail('ENVIRONMENT_BUSY', 'restart recovery is unresolved');
+    } else {
+      reachedPort = true;
+      response = reopened.composition.port.switchCombination({
+        requestId: 'req-switch-gate',
+        environmentId: environment.id,
+        expectedRevision: revision,
+        combination: combinationB as RuntimeCombination,
+      });
+    }
+    expect(response.ok).toBe(false);
+    expect(reachedPort).toBe(false);
+
+    const after = reopened.composition.port.findEnvironment(environment.id);
+    expect(after.ok && after.value.activeGenerationId).toBe(generationX);
+    expect(after.ok && after.value.revision).toBe(revision);
+    await reopened.composition.close();
   });
 });
 

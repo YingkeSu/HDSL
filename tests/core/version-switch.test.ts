@@ -8,7 +8,7 @@
  * is recorded separately).
  *
  * The two combinations deliberately share ONE DSH version and differ only in
- * Node, matching the audited C22/C24 positive control. No cross-version home
+ * Node, matching the evidence-backed C22/C24 positive control. No cross-version home
  * compatibility is claimed or required here.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -25,6 +25,7 @@ import {
 } from '@hdsl/contracts';
 import {
   EnvironmentStore,
+  IdempotencyStore,
   createManagedInstall,
   generationPaths,
   managedProfileName,
@@ -616,11 +617,20 @@ describe('switchCombination: crash windows and recovery', () => {
         updatedAt: new Date().toISOString(),
       }),
     );
+    // Crash window: the dispatcher wrote `in-progress` before the journal did.
+    new IdempotencyStore(layout).write('req-orphan-switch', {
+      state: 'in-progress',
+      method: 'environments.switchCombination',
+      fingerprint: 'fp-orphan-switch',
+    });
 
     const report = await harness.managed.recover();
     expect(report.details.some((detail) => detail.operationId === operationId)).toBe(true);
     const settled = harness.managed.service.findOperation(operationId);
     expect(settled.ok ? settled.value.status : undefined).toBe('failed');
+    // The orphaned requestId is settled so a replay fails controllably instead
+    // of returning ENVIRONMENT_BUSY forever.
+    expect(new IdempotencyStore(layout).read('req-orphan-switch')?.state).toBe('completed');
     const after = environmentOf(harness);
     expect(after.state).toBe('stopped');
     expect(after.activeGenerationId).toBe(generationX);
