@@ -27,6 +27,7 @@ import {
   type PortOutcome,
   type ScriptAssessment,
 } from '@hdsl/contracts';
+import { pluginTransportSpec } from './source-spec.js';
 
 /** Structural mirror of core's `PluginPreviewResolution` (no cross-package import). */
 export interface PluginPreviewResolution {
@@ -145,8 +146,23 @@ export const buildPreviewResolution = (input: {
     buildAuthorization: null,
     executor,
   };
+  // #141: the pnpm transport spec (the pinned commit's official codeload
+  // tarball) is part of the plan inputs, so a plan stored under the legacy
+  // `github:` spec can never match a post-change preview and is rejected as
+  // PLAN_STALE at apply before any side effect.
+  const transportSpec = pluginTransportSpec(source, resolved.commitSha);
   const planInputsDigest = createHash('sha256')
-    .update(JSON.stringify({ commitSha: resolved.commitSha, manifestSha256, closureLockSha256, scripts, executor }), 'utf8')
+    .update(
+      JSON.stringify({
+        commitSha: resolved.commitSha,
+        manifestSha256,
+        closureLockSha256,
+        scripts,
+        executor,
+        transportSpec,
+      }),
+      'utf8',
+    )
     .digest('hex');
 
   return portOk({
