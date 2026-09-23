@@ -141,11 +141,9 @@ describe('RendererController plugin removal', () => {
     await controller.dispose();
   });
 
-  it('keeps a blocked remove plan visible (never auto-applied) and surfaces the unknown-service copy', async () => {
+  it('keeps a blocked remove plan visible (real static reference) and never auto-applies', async () => {
     const blocked = removePlan({
-      blockingReferences: [
-        { pluginId: PLUGIN_ID, kind: 'config', detail: 'service dependencies for this plugin are not verified (no HDSL service verification record)' },
-      ],
+      blockingReferences: [{ pluginId: PLUGIN_ID, kind: 'userPatch', detail: 'home/cordis.patch.yml' }],
     });
     const { client } = createTestRendererClient({
       ...FIXTURE_SEED,
@@ -185,22 +183,17 @@ describe('RendererController plugin removal', () => {
     await controller.dispose();
   });
 
-  it('renders a pre-S3 installed plugin (source: null) and shows the unknown-service block copy', async () => {
+  it('renders a pre-S3 installed plugin (source: null) and allows removal (service axis is informational)', async () => {
     const preS3View: InstalledPluginsView = {
       ...installedView(1),
       plugins: [
         { id: PLUGIN_ID, version: '0.0.1', sha256: 'b'.repeat(64), isBuiltin: false, enabledBundle: true, source: null },
       ],
     };
-    const blocked = removePlan({
-      blockingReferences: [
-        { pluginId: PLUGIN_ID, kind: 'config', detail: 'service dependencies for this plugin are not verified (no HDSL service verification record)' },
-      ],
-    });
     const { client } = createTestRendererClient({
       ...FIXTURE_SEED,
       installedPlugins: { [ENVIRONMENT_ID]: preS3View },
-      removal: { plan: blocked },
+      removal: { plan: removePlan() },
     });
     const controller = new RendererController({ client });
     await controller.load();
@@ -211,7 +204,7 @@ describe('RendererController plugin removal', () => {
     controller.selectInstalledPlugin(PLUGIN_ID);
     await controller.previewPluginRemoval();
     await flush();
-    expect(controller.getState().changePlan?.blockingReferences).toHaveLength(1);
+    expect(controller.getState().changePlan?.blockingReferences).toEqual([]);
     const html = renderPluginRemoval({
       state: state({
         phase: 'ready',
@@ -221,8 +214,7 @@ describe('RendererController plugin removal', () => {
       }),
       actions,
     });
-    expect(html).toContain('无法验证服务依赖，暂不能卸载');
-    expect(html).not.toContain('确认卸载');
+    expect(html).toContain('确认卸载');
     await controller.dispose();
   });
 });
@@ -244,21 +236,20 @@ describe('renderer removal markup (DOM-free real React)', () => {
     expect(html).toContain('shared/transitive dependencies remain in the profile lock');
   });
 
-  it('shows the unverified-service message and NO confirm button for a blocked plan', () => {
+  it('shows the static-reference blocker message and NO confirm button for a blocked plan', () => {
     const html = renderPluginRemoval({
       state: state({
         phase: 'ready',
         changePlan: removePlan({
-          blockingReferences: [
-            { pluginId: PLUGIN_ID, kind: 'config', detail: 'service dependencies for this plugin are not verified (no HDSL service verification record)' },
-          ],
+          blockingReferences: [{ pluginId: PLUGIN_ID, kind: 'userPatch', detail: 'home/cordis.patch.yml' }],
         }),
       }),
       actions,
     });
-    expect(html).toContain('无法验证服务依赖，暂不能卸载');
+    expect(html).toContain('移除会破坏其它 bundle 或配置解析');
     expect(html).not.toContain('确认卸载');
     expect(html).not.toContain('插件安全');
+    expect(html).not.toContain('无法验证服务依赖');
   });
 
   it('shows the builtin protection copy and no confirm button', () => {

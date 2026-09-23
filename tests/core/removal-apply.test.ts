@@ -13,6 +13,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
+  CHANGE_PLAN_RESTART_REQUIRED,
   ChangeApplyService,
   ChangePreviewService,
   EnvironmentStore,
@@ -404,6 +405,8 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(plan.removals.some((entry) => entry.includes('enabled bundle reference'))).toBe(true);
     expect(plan.retention).toContain('direct dependency shared-dep');
     expect(plan.retention).toContain('user patch layer (home cordis.patch.yml)');
+    // B4: dependency/bundle changes need a restart; the risk is in the plan output.
+    expect(plan.riskItems).toContain(CHANGE_PLAN_RESTART_REQUIRED);
 
     const applied = await applyPlan(fixture, plan);
     expect(applied.status).toBe('succeeded');
@@ -443,16 +446,31 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(newLock.plugins).toEqual([]);
   });
 
-  it('blocks a removal whose service dependencies are not verified, with no side effect', async () => {
+  it('does not block an unverified service axis (superseded #112) and commits the pruned generation', async () => {
     const fixture = build({ pluginId: 'demo-plugin' });
     const snapshot = await previewRemoval(fixture, 'demo-plugin');
     expect(snapshot.status).toBe('succeeded');
     const plan = snapshot.output as ChangePlan;
-    expect(plan.blockingReferences.length).toBeGreaterThanOrEqual(1);
-    expect(plan.blockingReferences.some((entry) => entry.detail.includes('service dependencies for this plugin are not verified'))).toBe(true);
+    // The old ADR 0005 D21 gate blocked here; #112 superseded it, so the unknown
+    // service axis is informational and the plan is applyable.
+    expect(plan.blockingReferences).toEqual([]);
+    expect(plan.riskItems.some((entry) => entry.includes('not verified'))).toBe(true);
 
-    // A programmatic caller that bypasses the UI must get the REAL reason
-    // (`REFERENCED_BY_OTHER`), never the misleading cache-miss `PLAN_STALE`.
+    const applied = await applyPlan(fixture, plan);
+    expect(applied.status).toBe('succeeded');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
+  });
+
+  it('rejects a statically referenced removal at apply with REFERENCED_BY_OTHER and no side effect', async () => {
+    // B2: a plan whose `blockingReferences` is non-empty (another layer statically
+    // references the target) must NEVER be applied by a programmatic caller. This
+    // pins the core apply guard, not just the removal port's identical guard.
+    const fixture = build({ userPatch: `- insert:\n    - id: ref-row\n      name: ${FIXTURE}\n` });
+    const snapshot = await previewRemoval(fixture, FIXTURE);
+    expect(snapshot.status).toBe('succeeded');
+    const plan = snapshot.output as ChangePlan;
+    expect(plan.blockingReferences.some((entry) => entry.kind === 'userPatch')).toBe(true);
+
     let applyCalls = 0;
     const countingPort: PluginRemovalPort = {
       ...fixture.removalPort,
@@ -463,7 +481,7 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     };
     const service = fixture.apply(countingPort);
     const rejected = service.applyChange({
-      requestId: 'req-apply-blocked',
+      requestId: 'req-apply-statically-blocked',
       environmentId: ENVIRONMENT_ID,
       expectedRevision: plan.baseRevision,
       planId: plan.planId,
@@ -471,7 +489,7 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     });
     expect(rejected.ok).toBe(false);
     if (!rejected.ok) expect(rejected.code).toBe('REFERENCED_BY_OTHER');
-    // No executor run, no plan consumption, no environment change.
+    // No executor run, no plan consumption, no pointer/revision change.
     expect(applyCalls).toBe(0);
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
     expect(fixture.environments.read(ENVIRONMENT_ID)?.revision).toBe(3);
@@ -509,10 +527,11 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
   });
 
-  it('treats a pre-S3 generation without a recorded source binding as unknown (blocked, not INTERNAL_ERROR)', async () => {
+  it('treats a pre-S3 generation without a recorded source binding as applicable (unknown service axis is informational)', async () => {
     // Existing-generation compatibility (ADR 0005 D21.7): a composition without
-    // `pluginSources` has an unknown service axis and MUST be blocked with an
-    // explainable plan, never a generic internal error.
+    // `pluginSources` has an unknown service axis. Since #112 superseded the
+    // blocking policy it must NOT become a generic internal error, and it is no
+    // longer blocked: the removal proceeds on the factual declaration evidence.
     const fixture = build();
     const lock = JSON.parse(readFileSync(fixture.generation.lockPath, 'utf8')) as Record<string, unknown>;
     delete lock['pluginSources'];
@@ -520,8 +539,10 @@ describe('#77 remove preview -> apply transaction (real runtime removal port)', 
     const snapshot = await previewRemoval(fixture, FIXTURE);
     expect(snapshot.status).toBe('succeeded');
     const plan = snapshot.output as ChangePlan;
-    expect(plan.blockingReferences.some((entry) => entry.detail.includes('service dependencies for this plugin are not verified'))).toBe(true);
-    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).toBe(OLD_GENERATION);
+    expect(plan.blockingReferences).toEqual([]);
+    const applied = await applyPlan(fixture, plan);
+    expect(applied.status).toBe('succeeded');
+    expect(fixture.environments.read(ENVIRONMENT_ID)?.activeGenerationId).not.toBe(OLD_GENERATION);
   });
 
   it('re-verifies references at apply time: a user patch that starts referencing the plugin blocks it', async () => {

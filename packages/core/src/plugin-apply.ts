@@ -258,9 +258,11 @@ export class ChangeApplyService {
     // A blocked removal still produces a plan for UI explanation but is NEVER
     // applyable. Reject it here (before any operation/effect) with the accurate
     // `REFERENCED_BY_OTHER`, never the misleading cache-miss `PLAN_STALE` (a
-    // programmatic caller that bypasses the UI must get the real reason).
+    // programmatic caller that bypasses the UI must get the real reason). A
+    // blocked removal is a stale/reference/configuration conflict only: the
+    // superseded service-verification policy (#112) no longer blocks a removal.
     if (plan.action.kind === 'remove' && plan.blockingReferences.length > 0) {
-      return portFail('REFERENCED_BY_OTHER', 'the remove plan is blocked by a reference or an unverified service dependency');
+      return portFail('REFERENCED_BY_OTHER', 'the remove plan is blocked by a reference from another patch or configuration layer');
     }
     // S4 explicit build authorization (ADR 0005 D8/D14). The default is deny:
     // a source that declares install-time scripts is refused unless the caller

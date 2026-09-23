@@ -114,6 +114,16 @@ export interface ChangePreviewServiceOptions {
 
 export const CHANGE_PLAN_DEFAULT_TTL_MS = 15 * 60_000;
 
+/**
+ * Dependency and `dsh.profile.bundles` changes have no watcher in DSH (#111 G6):
+ * the runtime snapshots the bundle layer at boot, so a committed generation only
+ * takes effect after the environment is restarted. It is recorded in the plan's
+ * terminal output so the UI can surface it from the operation, not from static
+ * copy.
+ */
+export const CHANGE_PLAN_RESTART_REQUIRED =
+  'dependency and bundle changes take effect only after the environment is restarted (DSH has no watcher for this layer)';
+
 export class ChangePreviewService {
   readonly #layout: AppDataLayout;
   readonly #plans: ChangePlanStore;
@@ -292,7 +302,7 @@ export class ChangePreviewService {
         scriptAssessment: resolution.scriptAssessment,
         scripts: [...resolution.scripts],
         requiresBuildAuthorization: resolution.requiresBuildAuthorization,
-        riskItems: [...resolution.riskItems],
+        riskItems: [CHANGE_PLAN_RESTART_REQUIRED, ...resolution.riskItems],
         removals: [],
         retention: [],
         blockingReferences: [],
@@ -409,7 +419,7 @@ export class ChangePreviewService {
       scriptAssessment: 'none-detected',
       scripts: [],
       requiresBuildAuthorization: false,
-      riskItems: [...resolution.riskItems],
+      riskItems: [CHANGE_PLAN_RESTART_REQUIRED, ...resolution.riskItems],
       removals: [...resolution.removals],
       retention: [...resolution.retention],
       blockingReferences: [...resolution.blockingReferences],

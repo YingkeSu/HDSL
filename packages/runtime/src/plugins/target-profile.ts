@@ -18,6 +18,7 @@ import { createHash } from 'node:crypto';
 import { isPlainRecord, portFail, portOk, type PluginSourceSelector, type PortOutcome } from '@hdsl/contracts';
 import type { GitProvider } from './preview-resolution.js';
 import type { PluginExecutorPort } from './executor.js';
+import { declaresBundle, reconcileProfileBundles, unresolvedBundleRisk } from './profile-bundles.js';
 
 export interface TargetProfileInput {
   readonly source: PluginSourceSelector;
@@ -45,6 +46,12 @@ export interface TargetProfileResolution {
   readonly targetWorkspaceText: string | null;
   /** Binding digest over package.json + workspace config (not the lock). */
   readonly targetDeclarationSha256: string;
+  /**
+   * Risk statements for bundle declarations that could not be read. The caller
+   * MUST surface these in the plan `riskItems`; an unreadable declaration leaves
+   * the bundle entry untouched and must not read as "reconciled".
+   */
+  readonly bundleRiskItems: readonly string[];
 }
 
 const sha256 = (value: string): string => createHash('sha256').update(value, 'utf8').digest('hex');
@@ -94,14 +101,18 @@ export const resolveTargetProfileLock = async (
   // The plugin's own package name comes from the source manifest at the pinned
   // commit; it is the dependency key AND the profile bundle entry.
   let pluginName: string;
+  let sourceManifest: Record<string, unknown>;
   try {
-    const sourceManifest: unknown = JSON.parse(resolved.value.manifestText);
-    const record = isPlainRecord(sourceManifest) ? sourceManifest : undefined;
-    const name = record?.['name'];
+    const parsed: unknown = JSON.parse(resolved.value.manifestText);
+    if (!isPlainRecord(parsed)) {
+      return portFail('SOURCE_MANIFEST_INVALID', 'the source manifest is not a package manifest');
+    }
+    const name = parsed['name'];
     if (typeof name !== 'string' || name === '') {
       return portFail('SOURCE_MANIFEST_INVALID', 'the source manifest has no package name');
     }
     pluginName = name;
+    sourceManifest = parsed;
   } catch {
     return portFail('SOURCE_MANIFEST_INVALID', 'the source manifest is not valid JSON');
   }
@@ -113,10 +124,18 @@ export const resolveTargetProfileLock = async (
   dependencies[pluginName] = gitSpec;
   const dsh = isPlainRecord(declaration['dsh']) ? { ...declaration['dsh'] } : {};
   const profile = isPlainRecord(dsh['profile']) ? { ...dsh['profile'] } : {};
-  const bundles = Array.isArray(profile['bundles']) ? [...profile['bundles']] : [];
-  if (!bundles.includes(pluginName)) {
-    bundles.push(pluginName);
-  }
+  const currentBundles = Array.isArray(profile['bundles'])
+    ? profile['bundles'].filter((entry): entry is string => typeof entry === 'string')
+    : [];
+  // Reconciliation BASELINE (#115): the source enters the bundle layer only when
+  // its own manifest declares `dsh.bundle.patch`; a source that declares none is
+  // added as a plain dependency and never guessed into the bundle layer.
+  const reconciled = reconcileProfileBundles({
+    currentBundles,
+    dependencies: [{ name: pluginName, declaresBundle: declaresBundle(sourceManifest) }],
+  });
+  const bundles = reconciled.bundles;
+  const bundleRiskItems = reconciled.unresolved.map(unresolvedBundleRisk);
   const targetDeclarationText = `${JSON.stringify(
     { ...declaration, dependencies, dsh: { ...dsh, profile: { ...profile, bundles } } },
     null,
@@ -183,6 +202,7 @@ export const resolveTargetProfileLock = async (
       targetDeclarationText,
       targetWorkspaceText: workspace,
       targetDeclarationSha256,
+      bundleRiskItems,
     });
   } catch {
     return portFail('INTERNAL_ERROR', 'the target profile could not be resolved in isolation');

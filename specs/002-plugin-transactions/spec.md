@@ -1,6 +1,6 @@
 # 002 插件事务与插件发现（规格）
 
-状态：**进行中（S1 已实现；S2 安装闭环已合入 #87；S3 已实现，真实 Node 链已过；S4 本片实现，runtime 执行复核由独立子任务整合）**。
+状态：**进行中（S1 已实现；S2 安装闭环已合入 #87；S3 已实现，真实 Node 链已过；S4 本片实现，runtime 执行复核由独立子任务整合；B1 包依赖/bundles 见 [b1-profile-packages.md](b1-profile-packages.md)）**。
 契约差异清单的权威出处是 [ADR 0005](../../docs/adr/0005-plugin-contract-evolution.md) §4；本文件只固定 002 的行为边界与实现进度，不复制会漂移的清单。
 
 ## 背景与范围
@@ -13,6 +13,7 @@
 | S2（[#76](https://github.com/YingkeSu/HDSL/issues/76)） | 来源预览、变更计划、安装/卸载事务 | 安装闭环已实现（#87）；卸载见 S3 |
 | S3（[#77](https://github.com/YingkeSu/HDSL/issues/77)） | 卸载保护与生效观测 | 本片实现（真实 Node 链验证见 [记录](../../docs/development/plugin-remove-validation.md)） |
 | S4（[#78](https://github.com/YingkeSu/HDSL/issues/78)） | 构建脚本授权 | 本片实现（契约/core/UI；runtime 执行复核与真实受控链由独立 runtime 子任务整合） |
+| B1（[#115](https://github.com/YingkeSu/HDSL/issues/115)） | profile 包依赖与 `dsh.profile.bundles` reconcile + restart 语义 | 本片实现（见 [b1-profile-packages.md](b1-profile-packages.md)） |
 
 **本规格不声明 S2–S4 已实现**，也不把 ADR 的 `preview`/`apply`/`restore` 方法或 kind 加入可调用白名单。
 未实现的入口在界面与文档中明确标注为 S2，而不是返回伪造的成功。
@@ -64,7 +65,7 @@
 
 - rc.2 `cordis.patch.yml` 结构（真实受管安装样本 + dsh-base 注释）：**根为序列**，条目 `- insert: [ {id, name, disabled?, config?} ]` 与 `- id: X` 行覆盖；`name` 是**包引用**，`id` 是 profile 内的行身份；`inject` 是 **Cordis 服务名**（`webStartup`/`loader`/`acpAppStartup`/…），不是包引用。
 - **可静态判定并拦截**（`REFERENCED_BY_OTHER`，`blockingReferences` 带来源；detail 为安全标识，不含本地绝对路径）：其它源 insert 行 `name` == 被移除包；其它源以 `- id: X` 行覆盖命中被移除插件 insert 的 `rowIds`；其它源 insert 了与之一致的行 `id`（`last-write-wins` 语义下会改变该层解析）。`insert` 值不是行序列、行不是映射、缺标量 `id`、`name` 为 block scalar 或非字符串、别名/merge key/显式 tag、多文档、根既非序列也非映射、超尺寸/节点/深度 → **unknown ⇒ 阻塞**（宁过报不漏报、无解析能力不降级为"无引用"）。
-- **服务级耦合（判定口径：ADR 0005 D21）**：固定 rc.2 **无声明性 service provider/consumer 映射**（提供方在代码里）。采用 HDSL 命名空间受限声明 + HDSL 核验记录：`knownProviders(被移除插件) ∩ 保留 patch consumers` → `REFERENCED_BY_OTHER`；**无映射/未核验/与 repo+commit+摘要不匹配 → 明确 unknown 阻塞**（不默认可卸载）；无关服务不阻塞；UI 呈现“无法验证服务依赖，暂不能卸载”，不得呈现为“插件安全/无影响”。自报空声明不等于“无服务”；源码升级使记录失效。
+- **服务级耦合（判定口径：ADR 0005 D21；政策已 superseded，见 B1）**：固定 rc.2 **无声明性 service provider/consumer 映射**（提供方在代码里）。原 HDSL 命名空间受限声明 + 核验记录的三态门禁（无映射/未核验 ⇒ 阻塞）由 [#112](https://github.com/YingkeSu/HDSL/issues/112) supersede：未核验/未命中消费方**不再阻塞卸载**，只作为 `riskItems` 信息项（`unknown ≠ 危险`）；核验**事实基线**（记录格式、`lookupServiceVerification`、真实 in-box 保护）保留。UI 不得把信息项呈现为“插件安全/无影响”。
 - **计划绑定（remove）**：remove 计划保持 `sourceLock: null`；`planInputsDigest` 为内部组合摘要，绑定 pruned declaration 摘要 + 目标精确 recorded commit/manifest + 受管 runtime 身份；composition/pruned lock 由 apply 时重解析逐字比对；user patch/引用输入在 apply 时重扫。任何漂移（含 commit/manifest/runtime 变但 pruned declaration+lock 不变）⇒ `PLAN_STALE`；阻塞计划 apply ⇒ `REFERENCED_BY_OTHER`（不降级为 cache-miss 的 `PLAN_STALE`）。不新增公开契约字段。
 - **保留项**：共享/传递依赖按**完全 pin 的 lockfile** 保留（不要求同包在 lock/安装目录全部消失，预览 `retention` 说明）；用户 patch 层（`home/cordis.patch.yml`，**原字节不被写回**）、环境数据（`home/`/`data/`）、审计日志为保留项。
 - **内置保护**：`isBuiltin` 由**当前受管 DSH 安装**解析出的 in-box bundle 集合判定（F12a）；缺失或不可信路径 → 拒绝（不是空集合），同名 profile 依赖不改变保护；负控用真实 in-box 名。
@@ -79,7 +80,7 @@
 - **执行期复核**：core 守卫（无副作用）之后，runtime 必须在任何写/执行前重解析并逐项复核授权；只在精确授权下写精确 `allowBuilds` 并放开脚本，否则恒为默认拒执行。观测到集合外脚本 ⇒ `UNAUTHORIZED_SCRIPT_EXECUTION`（提交前失败）。
 - **提交边界**：复用 S2 事务守卫/cache/journal/ledger/recover。提交前失败或取消 ⇒ 旧代不变、stage 清理、计划不消费；提交后 ⇒ pointer 权威前滚、`CANNOT_CANCEL`、可 `generations.restore`。**失败不提交 ≠ 副作用可回滚**：已执行的安装期脚本不在代数回滚范围内。
 - **UI/日志**：展示精确 commit + 已枚举脚本清单（含 `root`/`dependency` 来源；依据计划绑定闭包，未能完整核对时为 `unknown`，不提供授权入口）与“安装期在你的机器上执行该包代码，不受 DSH 或 HDSL 沙箱保护”；授权需显式勾选确认，未确认不发送授权。
-- **与 S3 服务核验正交**：构建授权只影响“是否允许执行安装期脚本”这一轴，**不**构成对 `hdsl.services.provides` 的核验，也不得把 S3 的 `unknown` 服务轴变为 `known`/confirmed。通过构建授权安装的新来源，其卸载仍按 S3 三态（无核验记录 ⇒ unknown 阻塞，UI 仍呈现“无法验证服务依赖，暂不能卸载”）。
+- **与 S3 服务核验正交**：构建授权只影响“是否允许执行安装期脚本”这一轴，**不**构成对 `hdsl.services.provides` 的核验，也不得把 S3 的 `unknown` 服务轴变为 `known`/confirmed。通过构建授权安装的新来源，其卸载**不再**因服务核验缺失而阻塞：核验状态只作为 `riskItems` 信息项（[#112](https://github.com/YingkeSu/HDSL/issues/112) supersede，见 [b1-profile-packages.md](b1-profile-packages.md)）；仍阻塞的只有真实 in-box 保护、其它层静态引用与不可解析 patch 构造。
 - **限制（受控、不绕过）**：受管 pnpm 11.7.0 的 `blockExoticSubdeps` 默认保留，git 插件含 git 子依赖的闭包受控不支持（`ERR_PNPM_EXOTIC_SUBDEP`），预览/失败文案须写清；预览闭包枚举以 pinned lock 可达身份为权威（含 `.pnpm` 虚拟存储），任一可达包不可核对 ⇒ `unknown`；`BuildScriptEntry` 不含 commit，同版本不同 commit 的依赖只保降级表述、由完整性+严格计数/歧义拒结兜住；`github:` shorthand 的 `allowBuilds` 键已在生产受控 probe 实测逐字节相等。详见[验证边界](../../docs/development/plugin-build-authorization-validation.md)。
 - **证据分层与未跑项**见 [plugin-build-authorization-validation.md](../../docs/development/plugin-build-authorization-validation.md) 与[发布/实测记录](../../docs/development/plugin-build-authorization-github-fixture-publication.md)：默认 CI（契约/core/renderer + runtime 受控 executor seam 假执行器）已实现；opt-in 真实受控链（git+file://、`.pnpm` 传递布局、生产 GitHub exact key 14/14）与真实 production desktop 授权链（预览/拒绝/授权/漂移）已 PASS；**含 start 的完整运行链与漂移旧授权的 UI 跨 preview 未覆盖**，不得据此声称全部端到端验收。`UNAUTHORIZED_SCRIPT_EXECUTION` 尚无可靠执行期观测信号，当前为构造性保证（默认拒执行 + 仅写精确 `allowBuilds`）。
 

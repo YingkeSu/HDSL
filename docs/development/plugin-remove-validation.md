@@ -73,7 +73,7 @@ RESULT: PASS — 17/17 checks
 
 ### 分栏 4：负控（单列）
 
-- **unknown 服务核验一律阻塞**：在自有临时代上把 `pluginSources[fixture].commitSha` 受控改为不匹配值（不改 fixture、不改用户数据），同一 remove 预览的 `blockingReferences` 出现「service dependencies for this plugin are not verified」→ 阻塞且不可 apply；随后恢复原字节。
+- **（历史负控；政策已由 #112 supersede）服务轴 unknown 不再阻塞**：原负控把 `pluginSources[fixture].commitSha` 改为不匹配值，期望 `blockingReferences` 出现「service dependencies for this plugin are not verified」→ 阻塞且不可 apply。该期望**已作废**：同一输入现在**不阻塞**，只把未核验事实写入 `riskItems`（`unknown ≠ 危险`）；恢复原字节后行为一致。当前仍阻塞的负控见下一条（真实 in-box 保护）与《可满足验收》中的其它层静态引用用例。
 - **内置保护负控使用当前安装的真实 in-box 名**：`@deepseek-ai/dsh-base`（来自当前受管 DSH 安装解析的 in-box 集合，且是当前 profile 的启用 bundle，但**不是** profile-lock 依赖）。预览以 `BUILTIN_BUNDLE_PROTECTED` 失败，不产生 plan、无副作用、不运行执行器。
 
 ## 能证明（精确边界）
@@ -81,13 +81,13 @@ RESULT: PASS — 17/17 checks
 - 生产 core 事务（preview/apply）与真实 runtime 移除端口在同一受控 fixture 上闭环：真实来源解析、真实受管 pnpm、真实 profile 发布/指针切换/journal/代际记录。
 - 移除后「活动代际记录」与「受管 DSH 离线解析组合树」都不再包含该包；卸载代可启动且不再加载该 bundle（外部 marker 观察）。
 - 共享/传递依赖保留为预期行为；用户 patch 原字节不被写回；环境数据保留。
-- unknown 服务核验阻塞与内置保护（真实 in-box 名）均有确定性断言。
+- unknown 服务轴为 `riskItems` 信息项（不阻塞）与内置保护（真实 in-box 名）均有确定性断言。
 
 ## 不能证明（不得外推）
 
 - **不是桌面/Electron 验收**：未启动 HDSL 桌面 UI、未走 preload/IPC 白名单、未验证渲染层。
 - **不是 E9 等价性证明**：`--dump-config` 与运行期实际加载集合的等价性仍开放（ADR 0005 E9）；本记录只把「活动代记录 + 离线组合树」作为生效判据，运行期加载由单一 marker 侧面观察（marker 出现=该 bundle 加载；marker 不出现不排除「进程存活但实际已加载」，见 home 派生实证的负控强度说明）。
-- **不是任意第三方插件的可卸载性**：服务级耦合仅在 HDSL 受限声明 + 核验记录范围内可判定；绝无核验记录的插件一律 unknown 阻塞。
+- **不是任意第三方插件的可卸载性**：服务级耦合仍不可静态判定；但服务轴 unknown **不再阻塞**卸载（#112 supersede），它只作为 `riskItems` 风险说明——“无静态引用 ≠ 无影响”，不得据此声称卸载无影响。
 - 不覆盖 Windows/Linux；不覆盖真实桌面崩溃窗口的全相位 `SIGKILL`（见 `tests/core/a2-window-kill.test.ts`、`apply-window-kill.test.ts`）。
 
 ## AC9：卸载路径的失败分类（有界、可证伪）
@@ -115,6 +115,6 @@ RESULT: PASS — 17/17 checks
 2. **不在 profile-lock 中的内置 bundle 被报为通用内部错误**：真实 in-box bundle 是启用 bundle 而非 profile-lock 依赖，旧的移除端口先从 lock 闭包推导目标身份并 fail-closed，导致 `INTERNAL_ERROR` 而非 `BUILTIN_BUNDLE_PROTECTED`。修复：纯解析判定为内置后立即返回受保护结果、不运行执行器、无副作用。回归 `tests/plugins/removal-port.test.ts`、`tests/core/removal-apply.test.ts`。
 3. **阻塞的 remove 计划在 apply 时被误报 `PLAN_STALE`**：预览为阻塞 removal 仍产出计划但故意不写 target-profile cache，旧的 apply 先读 cache 于是把“阻塞”降级为 cache 缺失。修复：`evaluateGuards` 在任何效果前对 `blockingReferences.length > 0` 的 remove 计划返回 `REFERENCED_BY_OTHER`（绕过 UI 的程序化调用者拿到真实原因）。回归 `tests/core/removal-apply.test.ts`（含“不运行执行器、不消费计划、不改环境”负控）。
 4. **移除计划的绑定不足**：remove 计划 `sourceLock: null`，仅绑定 pruned declaration 摘要时，目标 repo/commit/manifest 或核验适用 runtime 漂移但 pruned declaration/lock 未变的情况无法被检出。修复（不增公开字段）：`planInputsDigest` 改为对「pruned declaration 绑定 + 精确 recorded commit/manifest + 受管 runtime 身份」的内部组合摘要；apply 用同一推导重算并在任何效果前拒绝漂移（`PLAN_STALE`），lock 仍由 apply 时重解析逐字比对。回归 `tests/core/removal-apply.test.ts`（记录 commit 漂移 ⇒ `PLAN_STALE`）。
-5. **33 离线真实 UI 的 `INTERNAL_ERROR` 根因（旧代无 `pluginSources`）**：在 33 的证据根（`/tmp/qa33/s3-data`，只读，staging 落在自有临时目录）复现：该代 `composition.lock.json` 无 `pluginSources`，剪除唯一直接依赖后的 pruned lock 无 `packages`/`snapshots`，被旧 `resolveLockClosure` 判为不可解析。修复 1 后，同一输入得到 `blockingReferences` = 「service dependencies for this plugin are not verified」的**阻塞计划**（`serviceVerification=unknown`），符合 D21 既有代兼容：无精确来源/核验记录 ⇒ unknown 阻塞、正常运行不受影响，UI 呈现“无法验证服务依赖，暂不能卸载”，而非无解释 `INTERNAL_ERROR`。回归 `tests/core/removal-apply.test.ts`（pre-S3 无 `pluginSources`）与 `tests/renderer/plugin-removal.test.ts`（`source:null` + 阻塞文案）。
+5. **33 离线真实 UI 的 `INTERNAL_ERROR` 根因（旧代无 `pluginSources`）**：在 33 的证据根（`/tmp/qa33/s3-data`，只读，staging 落在自有临时目录）复现：该代 `composition.lock.json` 无 `pluginSources`，剪除唯一直接依赖后的 pruned lock 无 `packages`/`snapshots`，被旧 `resolveLockClosure` 判为不可解析。修复 1 后该输入不再落 `INTERNAL_ERROR`。**后续政策变更（#112 supersede）**：`serviceVerification=unknown` 只作 `riskItems` 信息项、**不再阻塞**，因此该代现在可直接卸载（无 `INTERNAL_ERROR`），UI 展示风险说明并给出确认卸载，而非“无法验证服务依赖，暂不能卸载”。回归 `tests/core/removal-apply.test.ts`（pre-S3 无 `pluginSources`）与 `tests/renderer/plugin-removal.test.ts`（`source:null` 可卸载）。
 
 > 绑定边界说明：remove 计划保持 `sourceLock: null`；其 `planInputsDigest` 内部绑定 pruned declaration、目标精确 recorded commit/manifest 与受管 runtime 身份；composition lock 与 pruned lock 由 apply 时重解析逐字比对；user patch/引用漂移由 apply 时重扫拒绝。上述均为内部摘要/记录，未新增公开契约字段。
