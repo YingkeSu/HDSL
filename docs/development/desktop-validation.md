@@ -6,6 +6,12 @@
 - 实机：macOS 26.3（Darwin 25D125）arm64；Node v24.21.0；pnpm 11.7.0；Electron 44.4.3；驱动方式 CDP（Node 内置 `WebSocket`/`fetch`，不新增依赖）。
 - 边界：本切片是**独立 QA**。不 review/改 `apps/desktop/**`、不改 `tests/desktop/**`、不改根配置/lockfile。真实 UI 不得用 SSR/demo 替代；composition/HTTP 证据不得当 GUI 证据。
 
+> **残余 QA 更新（issue [#7](https://github.com/YingkeSu/HDSL/issues/7)，执行 head `fb5da940be2f1f5a043ff255a950255beb78517b`，2026-09）**：本文件下方矩阵仍绑定原候选 `2cdea54`，保留为历史。其后 PR [#120](https://github.com/YingkeSu/HDSL/pull/120) / [ADR 0008](../adr/0008-managed-process-exit-environment-projection.md) 修复了 [#108](https://github.com/YingkeSu/HDSL/issues/108)，因此 `tests/e2e/desktop.faults.real.test.ts` 现已在 `fb5da94` 上：
+> - `E2E-FAULT-EXIT-01`：真实 SIGKILL 受管 DSH 后，**生产契约收敛 `stopped` 且真实渲染器自动收敛 `已停止`**（不再需要手动刷新）；
+> - `E2E-APP-CRASH-RESTART-01`（新增）：SIGKILL 真实 Electron 主进程后，detached 受管 DSH 存活；重启实例接管陈旧 dataRoot lease，按 pid 采纳同一进程（真实 UI `运行中`），并经真实停止按钮杀掉它。
+>
+> 真实 lane：`HDSL_E2E_FAULTS=1 pnpm exec vitest run tests/e2e/desktop.faults.real.test.ts` → **2 passed / 1 file（119.27s）**，无 `hdsl-e2e-run-*` 残留、无 keychain 残留。真实 UI 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 仍不可达（产品无 hook），已去重登记 [#123](https://github.com/YingkeSu/HDSL/issues/123)。
+
 ## 执行矩阵（2cdea54）
 
 真实 Electron 窗口 + 真实 CDP 驱动，全部带显式超时（无无界等待）：
