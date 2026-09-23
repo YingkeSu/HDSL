@@ -138,11 +138,12 @@ export interface RendererState {
    */
   readonly entryPatchResult: EntryPatchResult | null;
   /**
-   * True after the user asks to restart the selected environment so a saved
-   * desired config is deterministically applied. The controller stops the
-   * environment and starts it again once the stop operation succeeds.
+   * The exact `environments.stop` operation the user asked to be followed by a
+   * restart, or null. Binding to the operation id (instead of a boolean) means a
+   * failed, cancelled, unrelated or superseded stop can never trigger an
+   * unintended start.
    */
-  readonly restartAfterStop: boolean;
+  readonly restartAfterStopOperationId: string | null;
   /**
    * Non-blocking DSH data-compatibility warning returned by the last succeeded
    * `generations.restore` (A2/#114), or null. Null covers "no restore yet" and
@@ -263,7 +264,7 @@ export const INITIAL_STATE: RendererState = {
   entryPatchRowId: '',
   entryPatchConfigText: '',
   entryPatchResult: null,
-  restartAfterStop: false,
+  restartAfterStopOperationId: null,
   restoreWarning: null,
 };
 

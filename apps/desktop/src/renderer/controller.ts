@@ -310,7 +310,7 @@ export class RendererController implements RendererActions {
       entryPatchRowId: '',
       entryPatchConfigText: '',
       entryPatchResult: null,
-      restartAfterStop: false,
+      restartAfterStopOperationId: null,
       // A downgrade warning belongs to one restore of one environment.
       restoreWarning: null,
     });
@@ -318,12 +318,17 @@ export class RendererController implements RendererActions {
 
   async startSelected(): Promise<void> {
     await this.#runCommand(async () => {
+      // An explicit start supersedes any pending restart intent.
+      this.#update({ restartAfterStopOperationId: null });
       await this.#revisionCommand('environments.start');
     });
   }
 
   async stopSelected(): Promise<void> {
     await this.#runCommand(async () => {
+      // An explicit stop supersedes any pending restart intent, so its later
+      // success can never auto-start the environment.
+      this.#update({ restartAfterStopOperationId: null });
       await this.#revisionCommand('environments.stop');
     });
   }
@@ -652,9 +657,11 @@ export class RendererController implements RendererActions {
 
   /**
    * Explicit restart fallback (never a live-reload claim). A running
-   * environment is stopped and, once the stop succeeds, started again so the
-   * saved desired config is deterministically applied. A stopped/error
-   * environment is simply started.
+   * environment is stopped and, once THAT EXACT stop operation succeeds,
+   * started again so the saved desired config is deterministically applied. A
+   * stopped/error environment is simply started. The restart intent is bound to
+   * the stop operation id, so a failed, cancelled, unrelated or superseded stop
+   * can never trigger an unintended start.
    */
   async restartSelected(): Promise<void> {
     await this.#runCommand(async () => {
@@ -668,21 +675,61 @@ export class RendererController implements RendererActions {
         return;
       }
       if (environment.state === 'stopped' || environment.state === 'error') {
-        this.#update({
-          restartAfterStop: false,
-          actionError: null,
-          notice: '正在启动环境以应用已保存的期望配置（重启是使配置确定的显式动作）。',
-        });
-        await this.#revisionCommand('environments.start');
+        this.#update({ restartAfterStopOperationId: null, actionError: null, notice: null });
+        await this.#startForRestart(environment);
         return;
       }
-      this.#update({
-        restartAfterStop: true,
-        actionError: null,
-        notice: '正在停止环境，随后会自动重新启动以应用已保存的期望配置。',
-      });
-      await this.#revisionCommand('environments.stop');
+      // Running: dispatch the stop, then bind the restart intent to THIS stop
+      // operation BEFORE tracking so the first terminal snapshot already knows.
+      this.#update({ restartAfterStopOperationId: null, actionError: null, notice: null });
+      const result = await this.#call(
+        'environments.stop',
+        {
+          requestId: this.#newRequestId(),
+          environmentId: environment.id,
+          expectedRevision: environment.revision,
+        },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error, restartAfterStopOperationId: null, notice: null });
+        return;
+      }
+      this.#update({ restartAfterStopOperationId: result.value.operationId });
+      await this.#trackOperation(result.value.operationId);
     });
+  }
+
+  /**
+   * Second half of an explicit restart: starts the environment and sets a
+   * notice that is NOT cleared by a later command, so the fallback is actually
+   * visible. It never claims a live reload.
+   */
+  async #startForRestart(environment: EnvironmentSummary): Promise<void> {
+    const result = await this.#call(
+      'environments.start',
+      {
+        requestId: this.#newRequestId(),
+        environmentId: environment.id,
+        expectedRevision: environment.revision,
+      },
+      operationRefSchema,
+    );
+    if (this.#disposed) {
+      return;
+    }
+    if (!result.ok) {
+      this.#update({ actionError: result.error, notice: null });
+      return;
+    }
+    this.#update({
+      actionError: null,
+      notice: '正在启动环境以应用已保存的期望配置；这不是热更新。',
+    });
+    await this.#trackOperation(result.value.operationId);
   }
 
   setInstallSource(field: 'owner' | 'name' | 'ref', value: string): void {
@@ -895,6 +942,11 @@ export class RendererController implements RendererActions {
       const tracked = this.#state.trackedOperation;
       if (tracked === null || isOperationTerminal(tracked.status)) {
         return;
+      }
+      // Cancelling the exact stop a restart was waiting on clears the intent, so
+      // the cancelled operation can never start the environment.
+      if (tracked.operationId === this.#state.restartAfterStopOperationId) {
+        this.#update({ restartAfterStopOperationId: null });
       }
       const epoch = this.#trackingEpoch;
       const result = await this.#call(
@@ -1195,6 +1247,14 @@ export class RendererController implements RendererActions {
         return;
       }
     }
+    // Consume a restart intent ONLY when it belongs to this exact stop
+    // operation. A failed/cancelled/unrelated stop leaves no intent behind, and
+    // a later unrelated stop can never auto-start the environment.
+    const restartForThisStop =
+      tracked.kind === 'stop' && this.#state.restartAfterStopOperationId === tracked.operationId;
+    if (restartForThisStop) {
+      this.#update({ restartAfterStopOperationId: null });
+    }
     if (tracked.status === 'succeeded') {
       this.#applyPluginOutput(tracked);
       await this.#refreshEnvironments(epoch);
@@ -1206,14 +1266,13 @@ export class RendererController implements RendererActions {
       if (tracked.kind === 'apply') {
         await this.#readInstalledPlugins(epoch);
       }
-      // Explicit restart fallback (#135): a requested stop is followed by a
-      // start so the saved desired config is deterministically applied. This is
-      // never presented as a live reload.
-      if (tracked.kind === 'stop' && this.#state.restartAfterStop) {
-        this.#update({ restartAfterStop: false });
-        await this.#runCommand(async () => {
-          await this.#revisionCommand('environments.start');
-        });
+      // Explicit restart fallback (#135): only the bound stop operation's success
+      // starts the environment again; this is never presented as a live reload.
+      if (restartForThisStop) {
+        const current = selectedEnvironment(this.#state);
+        if (current !== null) {
+          await this.#startForRestart(current);
+        }
       }
       return;
     }

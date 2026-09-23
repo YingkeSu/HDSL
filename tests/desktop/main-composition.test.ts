@@ -243,10 +243,8 @@ describe('createDesktopComposition', () => {
       environmentId,
       operation: { kind: 'disable', rowId: 'timer' },
     });
-    expect(patched.ok).toBe(true);
     if (!patched.ok) {
-      expect(patched.message).not.toContain('not wired');
-      return;
+      throw new Error(`entries.patch is not wired correctly: ${patched.code} ${patched.message}`);
     }
     expect(patched.value.saved).toBe(true);
     expect(patched.value.runtime).toBe('pending');

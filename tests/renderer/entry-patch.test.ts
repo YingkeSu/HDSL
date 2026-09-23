@@ -203,22 +203,18 @@ describe('RendererController restart fallback', () => {
     await controller.dispose();
   });
 
-  it('stops a running environment and starts it again once the stop succeeds', async () => {
-    let stopStarted = false;
+  it('stops a running environment and starts it again once THAT stop succeeds, with a visible notice', async () => {
     const { client, calls } = createStubRendererClient((method, input) => {
       if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
       if (method === 'catalog.list') return stubOk([]);
-      if (method === 'environments.stop') {
-        stopStarted = true;
-        return stubOk({ operationId: 'op-stop' });
-      }
+      if (method === 'environments.stop') return stubOk({ operationId: 'op-stop-1' });
       if (method === 'environments.start') return stubOk({ operationId: 'op-start' });
       if (method === 'operations.get') {
         const operationId = (input as { operationId?: string }).operationId;
         return stubOk({
           id: operationId,
           environmentId: FIXTURE_IDS.environment.running,
-          kind: operationId === 'op-stop' ? 'stop' : 'start',
+          kind: operationId === 'op-stop-1' ? 'stop' : 'start',
           phase: 'finished',
           status: 'succeeded',
           sequence: 1,
@@ -234,9 +230,148 @@ describe('RendererController restart fallback', () => {
     await controller.restartSelected();
     await flush();
     await flush();
-    expect(stopStarted).toBe(true);
     expect(calls.some((call) => call.method === 'environments.stop')).toBe(true);
     expect(calls.some((call) => call.method === 'environments.start')).toBe(true);
+    expect(controller.getState().restartAfterStopOperationId).toBeNull();
+    // The restart notice is actually visible after the fallback starts.
+    expect(controller.getState().notice).toContain('正在启动环境以应用已保存的期望配置');
+    await controller.dispose();
+  });
+
+  it('does not start after the bound stop fails, and a later plain successful stop still does not start', async () => {
+    let stopCount = 0;
+    const { client, calls } = createStubRendererClient((method, input) => {
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'catalog.list') return stubOk([]);
+      if (method === 'environments.stop') {
+        stopCount += 1;
+        return stubOk({ operationId: `op-stop-${String(stopCount)}` });
+      }
+      if (method === 'environments.start') return stubOk({ operationId: 'op-start' });
+      if (method === 'operations.get') {
+        const operationId = (input as { operationId?: string }).operationId;
+        if (operationId === 'op-stop-1') {
+          return stubOk({
+            id: operationId,
+            environmentId: FIXTURE_IDS.environment.running,
+            kind: 'stop',
+            phase: 'failed',
+            status: 'failed',
+            sequence: 1,
+            error: { code: 'PROCESS_EXITED', message: 'stop failed', retryable: true },
+          });
+        }
+        return stubOk({
+          id: operationId,
+          environmentId: FIXTURE_IDS.environment.running,
+          kind: 'stop',
+          phase: 'finished',
+          status: 'succeeded',
+          sequence: 1,
+        });
+      }
+      if (method === 'operations.subscribe') return stubOk({ subscriptionId: 'sub-1' });
+      if (method === 'operations.unsubscribe') return stubOk(null);
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment(FIXTURE_IDS.environment.running);
+    await controller.restartSelected();
+    await flush();
+    await flush();
+    // The bound stop failed: the intent is consumed, not kept for a later stop.
+    expect(controller.getState().restartAfterStopOperationId).toBeNull();
+    expect(calls.filter((call) => call.method === 'environments.start')).toHaveLength(0);
+
+    // A plain stop that later succeeds must NOT auto-start the environment.
+    await controller.stopSelected();
+    await flush();
+    await flush();
+    expect(calls.filter((call) => call.method === 'environments.stop')).toHaveLength(2);
+    expect(calls.filter((call) => call.method === 'environments.start')).toHaveLength(0);
+    await controller.dispose();
+  });
+
+  it('does not start when the bound stop is cancelled', async () => {
+    const { client, calls } = createStubRendererClient((method, input) => {
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'catalog.list') return stubOk([]);
+      if (method === 'environments.stop') return stubOk({ operationId: 'op-stop-1' });
+      if (method === 'environments.start') return stubOk({ operationId: 'op-start' });
+      if (method === 'operations.get') {
+        return stubOk({
+          id: (input as { operationId?: string }).operationId,
+          environmentId: FIXTURE_IDS.environment.running,
+          kind: 'stop',
+          phase: 'stopping',
+          status: 'running',
+          sequence: 1,
+        });
+      }
+      if (method === 'operations.cancel') {
+        return stubOk({
+          id: (input as { operationId?: string }).operationId,
+          environmentId: FIXTURE_IDS.environment.running,
+          kind: 'stop',
+          phase: 'cancelled',
+          status: 'cancelled',
+          sequence: 2,
+        });
+      }
+      if (method === 'operations.subscribe') return stubOk({ subscriptionId: 'sub-1' });
+      if (method === 'operations.unsubscribe') return stubOk(null);
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client, pollIntervalMs: 100_000 });
+    await controller.load();
+    controller.selectEnvironment(FIXTURE_IDS.environment.running);
+    await controller.restartSelected();
+    await flush();
+    expect(controller.getState().restartAfterStopOperationId).toBe('op-stop-1');
+    await controller.cancelTrackedOperation();
+    await flush();
+    expect(controller.getState().restartAfterStopOperationId).toBeNull();
+    expect(calls.filter((call) => call.method === 'environments.start')).toHaveLength(0);
+    await controller.dispose();
+  });
+
+  it('does not restart when the pending bound stop completes after an environment switch', async () => {
+    const envA = FIXTURE_SEED.environments[0];
+    const envB = FIXTURE_SEED.environments[1];
+    if (envA === undefined || envB === undefined) throw new Error('fixtures required');
+    const deferred = createDeferred<ContractResponse<unknown>>();
+    const { client, calls } = createStubRendererClient((method) => {
+      if (method === 'environments.list') return stubOk([envA, envB]);
+      if (method === 'catalog.list') return stubOk([]);
+      if (method === 'environments.stop') return stubOk({ operationId: 'op-stop-1' });
+      if (method === 'environments.start') return stubOk({ operationId: 'op-start' });
+      if (method === 'operations.get') return deferred.promise;
+      if (method === 'operations.subscribe') return stubOk({ subscriptionId: 'sub-1' });
+      if (method === 'operations.unsubscribe') return stubOk(null);
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client, pollIntervalMs: 100_000 });
+    await controller.load();
+    controller.selectEnvironment(envA.id);
+    const pending = controller.restartSelected();
+    await flush();
+    expect(controller.getState().restartAfterStopOperationId).toBe('op-stop-1');
+    controller.selectEnvironment(envB.id);
+    deferred.resolve(
+      stubOk({
+        id: 'op-stop-1',
+        environmentId: envA.id,
+        kind: 'stop',
+        phase: 'finished',
+        status: 'succeeded',
+        sequence: 1,
+      }),
+    );
+    await pending;
+    await flush();
+    expect(controller.getState().selectedEnvironmentId).toBe(envB.id);
+    expect(calls.filter((call) => call.method === 'environments.start')).toHaveLength(0);
     await controller.dispose();
   });
 });
