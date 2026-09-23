@@ -52,6 +52,7 @@ import {
   changePlanSchema,
   changeApplicationSchema,
   dshVersionListingSchema,
+  entryPatchResultSchema,
   expectedCompositionViewSchema,
   generationSummaryListSchema,
   generationSummarySchema,
@@ -62,6 +63,8 @@ import {
   subscriptionRefSchema,
   type ContractError,
   type ContractMethod,
+  type EntryPatchOperation,
+  type EntryPatchOperationKind,
   type EnvironmentSummary,
   type OperationSnapshot,
   type OperationUpdatedEvent,
@@ -71,6 +74,7 @@ import {
 import type { RendererContractClient } from './contract.js';
 import {
   INITIAL_STATE,
+  canEditRuntimeEntry,
   canSwitchVersion,
   installSourceSelector,
   isOperationTerminal,
@@ -301,6 +305,12 @@ export class RendererController implements RendererActions {
       // Expected composition is environment-scoped: a previously loaded dump
       // must never be shown for a newly selected environment.
       expectedComposition: null,
+      // Desired-config edits are environment-scoped too: a result, a row id and
+      // a pending restart for the previous environment must not leak across.
+      entryPatchRowId: '',
+      entryPatchConfigText: '',
+      entryPatchResult: null,
+      restartAfterStop: false,
       // A downgrade warning belongs to one restore of one environment.
       restoreWarning: null,
     });
@@ -567,6 +577,111 @@ export class RendererController implements RendererActions {
         return;
       }
       await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  setEntryPatchRowId(rowId: string): void {
+    this.#update({ entryPatchRowId: rowId, entryPatchResult: null, actionError: null });
+  }
+
+  setEntryPatchConfigText(config: string): void {
+    this.#update({ entryPatchConfigText: config, entryPatchResult: null, actionError: null });
+  }
+
+  /**
+   * Persists ONE desired-config edit of the environment home user patch
+   * (`entries.patch`, #135). The result is ALWAYS the desired-config save
+   * (`saved: true`, `runtime: 'pending'`); the controller never upgrades it to a
+   * runtime ACTIVE claim. A response that arrives after the user selected a
+   * different environment is discarded.
+   */
+  async patchEntry(kind: EntryPatchOperationKind): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('NOT_FOUND') });
+        return;
+      }
+      if (!canEditRuntimeEntry(environment)) {
+        this.#update({ actionError: contractErrorForCode('ENVIRONMENT_BUSY'), notice: null });
+        return;
+      }
+      const rowId = this.#state.entryPatchRowId.trim();
+      if (rowId === '') {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT'), notice: null });
+        return;
+      }
+      let operation: EntryPatchOperation;
+      if (kind === 'config') {
+        const text = this.#state.entryPatchConfigText.trim();
+        let config: unknown;
+        try {
+          config = JSON.parse(text);
+        } catch {
+          // Invalid JSON is a fail-loud local error; nothing is dispatched and
+          // the home patch file is not touched.
+          this.#update({ actionError: contractErrorForCode('INVALID_INPUT'), notice: null });
+          return;
+        }
+        operation = { kind, rowId, config };
+      } else {
+        operation = { kind, rowId };
+      }
+      const sentEnvironmentId = environment.id;
+      this.#update({ actionError: null, notice: null, entryPatchResult: null });
+      const result = await this.#call(
+        'entries.patch',
+        { requestId: this.#newRequestId(), environmentId: sentEnvironmentId, operation },
+        entryPatchResultSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      // Stale-response guard: a result for a previously selected environment is
+      // discarded rather than shown for the new selection.
+      if (this.#state.selectedEnvironmentId !== sentEnvironmentId) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      this.#update({ entryPatchResult: result.value, notice: null });
+    });
+  }
+
+  /**
+   * Explicit restart fallback (never a live-reload claim). A running
+   * environment is stopped and, once the stop succeeds, started again so the
+   * saved desired config is deterministically applied. A stopped/error
+   * environment is simply started.
+   */
+  async restartSelected(): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('NOT_FOUND') });
+        return;
+      }
+      if (environment.state === 'starting' || environment.state === 'stopping' || environment.state === 'creating') {
+        this.#update({ actionError: contractErrorForCode('ENVIRONMENT_BUSY'), notice: null });
+        return;
+      }
+      if (environment.state === 'stopped' || environment.state === 'error') {
+        this.#update({
+          restartAfterStop: false,
+          actionError: null,
+          notice: '正在启动环境以应用已保存的期望配置（重启是使配置确定的显式动作）。',
+        });
+        await this.#revisionCommand('environments.start');
+        return;
+      }
+      this.#update({
+        restartAfterStop: true,
+        actionError: null,
+        notice: '正在停止环境，随后会自动重新启动以应用已保存的期望配置。',
+      });
+      await this.#revisionCommand('environments.stop');
     });
   }
 
@@ -1090,6 +1205,15 @@ export class RendererController implements RendererActions {
       // be re-read from the NEW composition, never left stale in the UI.
       if (tracked.kind === 'apply') {
         await this.#readInstalledPlugins(epoch);
+      }
+      // Explicit restart fallback (#135): a requested stop is followed by a
+      // start so the saved desired config is deterministically applied. This is
+      // never presented as a live reload.
+      if (tracked.kind === 'stop' && this.#state.restartAfterStop) {
+        this.#update({ restartAfterStop: false });
+        await this.#runCommand(async () => {
+          await this.#revisionCommand('environments.start');
+        });
       }
       return;
     }

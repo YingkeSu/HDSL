@@ -16,6 +16,8 @@ import {
   type ChangeApplication,
   type ChangePlan,
   type DshVersionListing,
+  type EntryPatchOperationKind,
+  type EntryPatchResult,
   type ExpectedCompositionView,
   type GenerationSummary,
   type ContractError,
@@ -125,6 +127,22 @@ export interface RendererState {
   readonly dshVersions: DshVersionListing | null;
   /** Last succeeded `compositions.expected` desired-composition view, or null. */
   readonly expectedComposition: ExpectedCompositionView | null;
+  /** Row id input for the desired-config home patch edit (`entries.patch`, #135). */
+  readonly entryPatchRowId: string;
+  /** Config JSON text used only by the `config` operation; the whole row config is replaced. */
+  readonly entryPatchConfigText: string;
+  /**
+   * Last succeeded `entries.patch` result, or null. It is always the DESIRED
+   * config save (`saved: true`, `runtime: 'pending'`) and never the runtime
+   * ACTIVE set.
+   */
+  readonly entryPatchResult: EntryPatchResult | null;
+  /**
+   * True after the user asks to restart the selected environment so a saved
+   * desired config is deterministically applied. The controller stops the
+   * environment and starts it again once the stop operation succeeds.
+   */
+  readonly restartAfterStop: boolean;
   /**
    * Non-blocking DSH data-compatibility warning returned by the last succeeded
    * `generations.restore` (A2/#114), or null. Null covers "no restore yet" and
@@ -192,6 +210,21 @@ export interface RendererActions {
    * (`compositions.expected`, #118). The result is never the runtime ACTIVE set.
    */
   loadExpectedComposition(): void;
+  /** Row id input for the desired-config home patch edit (`entries.patch`, #135). */
+  setEntryPatchRowId(rowId: string): void;
+  /** Config JSON text for the `config` operation (`entries.patch`, #135). */
+  setEntryPatchConfigText(config: string): void;
+  /**
+   * Persists one desired-config edit of the environment home user patch
+   * (`entries.patch`, #135). A saved result is NEVER the runtime ACTIVE set.
+   */
+  patchEntry(kind: EntryPatchOperationKind): void;
+  /**
+   * Explicit restart fallback: stops and restarts the selected environment so a
+   * saved desired config is deterministically applied. It never claims a live
+   * reload succeeded.
+   */
+  restartSelected(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -227,6 +260,10 @@ export const INITIAL_STATE: RendererState = {
   selectedInstalledPluginId: null,
   dshVersions: null,
   expectedComposition: null,
+  entryPatchRowId: '',
+  entryPatchConfigText: '',
+  entryPatchResult: null,
+  restartAfterStop: false,
   restoreWarning: null,
 };
 
@@ -268,6 +305,16 @@ export const canStop = (environment: EnvironmentSummary): boolean =>
 /** Only a stopped environment may switch composition; switching never auto-stops. */
 export const canSwitchVersion = (environment: EnvironmentSummary): boolean =>
   environment.state === 'stopped';
+
+/**
+ * A desired-config home patch edit is allowed while running (hot path) or
+ * stopped; `starting`/`stopping`/`creating` are refused with `ENVIRONMENT_BUSY`
+ * by core. The renderer mirrors that so the buttons can be disabled.
+ */
+export const canEditRuntimeEntry = (environment: EnvironmentSummary): boolean =>
+  environment.state !== 'starting' &&
+  environment.state !== 'stopping' &&
+  environment.state !== 'creating';
 
 /**
  * Combination ids the audited upstream `versions.dsh` listing marks as

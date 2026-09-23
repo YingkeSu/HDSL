@@ -7,7 +7,7 @@
  * opener, credential loader availability, close-failure lock retention and the
  * runtime/core process-port phase adapter.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +17,7 @@ import {
   EnvironmentStore,
   OperationStore,
   ensureLayout,
+  environmentPaths,
   generationPaths,
   resolveLayout,
   type ManagedProcessPort,
@@ -219,6 +220,41 @@ describe('createDesktopComposition', () => {
       action: { kind: 'remove', pluginId: 'demo-plugin' },
     });
     expect(preview.ok).toBe(true);
+
+    await composition.close();
+  });
+
+  it('wires the desired-config entry patch to the environment home user patch (no "not wired" placeholder)', async () => {
+    const dataRoot = freshRoot('hdsl-comp-');
+    const { composition } = await compose(dataRoot);
+    await createEnvironment(composition, 'entry 接线环境');
+    const listed = composition.port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environmentId = listed.value[0]?.id as string;
+
+    // The service IS wired at the composition root: it must never return the
+    // "not wired" placeholder, and a legal edit must save the desired config
+    // with the honest saved/pending shape.
+    const patched = composition.port.patchEntry({
+      requestId: 'req-entry-wiring',
+      environmentId,
+      operation: { kind: 'disable', rowId: 'timer' },
+    });
+    expect(patched.ok).toBe(true);
+    if (!patched.ok) {
+      expect(patched.message).not.toContain('not wired');
+      return;
+    }
+    expect(patched.value.saved).toBe(true);
+    expect(patched.value.runtime).toBe('pending');
+    expect(patched.value.runtimeVerification).toBe('unavailable');
+    // Written to the environment-shared home, never a profile declaration source.
+    const homePatch = join(environmentPaths(composition.service.layout, environmentId).homeDirectory, 'cordis.patch.yml');
+    expect(readFileSync(homePatch, 'utf8')).toContain('timer');
+    expect(patched.value.environmentId).toBe(environmentId);
 
     await composition.close();
   });

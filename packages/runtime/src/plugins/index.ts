@@ -11,6 +11,7 @@ export * from './resolving-preview.js';
 export * from './removal.js';
 export * from './patch-references.js';
 export * from './patch-config.js';
+export * from './entry-patch-port.js';
 export * from './service-verifications.js';
 export * from './removal-port.js';
 export * from './pnpm-failure.js';

@@ -4,6 +4,7 @@ import type { RendererController } from './controller.js';
 import { CreateEnvironmentForm } from './components/CreateEnvironmentForm.js';
 import { DshVersions } from './components/DshVersions.js';
 import { EnvironmentDetail } from './components/EnvironmentDetail.js';
+import { EntryPatch } from './components/EntryPatch.js';
 import { ExpectedComposition } from './components/ExpectedComposition.js';
 import { EnvironmentList } from './components/EnvironmentList.js';
 import { DemoBanner, Notices } from './components/Notices.js';
@@ -213,7 +214,12 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
             )}
             <EnvironmentDetail state={state} actions={actions} />
             <SwitchVersion state={state} actions={actions} />
-            {page === 'environments' && <ExpectedComposition state={state} actions={actions} />}
+            {page === 'environments' && (
+              <>
+                <EntryPatch state={state} actions={actions} />
+                <ExpectedComposition state={state} actions={actions} />
+              </>
+            )}
             <div className={page === 'home' ? 'home-grid' : ''}>
               {state.environments.length > 0 && <EnvironmentList state={state} actions={actions} />}
               {page === 'home' && (

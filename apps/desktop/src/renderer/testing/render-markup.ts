@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AppView, type AppViewProps } from '../App.js';
 import { CreateEnvironmentForm } from '../components/CreateEnvironmentForm.js';
 import { DshVersions } from '../components/DshVersions.js';
+import { EntryPatch } from '../components/EntryPatch.js';
 import { ExpectedComposition } from '../components/ExpectedComposition.js';
 import { PluginDiscovery } from '../components/PluginDiscovery.js';
 import { PluginInstall } from '../components/PluginInstall.js';
@@ -31,6 +32,9 @@ export const renderDshVersions = (props: AppViewProps): string =>
 
 export const renderExpectedComposition = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(ExpectedComposition, props));
+
+export const renderEntryPatch = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(EntryPatch, props));
 
 export const renderPluginInstall = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginInstall, props));
