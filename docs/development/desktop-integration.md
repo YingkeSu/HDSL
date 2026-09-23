@@ -217,10 +217,13 @@ electron apps/desktop/dist/main/qa-entry.js \
 
 ## 未验证 / 缺口（不得读作已完成）
 
-- 真实 Electron GUI 主流程点击（创建→选择→启停→进度→错误）、原生菜单与原生保存/打开对话框的真实
-  人工操作：归 QA25 `tests/e2e/**` 与人工；未被测试注入替代。
+- 当前基线的真实 production Electron macOS ARM64 验收（创建/选择/启停、窄桥、sender/iframe 隔离、
+  diagnostics canary、dataRoot 独占门禁）已在
+  [t006-desktop-acceptance-evidence.md](t006-desktop-acceptance-evidence.md) 记录并分栏；本文件不再重复。
+- 原生菜单与原生 NSOpenPanel/NSSavePanel、真实系统浏览器 `shell.openExternal`：仍未自动执行，
+  归 QA25 与人工；注入 opener 列不可互代。
 - 认证 WebUI 的浏览器 cookie 建立后的真实 GUI 可用页：composition 级已证 303→cookie→200 页面；
-  但不用 HTTP 303/200 冒充 GUI 可用页，GUI 交互归 QA25。
+  真实浏览器列见上证据文件的注入 opener 分栏，不用 HTTP 303/200 冒充 GUI 可用页。
 - Windows x64：未实现、未测（M2 边界）。
 - 安全 review：8 已对 9b52364 CHANGES_REQUESTED 2/2；本批实现 P2-1/P2-2/P3 后需重新 review 新 SHA。
 
