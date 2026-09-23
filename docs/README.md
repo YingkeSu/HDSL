@@ -20,7 +20,7 @@
 - [领域术语与不变量](../CONTEXT.md)、[工程原则](architecture/principles.md)。
 - [技术设计](architecture/tdd.md)、[架构与流程图](architecture/diagrams.md)、[ADR](adr/README.md)。
 - 环境生命周期：[规格](../specs/001-environment-lifecycle/spec.md)、[实施计划](../specs/001-environment-lifecycle/plan.md)、[任务与进展](../specs/001-environment-lifecycle/tasks.md)、[数据模型](../specs/001-environment-lifecycle/data-model.md)、[接口契约](../specs/001-environment-lifecycle/contracts/local-api.md)、[手工验收流程](../specs/001-environment-lifecycle/quickstart.md)。
-- 插件事务与发现（002，S1 已实现）：[规格](../specs/002-plugin-transactions/spec.md)、[S1 实现计划](development/plugin-discovery-plan.md)、[S2 home/事务设计](../specs/002-plugin-transactions/s2-home-and-transaction-design.md)；契约演进见 [ADR 0005](adr/0005-plugin-contract-evolution.md)、home 派生决策见 [ADR 0006](adr/0006-generation-home-derivation.md)。
+- 插件事务与发现（002，S1 已实现）：[规格](../specs/002-plugin-transactions/spec.md)、[S1 实现计划](development/plugin-discovery-plan.md)、[S2 home/事务设计](../specs/002-plugin-transactions/s2-home-and-transaction-design.md)；运行期 entry（E1 #116）：[规格](../specs/002-plugin-transactions/e1-runtime-entry/spec.md)、[契约](../specs/002-plugin-transactions/e1-runtime-entry/contracts.md)、[计划](../specs/002-plugin-transactions/e1-runtime-entry/plan.md)、[任务](../specs/002-plugin-transactions/e1-runtime-entry/tasks.md)；契约演进见 [ADR 0005](adr/0005-plugin-contract-evolution.md)、home 派生决策见 [ADR 0006](adr/0006-generation-home-derivation.md)。
 
 ## 上游研究与验证记录
 
@@ -39,5 +39,6 @@
 | 受管 pnpm 默认拒执行哨兵（#76 E1） | [验证记录](development/plugin-executor-sentinel-validation.md)（冻结 pnpm 链 + 外部 marker） |
 | 插件卸载、内置保护与合法保留（#77 S3） | [验证记录](development/plugin-remove-validation.md)、[服务核验边界](development/plugin-remove-service-verification.md) |
 | 显式构建授权（#78 S4） | [验证边界与证据分层](development/plugin-build-authorization-validation.md)、[GitHub fixture 发布/实测记录](development/plugin-build-authorization-github-fixture-publication.md) |
+| 运行期 entry（E1 #116） | [desired-config 边界 + 合法非空数组移除实验](development/plugin-runtime-entry-validation.md)（opt-in、隔离、同 PID 卸载） |
 
 验证记录保留历史结果与未测项；其中的计数和 SHA 不是当前版本的自动更新状态。
