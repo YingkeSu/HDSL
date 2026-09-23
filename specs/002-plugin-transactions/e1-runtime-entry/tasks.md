@@ -16,6 +16,6 @@
 | T-E1-013 | `enable` 只 prune 本次清空 `disabled` 的目标 override；`changed`/dirty/`rows()`/落盘一致 | 完成 |
 | T-E1-014 | 路径轴定（写路径必须位于 profile 根内），公开写入口单一 | 完成 |
 | T-E1-015 | id-only 匹配/`name` 不消歧、无 CAS 的已知限制文档化（不作安全声明） | 完成 |
-| T-E1-010 | 产品接线（contracts/preload/renderer）与运行期 ACTIVE 确认 | **blocked**（无经验证的公开只读确认面；见 [plan.md](plan.md) §4） |
+| T-E1-010 | 产品接线（contracts/preload/renderer）与运行期 ACTIVE 确认 | **blocked**（E1b 查实 no-go：Remote-only + 浏览器会话 + 无 config 观测；见 [E1b 调查](../../../docs/research/e1b-runtime-confirmation-investigation.md) 与 [plan.md](plan.md) §4） |
 | T-E1-011 | 仅 loopback 证明 | 未测（不声称） |
 | T-E1-012 | `pluginInventory` Remote/官方会话接入实证 | 未测 |

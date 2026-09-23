@@ -42,7 +42,7 @@
 
 - `pluginInventory/list` 的 `fiberPhase` 是公开只读信号，但每次 RPC 需官方浏览器会话；HDSL 尚未核实 launcher 本地 UI 与 DSH WebUI 的 origin/cookie 归属。
 - 因此**不实现**私有 Remote、不伪造 cookie、不在主进程假装观测到 ACTIVE。
-- 未把本边界接入 `contracts` / preload / renderer；在运行期确认方案通过验证前，接线属 blocked。
+- 未把本边界接入 `contracts` / preload / renderer；在运行期确认方案通过验证前，接线属 blocked。**E1b 已查实该确认面为 no-go**（Remote-only、每条 RPC 需浏览器会话、HDSL 无 DSH 窗口/会话、inventory 无 config 观测），证据见 [E1b 调查](../../../docs/research/e1b-runtime-confirmation-investigation.md)。
 - `setConfig` 替换整行 `config`（与 DSH 整行替换语义一致），不做深合并；对同一 `id` 的重复行按文件顺序**最后一个命中行**处理（last-write-wins，含 insert + 后续 override），未新增去重门禁；不匹配 `name`（重复 id + 不同 name 不消歧，已知限制）。
 - 读-改-写**无锁/CAS**；并发/TOCTOU 推迟到产品接线，本层不声称并发安全。
 
