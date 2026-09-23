@@ -18,6 +18,8 @@
 **本规格不声明 S2–S4 已实现**，也不把 ADR 的 `preview`/`apply`/`restore` 方法或 kind 加入可调用白名单。
 未实现的入口在界面与文档中明确标注为 S2，而不是返回伪造的成功。
 
+**运行期 entry（E1 #116）** 是独立于 S1–S4 的声明面轴：以 profile patch 文件做 `enable`/`disable`/`config`/`remove` 的 desired-config 管理，见 [E1 规格](e1-runtime-entry/spec.md)、[契约](e1-runtime-entry/contracts.md)、[计划](e1-runtime-entry/plan.md)、[任务](e1-runtime-entry/tasks.md)。**已实现可验证的 desired-config 边界；运行期 ACTIVE 确认与产品接线 blocked**（无经验证的公开只读确认面）。
+
 ## SI：插件发现与详情（已实现）
 
 ### 方法
@@ -90,3 +92,4 @@
 - **每代 profile 加载机制（E10b）未决**：共享 home 下 DSH 固定在 `$DSH_HOME/profiles/<name>` 读取 profile（rc.2 实测 P1–P3）。候选机制未选定，**不得预判 symlink 安全**；在 E10b（真实 boot 证明"恢复后旧代实际加载集合 == 该代组成摘要" + 发布原子性/崩溃恢复）通过前，不得声称旧代加载其自身组成。
 - `--dump-config` 静态性与运行期加载集合的等价性待实证（E9）；本阶段未证，生效判据仍只到"活动代际记录 + 离线解析组合树"。
 - 真实限流形态、闭包摘要推导与受管 pnpm 身份待实证（E1/E2/E6）。
+- **运行期 entry（E1 #116）**：合法非空数组的移除已同 PID 实测（[验证记录](../../docs/development/plugin-runtime-entry-validation.md)）；`patchReload=live` 的预热窗口与热路径吞错（G8）使“写入 = 生效”永不成立，实现以 `saved` + `pending` + 重启 fallback 表达。运行期 ACTIVE 确认面（`pluginInventory` 官方会话）未证，产品接线 blocked。
