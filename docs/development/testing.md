@@ -68,20 +68,25 @@ pnpm exec vitest run tests/integration/install tests/integration/process
 | 角色 | 精确 SHA | 默认套件实测 |
 | --- | --- | --- |
 | 阶段 1 只读核查基线 | `3dcb99273c61cc7f7c526aefbbf447a84142e098` | `1029 passed \| 28 skipped` |
-| **本批（S1–S7）执行 head** | `3f51e066b5d196767dac8f0aee3b431b1c758c87` | `1030 passed \| 30 skipped`；`tests/e2e` 默认 `20 passed \| 21 skipped (41)` |
+| S1–S7 批（PR #109） | `3f51e066b5d196767dac8f0aee3b431b1c758c87` | `1030 passed \| 30 skipped`；`tests/e2e` 默认 `20 passed \| 21 skipped (41)` |
+| **本批（残余故障/重启 QA，PR 见正文）执行 head** | `fb5da940be2f1f5a043ff255a950255beb78517b` | 默认 `1116 passed \| 31 skipped (1147)`；`tests/e2e` 默认 `20 passed \| 22 skipped (42)` |
 
-环境（两行同一台机）：macOS 26.3 arm64 / Node 24.21.0 / pnpm 11.7.0 / Electron 44.4.3。本批新增用例（如 `argv-boundary`）只存在于本批 head；不得把本批计数当作基线计数。
+环境（同一台机）：macOS 26.3 arm64 / Node 24.21.0 / pnpm 11.7.0 / Electron 44.4.3。R 层结果只对**实际执行**的精确 SHA 成立：本批真实 lane 在 `fb5da94`（仅 `tests/e2e` 变更的代码提交）上执行；其上的纯文档提交不改变被测 blob，但引用时仍以该 SHA 为准。不得把任一批计数当作阶段 1 基线计数。
+
+本批在 `fb5da94` 实际执行的 opt-in 结果：
+
+- `HDSL_E2E_FAULTS=1 pnpm exec vitest run tests/e2e/desktop.faults.real.test.ts`：**2 passed / 1 file（119.27s）**。证据 `HDSL_T007_FAULT_EXIT_EVIDENCE`（`rendererLabelAfterExit="已停止"`）与 `HDSL_T007_RESTART_EVIDENCE`（`resolution="adopted-after-launcher-crash"`，`rendererLabelAfterRestart="运行中"`，`finalState="stopped"`）。运行后无 `hdsl-e2e-run-*` 残留、无 keychain 残留。
 
 | FR | D｜确定性用例（`pnpm test`） | R｜真实边界（opt-in） | 未测 / 缺口 |
 | --- | --- | --- | --- |
 | FR-001 隔离目录/ID/默认 home | `tests/core/creation.test.ts` › creates two independent environments…；`tests/integration/install/install.integration.test.ts` › `INST-ISO-01F`、`INST-HOME-01` | `INST-ISO-01`（`HDSL_QA_REAL_INSTALL=1`）；`tests/integration/process/two-environments.real.test.ts`（`HDSL_QA_REAL_DSH=1`）：两环境并发启动、目录/origin 互不相同、宿主 HOME 不变 | — |
 | FR-002 精确版本/平台/来源/SHA-256 | `tests/install/composition.test.ts`（仅 macOS ARM64、digest golden）；`tests/install/download.test.ts`（`DIGEST_MISMATCH`）；`tests/core/creation.test.ts` › rejects unknown, unverified and platform-mismatched…；`INST-DIG-01`、`INST-CAT-01` | `INST-COMP-REAL-01`（真实闭包 manifest/lock/preflight）；`two-environments.real.test.ts` 的 `npm-ci` 安装 | Windows/Linux 组合不在 catalog（未测平台） |
 | FR-003 适配器/参数数组/显式 env/无 shell | `tests/process/lifecycle.test.ts` › injects credentials through the explicit environment…；`tests/process/core-loader-wiring.test.ts`；`tests/integration/process/process.credential-wiring.integration.test.ts` › `PROCESS-ENV-MAP01`；**`tests/integration/process/argv-boundary.integration.test.ts`（S4：exact argv + 无 `sh -c`）** | `tests/process/real-process.evidence.test.ts`（`HDSL_REAL_PROCESS=1`） | — |
-| FR-004 有界就绪/仅 loopback | `tests/process/readiness.test.ts`；`tests/process/webui-bootstrap.test.ts`；`tests/desktop/webui.test.ts`；`tests/contracts/security.test.ts` | `tests/process/real-webui-bootstrap.evidence.test.ts`（`HDSL_REAL_WEBUI_BOOTSTRAP=1`）；`E2E-BROWSER-01`（`HDSL_E2E_BROWSER=1`，I 列） | 真实 `shell.openExternal`（→ T008a）；真实 Electron 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 到 UI（产品无注入钩子，保持未测） |
-| FR-005 幂等启停/进程退出/不误杀 | `tests/process/lifecycle.test.ts`；`tests/integration/process/process.integration.test.ts`（`PROC-READY/TREE/PORT/TIMEOUT/CRASH/PID/OWN`）；`tests/core/data-root-lock.process.test.ts` | `tests/process/real-process.evidence.test.ts`；`two-environments.real.test.ts`（真实启停 + 重启采纳）；`E2E-FAULT-EXIT-01`（`HDSL_E2E_FAULTS=1`）**contract 侧** `stopped` | 真实 UI 自动反映意外退出：**缺陷 #108**（core 已 stopped，渲染器仍「运行中」） |
-| FR-006 operation 阶段/终态/可重试 | `tests/contracts/{fixtures,idempotency,boundary}.test.ts`；`tests/core/lifecycle-coordination.test.ts`；`tests/renderer/ui.test.ts`（进度已知/未知、受控错误码 + retry） | `E2E-GUI-START-STOP-01`（`HDSL_E2E_GUI=1`）；`E2E-FAULT-EXIT-01` contract 侧 `PROCESS_EXITED` 收敛 | UI 侧终态展示：**缺陷 #108** |
+| FR-004 有界就绪/仅 loopback | `tests/process/readiness.test.ts`；`tests/process/webui-bootstrap.test.ts`；`tests/desktop/webui.test.ts`；`tests/contracts/security.test.ts` | `tests/process/real-webui-bootstrap.evidence.test.ts`（`HDSL_REAL_WEBUI_BOOTSTRAP=1`）；`E2E-BROWSER-01`（`HDSL_E2E_BROWSER=1`，I 列） | 真实 `shell.openExternal`（→ T008a / #100）；真实 Electron 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 到 UI：**当前产品不可达**（桌面入口只以 `--port 0` 请求 OS 分配端口、就绪预算为内部固定值，无产品 hook 或外部注入无法触发），保持未测并不伪造（见下方“产品 hook 类缺口”） |
+| FR-005 幂等启停/进程退出/不误杀 | `tests/process/lifecycle.test.ts`；`tests/integration/process/process.integration.test.ts`（`PROC-READY/TREE/PORT/TIMEOUT/CRASH/PID/OWN`）；`tests/core/data-root-lock.process.test.ts` | `tests/process/real-process.evidence.test.ts`；`two-environments.real.test.ts`（真实启停 + 重启采纳）；`E2E-FAULT-EXIT-01`（`HDSL_E2E_FAULTS=1`）：真实 SIGKILL 受管进程后 **contract `stopped` 且真实渲染器收敛 `已停止`**（#108 已由 PR #120 / ADR 0008 的 `environment.updated` 推送修复，本批在 `fb5da94` 断言） | — |
+| FR-006 operation 阶段/终态/可重试 | `tests/contracts/{fixtures,idempotency,boundary}.test.ts`；`tests/core/lifecycle-coordination.test.ts`；`tests/renderer/ui.test.ts`（进度已知/未知、受控错误码 + retry） | `E2E-GUI-START-STOP-01`（`HDSL_E2E_GUI=1`）；`E2E-FAULT-EXIT-01`：意外退出后真实 UI 终态收敛 `已停止`（`PROCESS_EXITED`，无手动刷新） | 真实 UI 上的受控失败码 `START_TIMEOUT`/`PORT_UNAVAILABLE` 展示：产品不可达（同 FR-004），未测 |
 | FR-007 脱敏/凭据引用/上游本地产物 | `tests/credentials/*`；`tests/contracts/security.test.ts`；`tests/desktop/main-diagnostics.test.ts`（白名单 + canary） | `tests/credentials/keychain-canary.evidence.test.ts`（`HDSL_KEYCHAIN_CANARY=1`）；`tests/process/real-process.evidence.test.ts`（launch record 无 canary/`token=`）；`E2E-QAENTRY-DIAG-01`（`HDSL_E2E_DESKTOP=1`，I 列；向真实 home 植入 `.credentials.yaml`+`logs/` 合成 canary 并断言导出排除） | 真实原生菜单导入/导出（→ T008a） |
-| FR-008 失败诊断/重启对账 | `tests/core/creation.test.ts`（journal/restart/idempotency）；`tests/process/reconcile.test.ts`；`INST-JRN-02`、`INST-IDEM-02`（真实子进程重启） | `two-environments.real.test.ts`（`HDSL_QA_REAL_DSH=1`）：新 `ProcessManager` 对同一 dataRoot 调用 `recover()`，两个真实 DSH 进程均为 `adopted`，随后停止 | 真实 Electron 应用崩溃/重启对账（仅 contract/进程层已验） |
+| FR-008 失败诊断/重启对账 | `tests/core/creation.test.ts`（journal/restart/idempotency）；`tests/process/reconcile.test.ts`；`INST-JRN-02`、`INST-IDEM-02`（真实子进程重启） | `two-environments.real.test.ts`（`HDSL_QA_REAL_DSH=1`）：新 `ProcessManager` 对同一 dataRoot 调用 `recover()`，两个真实 DSH 进程均为 `adopted`，随后停止；**`E2E-APP-CRASH-RESTART-01`（`HDSL_E2E_FAULTS=1`）：SIGKILL 真实 Electron 主进程后受管 DSH 存活，重启实例接管陈旧 lease 并按 pid 采纳同一进程（`运行中`），再经真实 UI 停止** | — |
 
 ### 复跑命令
 
@@ -101,3 +106,11 @@ HDSL_E2E_FAULTS=1       pnpm exec vitest run tests/e2e/desktop.faults.real.test.
 ```
 
 `R` 层结果只对实际执行的精确 SHA 有效；候选变更后必须复跑，不得引用旧结果。
+
+### 产品 hook 类缺口（本轮判定：当前不可达，未伪造）
+
+以下 001 失败语义已有 D 层确定性覆盖，但**无法在当前产品边界上驱动到真实 Electron UI**，且本轮不添加测试专用产品注入：
+
+- `START_TIMEOUT` / `PORT_UNAVAILABLE` 到真实 UI：桌面启动路径固定以 `--port 0` 启动，端口由 OS 分配，且就绪预算是内部固定值；没有产品入口 pin 端口或收紧就绪预算。要覆盖需产品提供受审的可配置 hook，或由维护者明确将这些码排除出“首条切片 UI 验收”。已去重登记为 [#123](https://github.com/YingkeSu/HDSL/issues/123)，不在此表标为已验。
+- 真实 `shell.openExternal` 系统浏览器路径、原生 NSOpenPanel/NSSavePanel：注入 opener / `qa-entry` 注入路径**不可互代**；由 #100（原生 macOS 验收，需人工/专用宿主）承接。
+- 真实上游 `.credentials.yaml`（rc2 在真实 Web grant 下是否落盘）的可复现排除：`E2E-QAENTRY-DIAG-01` 已用真实受管 home + 合成 canary 固化**生产导出排除逻辑**，但“真实上游是否产生该文件”依赖一次性真实模型凭据，属外部/人工条件（#100）。
