@@ -1,18 +1,16 @@
-# 本地 API 契约 v0.2（草案）
+# 本地 API 契约 v1.1（冻结）
 
-文档草案 rev = v0.3；wire 包络版本为 `API_VERSION = "1.1"`（见下节）。两者独立演进：文档 rev 记录草案修订，`API_VERSION` 是 preload 桥的运行时契约版本，打标签时以 `API_VERSION` 为准。`1.0` 是已冻结版本，保留为标签 `contracts-v1.0.0` 的历史注记，见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
+文档 rev = v1.1（2026-09-23）；wire 包络版本为 `API_VERSION = "1.1"`（见下节）。文档 rev 记录本文件的修订，`API_VERSION` 是 preload 桥的运行时契约版本；两者独立演进，冲突时以 `API_VERSION` 与可执行实现为准。`1.0` 是已冻结版本，保留为标签 `contracts-v1.0.0` 的历史注记，见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
 
-实现位置计划为 preload 白名单桥，非任意 HTTP 远程控制接口。main 必须校验发送方和所有输入；TypeScript 类型不替代运行时校验。DTO 的权威字段定义与修订语义见 [data-model.md](../data-model.md)，本文件只定义调用方法、幂等、错误与事件语义。
-
-本契约是实施前修订（2026-09-20），用于在 T001 证据补齐、T003 动工前冻结共享面。上游参数与真实平台验证尚未全部通过，本版本不声称任何业务实现或实机验收已完成。
+实现为 preload 白名单桥，非任意 HTTP 远程控制接口。main 必须校验发送方和所有输入；TypeScript 类型不替代运行时校验。**权威顺序**：`packages/contracts/src`（`version.ts`/`methods.ts`/`errors.ts`/`dto.ts`/`dispatcher.ts`）是方法、字段、错误码与校验顺序的可执行权威；[data-model.md](../data-model.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md) 记录修订语义与 1.1 新增 DTO 的归属；本文件汇总调用方法、幂等、错误与事件语义。真实持久化、安装、进程与桌面验收见对应验证记录；**本文件不声称平台验收**。
 
 ## 契约版本
 
 - 导出常量 `API_VERSION = "1.1"`（`major.minor`），位于 `packages/contracts/src`，renderer 与 main 共用同一构建产物。历史：`1.0` 冻结于标签 `contracts-v1.0.0`，不移动、不重打。
 - 每个请求与响应包络都携带 `apiVersion`。main 在产生任何副作用前**要求完全匹配**：任何 major 或 minor 不一致 → 拒绝，错误码 `CONTRACT_VERSION_MISMATCH`，不执行方法。
 - 采用完全匹配的理由：renderer 与 main 共用同一构建产物，且 main 对未知字段严格拒绝；若允诺 minor 兼容，更高 minor 的新增字段必然被拒，承诺不可执行。因此不提供 minor 向后兼容；升级必须是两侧同步的显式变更。
-- 版本升级是显式变更并更新本文件，同步更新 T003 的 fixture 表；不得静默放宽字段或错误语义。
-- 差异场景必须在 T003 的「方法 × 合法/非法 fixture × 期望错误码」表中逐条固化，并打契约版本标签。
+- 版本升级是显式变更并更新本文件，同步更新可执行 fixture 表（`packages/contracts/src/testing/fixtures.ts`）；不得静默放宽字段或错误语义。
+- 差异场景必须在「方法 × 合法/非法 fixture × 期望错误码」表中逐条固化；`1.1` 的标签由编排者按合入后的精确提交打 `contracts-v1.1.0`（ADR 0005 §5.4）。
 
 ## 通用规则
 
@@ -49,7 +47,13 @@
 | operations.subscribe | requestId, operationId? | SubscriptionRef | 建立 `operation.updated` 推送；省略 operationId 表示订阅该窗口全部操作，事件按 operationId 分组 |
 | operations.unsubscribe | requestId, subscriptionId | `null` | 退订后不再推送；未知 subscriptionId → NOT_FOUND |
 | diagnostics.export | requestId, environmentId | ExportResult | 由 main 原生选择路径并脱敏；幂等，失败返回 EXPORT_FAILED |
+| plugins.search | requestId, query | OperationRef | 1.1 追加（ADR 0005 D4/D16，S1，1.0 标签不动）；全局（`environmentId=null`）只读检索，终态 `PluginSearchResult` 仅从 `OperationSnapshot.output` 读取；`query` 1–256 字符，`hits` 上界 100、`totalCount` 不静默截断（GitHub 搜索上限 1000 以 `hasMore` 表示）；不使用 GitHub 凭据，不受环境 `ENVIRONMENT_BUSY` 影响；`RATE_LIMITED` + `retryAfterSeconds` / `SOURCE_ACCESS_DENIED` / `NETWORK_UNAVAILABLE` 等按 D11 分类；发现不代表可安装或安全 |
+| plugins.inspect | requestId, source {owner, name, ref?} | OperationRef | 1.1 追加（ADR 0005 D4/D16，S1，1.0 标签不动）；全局只读，`source` 只接受公开 GitHub `owner`/`name`/可选 `ref`，`link:`/`file:`/本地路径/任意 URL → `INVALID_INPUT`；终态 `PluginInspection` 仅从 `OperationSnapshot.output` 读取；不使用凭据、不改变环境组成 |
+| changes.preview | requestId, environmentId, expectedRevision, action | OperationRef | 1.1 追加（ADR 0005 D4/D6/D20，S2，1.0 标签不动）；环境级变更计划，`action` 为 `{kind:'install', source}` 或 `{kind:'remove', pluginId}`；只写计划（不改变组成/指针/来源锁），运行中可预览；终态 `ChangePlan` 仅从 `OperationSnapshot.output` 读取；`scriptAssessment='unknown'` 不得呈现为无脚本保证 |
+| changes.apply | requestId, environmentId, expectedRevision, planId, buildAuthorization? | OperationRef | 1.1 追加（ADR 0005 D4/D8/D14，S2/S4，1.0 标签不动）；以计划为基准重新解析并复核（源摘要/脚本集合/执行器身份/授权绑定），**全部比较先于任何写操作**；提交点 = 活动代指针切换，提交后取消 → `CANNOT_CANCEL`；`buildAuthorization` 精确绑定 commit + 脚本集合（无通配/作者信任），未授权或 `unknown` 脚本集受控拒绝；终态 `ChangeApplication` 仅从 `OperationSnapshot.output` 读取 |
 | plugins.installed | environmentId | InstalledPluginsView | 1.1 追加（ADR 0005 D4/D15，S3，1.0 标签不动）；只读即时、无 requestId、running 不返回 BUSY；结果为活动代持久组成 + 当前受管 DSH 安装解析，字段最小有界（无磁盘路径/manifest 文本/凭据），`plugins` 上界 128 且**不静默截断**（超出 → 受控 INTERNAL_ERROR，对齐 D20）；环境不存在 → NOT_FOUND，无活动代 → generationId=null 且空列表 |
+| generations.list | environmentId | GenerationSummary[] | 1.1 追加（ADR 0005 D4，1.0 标签不动）；只读即时、无 requestId；返回活动代与历史代摘要（`dshCompatibilityWarning?` 为 additive）；环境不存在 → `NOT_FOUND` |
+| generations.restore | requestId, environmentId, expectedRevision, targetGenerationId | OperationRef | 1.1 追加（ADR 0005 D4/D8，1.0 标签不动）；把活动代指针原子切回已记录代；提交前失败保旧代；终态 `GenerationSummary` 仅从 `OperationSnapshot.output` 读取；目标 DSH 版本低于环境最近成功启动版本时给出**非阻断** `dshCompatibilityWarning`，同版本/未知不提示，不撤销已写数据、不做 schema 降级 |
 | versions.dsh | requestId | OperationRef | 1.1 追加（A1/#113，1.0 标签不动）；全局（`environmentId=null`）只读上游 DSH 版本清单，终态 `DshVersionListing` 仅从 `OperationSnapshot.output` 读取；只访问白名单主机 `registry.npmjs.org`、无凭据、不下载/不执行任何包；按受审组合标注 `supported`，未受审版本不得呈现为可安装；网络错误按 D11 分类（`NETWORK_UNAVAILABLE`/`RATE_LIMITED`/`SOURCE_ACCESS_DENIED`/`SOURCE_NOT_FOUND`/`DOWNLOAD_FAILED`） |
 | compositions.expected | requestId, environmentId | OperationRef | 1.1 追加（#118，1.0 标签不动）；环境级只读**期望组成**：离线运行受管 `dsh --profile <p> --dump-config` 并解析分组 `# == <label>` YAML，终态 `ExpectedCompositionView` 仅从 `OperationSnapshot.output` 读取；`basis='dump-config'`、`runtimeVerification='unavailable'` 固定，**永不表示运行期 ACTIVE 集合**；`!!js` 逐字保留不求值，stderr/解析失败显式呈现；不执行插件代码、不使用凭据；running/starting/stopping → `ENVIRONMENT_BUSY`，无活动代 → `NOT_FOUND` |
 
@@ -75,29 +79,47 @@
 
 ## 错误码
 
-| code | 语义 |
-| --- | --- |
-| INVALID_INPUT | 缺字段、类型错误、未知字段、超长文本或非法 ID |
-| NOT_FOUND | 未知 environmentId/operationId/subscriptionId |
-| IDEMPOTENCY_CONFLICT | 相同 requestId 携带不同参数 |
-| CONTRACT_VERSION_MISMATCH | apiVersion 与 main 不完全一致（major 或 minor） |
-| UNSUPPORTED_COMBINATION | 组合未核验；覆盖不支持平台（含 Windows 未验证平台） |
-| REVISION_CONFLICT | expectedRevision 与当前组成修订不一致 |
-| ENVIRONMENT_BUSY | 环境运行中或存在并发修改事务 |
-| WEBUI_UNAVAILABLE | 环境非 running，或 endpoint 不属于当前受管进程 / 非 loopback |
-| DOWNLOAD_FAILED | 下载失败，可重试 |
-| DIGEST_MISMATCH | 摘要与受审 catalog 不符 |
-| DISK_FULL | 磁盘不足 |
-| START_TIMEOUT | 就绪超时 |
-| PORT_UNAVAILABLE | 端口冲突 |
-| PROCESS_EXITED | 受管进程意外退出 |
-| CANNOT_CANCEL | 操作已提交，无法取消 |
-| EXPORT_FAILED | 诊断导出失败，未产出可用文件 |
-| INTERNAL_ERROR | 未分类内部错误，message 需脱敏 |
+| code | retryable | 语义 |
+| --- | --- | --- |
+| INVALID_INPUT | 否 | 缺字段、类型错误、未知字段、超长文本或非法 ID |
+| NOT_FOUND | 否 | 未知 environmentId/operationId/subscriptionId |
+| IDEMPOTENCY_CONFLICT | 否 | 相同 requestId 携带不同参数 |
+| CONTRACT_VERSION_MISMATCH | 否 | apiVersion 与 main 不完全一致（major 或 minor） |
+| UNSUPPORTED_COMBINATION | 否 | 组合未核验；覆盖不支持平台（含 Windows 未验证平台） |
+| REVISION_CONFLICT | 否 | expectedRevision 与当前组成修订不一致 |
+| ENVIRONMENT_BUSY | 是 | 环境运行中或存在并发修改事务 |
+| WEBUI_UNAVAILABLE | 是 | 环境非 running，或 endpoint 不属于当前受管进程 / 非 loopback |
+| DOWNLOAD_FAILED | 是 | 下载失败；连接建立后传输/取物失败 |
+| DIGEST_MISMATCH | 否 | 摘要与受审 catalog 不符 |
+| DISK_FULL | 是 | 磁盘不足 |
+| START_TIMEOUT | 是 | 就绪超时 |
+| PORT_UNAVAILABLE | 是 | 端口冲突 |
+| PROCESS_EXITED | 是 | 受管进程意外退出 |
+| CANNOT_CANCEL | 否 | 操作已提交，无法取消 |
+| EXPORT_FAILED | 是 | 诊断导出失败，未产出可用文件 |
+| INTERNAL_ERROR | 否 | 未分类内部错误，message 需脱敏 |
+| RATE_LIMITED | 是 | 上游限流（`429`，或带可靠限流证据的 `403`）；可携带 `retryAfterSeconds` |
+| NETWORK_UNAVAILABLE | 是 | 连接建立前失败（DNS/离线/TLS/整体超时） |
+| SOURCE_ACCESS_DENIED | 否 | `403` 且无可靠限流证据：权限/认证/滥用防护 |
+| SOURCE_NOT_FOUND | 否 | 仓库、ref、提交或包不存在；锁定的 commit 不可达 |
+| SOURCE_MANIFEST_INVALID | 否 | 源 manifest 不可读或非法 |
+| NOT_A_PLUGIN | 否 | 源未声明 DSH bundle patch |
+| PLAN_EXPIRED | 否 | 计划超过有效期 |
+| PLAN_STALE | 否 | 计划输入漂移 |
+| PLAN_CONSUMED | 否 | 计划已被其它请求消费 |
+| EXECUTOR_UNAVAILABLE | 否 | 受管执行器缺失、版本或摘要不符 |
+| BUILD_NOT_AUTHORIZED | 否 | 源需要执行脚本但未给授权 |
+| AUTHORIZATION_MISMATCH | 否 | 授权未精确绑定计划的 commit + 脚本集合 |
+| UNAUTHORIZED_SCRIPT_EXECUTION | 否 | 执行期观测到未授权/未预期的第三方脚本 |
+| BUILTIN_BUNDLE_PROTECTED | 否 | 目标是当前受管安装解析出的内置 bundle，不可移除 |
+| REFERENCED_BY_OTHER | 否 | 移除会破坏其它 bundle/配置解析，或被用户 patch 层引用 |
+| PLUGIN_INTEGRITY_MISMATCH | 否 | 复解析内容与计划记录的摘要不符 |
 
-## 契约 fixture 表（T003 实现）
+`retryable` 由 `packages/contracts/src/errors.ts` 的 `RETRYABLE_CODES` 单一权威决定（上表 `是` 共 10 个）；失败包络可选携带 `retryAfterSeconds`（整数，1–86400，仅 `RATE_LIMITED` 依据可靠证据产生，`x-ratelimit-reset` 单独出现不构成证据）。**服务依赖核验不是本契约的门禁**：`REFERENCED_BY_OTHER`/`BUILTIN_BUNDLE_PROTECTED` 只覆盖真实静态引用与内置保护；服务核验（`unknown`/未命中）仅作为 `riskItems` 信息项，不阻塞卸载（[#112](https://github.com/YingkeSu/HDSL/issues/112) supersede，事实基线见 ADR 0005 §9.5a）。
 
-权威的可执行表是 `packages/contracts/src/testing/fixtures.ts` 的 `ALL_CONTRACT_FIXTURES`，通过**仅测试用子路径** `@hdsl/contracts/testing` 导出，不在生产入口 `@hdsl/contracts`；`tests/contracts/fixtures.test.ts` 逐条断言观察到的结果与 `expected` 相等，因此下表与实现不能漂移。该表在**仅测试用**的内存端口上运行；真实持久化、安装与进程效果归 T004–T006，内存端口不构成持久化验收。
+## 契约 fixture 表
+
+权威的可执行表是 `packages/contracts/src/testing/fixtures.ts` 的 `ALL_CONTRACT_FIXTURES`，通过**仅测试用子路径** `@hdsl/contracts/testing` 导出，不在生产入口 `@hdsl/contracts`；`tests/contracts/fixtures.test.ts` 逐条断言观察到的结果与 `expected` 相等，`tests/contracts/local-api-doc.test.ts` 断言本节与可执行面不漂移。该表在**仅测试用**的内存端口上运行；真实持久化、安装与进程效果由各自的集成/验证记录覆盖，内存端口不构成持久化验收。
 
 包络与版本（`ENVELOPE_FIXTURES`）：
 
@@ -139,14 +161,36 @@
 
 补充行为测试（`tests/contracts/`，不在上表逐条列出）：重复 `requestId` 返回原 `ExportResult` 摘要且副作用计数为 1；参数键顺序不影响指纹；守卫拒绝不记录、`in-progress` 不重做；端口异常/畸形返回/非法出站 DTO/重复 sequence → 脱敏 `INTERNAL_ERROR`；`catalog.list` 过滤未核验组合；订阅/退订按 operationId 分组递增且严格单调、退订后重放重建同一 `subscriptionId`；错误文本长度上限；秘密与本地路径不进入错误与事件。
 
-契约版本标签：`contracts-v1.0.0` ↔ `API_VERSION = "1.0"`（已冻结，只读）；`1.1` 的标签在插件闭环（S1–S4）验收后由编排者按精确 merge SHA 打 `contracts-v1.1.0`，实现切片不提前 tag 未审 HEAD（ADR 0005 §5.4）。
+契约版本标签：`contracts-v1.0.0` ↔ `API_VERSION = "1.0"`（已冻结，只读）；`1.1` 对应 `contracts-v1.1.0`，按 ADR 0005 §5.4 由编排者在合入后的**精确提交**上创建。**截至本修订 `contracts-v1.1.0` 尚未创建**；打标签 ≠ 平台验收，实现切片不提前 tag 未审 HEAD。
 
-## 1.1 插件发现（S1 已实现）
+## 1.1 插件发现（S1）
 
 `plugins.search` 与 `plugins.inspect` 是**全局**（`environmentId = null`）只读检索/详情方法，返回 `OperationRef`；终态结果经 `OperationSnapshot.output` 读取。二者不使用任何 GitHub 凭据，不受环境 `ENVIRONMENT_BUSY` 影响，且不改变任何环境组成。错误映射见 ADR 0005 D11/D16：`RATE_LIMITED` + `retryAfterSeconds`（`429`，或带可靠限流证据的 `403`）、`SOURCE_ACCESS_DENIED`（无可靠限流证据的 `403`，非重试）、`NETWORK_UNAVAILABLE`、`SOURCE_NOT_FOUND` 等。
 
+## 1.1 DTO 与 OperationKind（归属）
+
+`OperationKind` 当前取值：`create`、`start`、`stop`、`switch`、`openWebUI`、`export`、`search`、`inspect`、`preview`、`apply`、`restore`、`versions`、`composition`。`OperationSnapshot.output` 为 1.1 追加的**可选**终态载荷，逐 kind/状态必填规则见 ADR 0005 D5：只从 `operations.get` / `operations.cancel` 的终态快照读取，`operation.updated` 事件不携带 `output`；违规在 main 边界映射为 `INTERNAL_ERROR`。
+
+1.1 新增 DTO：`PluginSearchResult` / `PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan` / `ChangePlanAction` / `ChangeBlockingReference`、`BuildScriptEntry` / `BuildAuthorization`、`ChangeApplication`、`GenerationSummary`、`InstalledPlugin` / `InstalledPluginsView`、`DshVersionListing` / `DshUpstreamVersion`、`ExpectedCompositionView`。既有 DTO 的 additive 可选字段：`ContractError.retryAfterSeconds?`、`CompositionLock.pluginSources?`、`GenerationSummary.dshCompatibilityWarning?`、`OperationSnapshot.output?`。字段权威与边界见 `packages/contracts/src/dto.ts`；`pluginSources` 等非摘要字段不进入 `compositionDigest`。
+
+## 已接受的行为边界与未实测项
+
+已接受的边界（不写成更强保证）：
+
+- **版本管理**：支持范围 = 已有安装/验证证据的组合；未知版本不虚报为已支持（**未知 ≠ 危险**），逐版本安全审计不是永久门禁。同环境切换只由 `environments.switchCombination`（**仅 `stopped`**，操作专属前置，不传播为全局规则）与 `generations.restore` 承担。
+- **包管理**：profile `package.json` 的 `dependencies` 与 `dsh.profile.bundles` 变更**需重启**才生效（DSH 无 watcher）；共享/传递依赖按锁闭包保留，不承诺无损/未使用；安装期脚本默认拒执行，需显式精确授权（#78 retain）。
+- **desired config（saved/pending）**：写 profile `cordis.patch.yml` 成功只表示 desired config 已原子保存；`patchReload=live` 时预计热重载但 HDSL 未观测，**保存 ≠ 运行期 ACTIVE**。保存/等待应用与显式重启 fallback 属产品接线切片，本契约不新增方法（[#116](https://github.com/YingkeSu/HDSL/issues/116)）。
+- **动态 DSH 职责**：动态 load/unload 与影响判断交 DSH；HDSL 不 in-process 挂载 Cordis、不伪造认证会话、不承诺无损卸载、**不做静态服务依赖证明门禁**；服务核验只作 `riskItems` 信息项。
+- **期望组成**：`compositions.expected` 的 `basis='dump-config'`、`runtimeVerification='unavailable'` 固定，**永不表示运行期 ACTIVE**。
+
+未实测项（不作为契约保证）：
+
+- Windows/Linux 平台（仅 macOS ARM64 有组合证据；Windows 未验证 → `UNSUPPORTED_COMBINATION`）。
+- 仅 loopback（未用套接字清单证明独占）。
+- 跨版本 home/session 兼容（R006；`dshCompatibilityWarning` 只提示，不迁移、不降级 schema）。
+- `--dump-config` 离线解析集合与运行期实际加载集合的等价性（E9 未证）。
+- `pluginInventory` 运行期 ACTIVE 观测（Remote/会话接入未验证）。
+
 ## 后续接口预留
 
-`pack.inspect` / `pack.import` / `pack.export` 在 003 规格中定义。Registry 与小程序接口须另设版本化规格。
-
-`changes.preview` / `changes.apply` / `generations.restore` / `plugins.installed` / `generations.list` 属 S2–S4，已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
+`pack.inspect` / `pack.import` / `pack.export` 在 003 规格中定义，本契约不暴露。Registry 与小程序接口须另设版本化规格。1.1 白名单内的 21 个方法均已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
