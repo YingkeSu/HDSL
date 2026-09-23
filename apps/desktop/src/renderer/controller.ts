@@ -296,6 +296,9 @@ export class RendererController implements RendererActions {
       exportResult: null,
       installedPlugins: null,
       selectedInstalledPluginId: null,
+      // Expected composition is environment-scoped: a previously loaded dump
+      // must never be shown for a newly selected environment.
+      expectedComposition: null,
     });
   }
 
@@ -1123,6 +1126,12 @@ export class RendererController implements RendererActions {
       const parsed = expectedCompositionViewSchema(tracked.output, 'output', issues);
       if (parsed === undefined) {
         this.#update({ expectedComposition: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      // A dump loaded for environment A must not land while the user has since
+      // selected environment B (the tracking epoch is not bumped by a plain
+      // selection change).
+      if (parsed.environmentId !== this.#state.selectedEnvironmentId) {
         return;
       }
       this.#update({ expectedComposition: parsed });

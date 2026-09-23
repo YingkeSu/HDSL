@@ -10,9 +10,9 @@
  * - the view is always the expected/desired composition, never the runtime
  *   ACTIVE set (`basis`/`runtimeVerification` are fixed by the schema).
  */
-import { mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { expectedCompositionViewSchema } from '@hdsl/contracts';
 import {
@@ -181,6 +181,166 @@ describe('parseExpectedCompositionDump', () => {
     expect(parsed.groups[0]?.rows).toHaveLength(0);
     expect(parsed.diagnostics).toHaveLength(0);
   });
+
+  it('always emits a truncated diagnostic when the diagnostics cap saturates before the row cap', () => {
+    const lines: string[] = ['# == big'];
+    for (let index = 0; index < 6000; index += 1) {
+      lines.push(`- id: row-${String(index)}`);
+      lines.push("  name: '@deepseek-ai/dsh-row'");
+      lines.push('  disabled: !!js x');
+    }
+    lines.push('');
+    const parsed = parseExpectedCompositionDump(lines.join('\n'));
+    expect(parsed.rowCount).toBe(5000);
+    expect(parsed.groups[0]?.rows).toHaveLength(5000);
+    expect(parsed.diagnostics.length).toBeLessThanOrEqual(64);
+    const truncated = parsed.diagnostics.filter((diagnostic) => diagnostic.code === 'truncated');
+    expect(truncated).toHaveLength(1);
+    expect(truncated[0]?.message).toContain('diagnostics');
+  });
+
+  it('emits a row-truncation diagnostic even when literal rows saturate the detail buffer too', () => {
+    const lines: string[] = ['# == big'];
+    for (let index = 0; index < 6000; index += 1) {
+      lines.push(`- id: row-${String(index)}`);
+      lines.push("  name: '@deepseek-ai/dsh-row'");
+      lines.push('  disabled: true');
+    }
+    lines.push('');
+    const parsed = parseExpectedCompositionDump(lines.join('\n'));
+    expect(parsed.rowCount).toBe(5000);
+    const truncated = parsed.diagnostics.filter((diagnostic) => diagnostic.code === 'truncated');
+    expect(truncated).toHaveLength(1);
+    expect(truncated[0]?.message).toContain('rows');
+  });
+});
+
+describe('createExpectedCompositionPort boundaries (default CI)', () => {
+  const makeHome = (): { root: string; home: string; cwd: string } => {
+    const root = mkdtempSync(join(tmpdir(), 'hdsl-expected-port-'));
+    cleanup.push(root);
+    const home = join(root, 'home');
+    mkdirSync(home, { recursive: true });
+    const cwd = join(root, 'data');
+    mkdirSync(cwd, { recursive: true });
+    return { root, home, cwd };
+  };
+
+  it('refuses the host process binary and a missing entrypoint', async () => {
+    const { home, cwd } = makeHome();
+    const port = createExpectedCompositionPort({ timeoutMs: 5_000 });
+    const signal = new AbortController().signal;
+
+    const host = await port.describeExpectedComposition(
+      {
+        nodeExecutable: process.execPath,
+        dshEntrypoint: join(home, 'dsh.js'),
+        profileName: 'web',
+        homeDirectory: home,
+        cwd,
+      },
+      signal,
+    );
+    expect(host.ok).toBe(false);
+    if (!host.ok) {
+      expect(host.code).toBe('INTERNAL_ERROR');
+    }
+
+    const missing = await port.describeExpectedComposition(
+      {
+        // Any path that is not the host binary passes the host guard; the
+        // missing entrypoint is what must fail.
+        nodeExecutable: join(home, 'not-a-real-node'),
+        dshEntrypoint: join(home, 'missing.js'),
+        profileName: 'web',
+        homeDirectory: home,
+        cwd,
+      },
+      signal,
+    );
+    expect(missing.ok).toBe(false);
+    if (!missing.ok) {
+      expect(missing.code).toBe('INTERNAL_ERROR');
+    }
+  });
+
+  // Symlinking the host Node to a distinct path is POSIX-only; the CI host is
+  // Linux and the project does not claim Windows, so the behaviour is pinned
+  // there and skipped elsewhere.
+  it.runIf(process.platform !== 'win32')(
+    'spawns with the exact isolated managed environment and no child journal',
+    async () => {
+      const { root, home, cwd } = makeHome();
+      const nodeLink = join(root, 'node');
+      symlinkSync(process.execPath, nodeLink);
+      const fakeDsh = join(root, 'fake-dsh.mjs');
+      writeFileSync(
+        fakeDsh,
+        [
+          "import { writeFileSync } from 'node:fs';",
+          "import { join } from 'node:path';",
+          "writeFileSync(join(process.cwd(), 'observed-env.json'), JSON.stringify(process.env));",
+          "process.stdout.write('# == fake\\n- id: one\\n  name: pkg\\n');",
+          '',
+        ].join('\n'),
+      );
+
+      const port = createExpectedCompositionPort({ timeoutMs: 10_000 });
+      const outcome = await port.describeExpectedComposition(
+        {
+          nodeExecutable: nodeLink,
+          dshEntrypoint: fakeDsh,
+          profileName: 'web',
+          homeDirectory: home,
+          cwd,
+        },
+        new AbortController().signal,
+      );
+      expect(outcome.ok).toBe(true);
+      if (!outcome.ok) {
+        return;
+      }
+      // The dump is parsed through the same boundary as production.
+      expect(outcome.value.exitCode).toBe(0);
+      expect(outcome.value.rowCount).toBe(1);
+
+      const observed = JSON.parse(
+        readFileSync(join(cwd, 'observed-env.json'), 'utf8'),
+      ) as Record<string, string>;
+      const managedKeys = [
+        'DSH_AGENTS_HOME',
+        'DSH_HOME',
+        'DSH_TELEMETRY_DISABLED',
+        'HOME',
+        'NODE_NO_WARNINGS',
+        'PATH',
+        'TMPDIR',
+      ];
+      // Every managed key is present...
+      for (const key of managedKeys) {
+        expect(observed[key], `${key} must be present`).toBeDefined();
+      }
+      // ...and nothing else except macOS' own CoreFoundation text-encoding
+      // injection (not inherited from the host process).
+      const platformInjected = new Set(['__CF_USER_TEXT_ENCODING']);
+      const extras = Object.keys(observed).filter((key) => !managedKeys.includes(key) && !platformInjected.has(key));
+      expect(extras).toEqual([]);
+      // No host PATH inheritance and no credential variable.
+      expect(observed['PATH']).toBe([dirname(nodeLink), '/usr/bin', '/bin', '/usr/sbin', '/sbin'].join(':'));
+      expect(observed['HOME']).toBe(home);
+      expect(observed['DSH_HOME']).toBe(home);
+      expect(observed['DSH_AGENTS_HOME']).toBe(join(home, 'agents'));
+      expect(observed['TMPDIR']).toBe(join(home, '.tmp'));
+      expect(observed['DSH_TELEMETRY_DISABLED']).toBe('1');
+      expect(observed['NODE_NO_WARNINGS']).toBe('1');
+      // A credential injected into the runner must never reach the child.
+      expect(observed['DEEPSEEK_API_KEY']).toBeUndefined();
+      expect(Object.keys(observed).some((key) => /KEY|TOKEN|SECRET|CREDENTIAL|PASSWORD/i.test(key))).toBe(false);
+      // `journalProcess: false` must not create the install-child journal that
+      // the same DSH_HOME would otherwise derive.
+      expect(existsSync(join(dirname(home), '.hdsl-process-children'))).toBe(false);
+    },
+  );
 });
 
 const realDsh = process.env['HDSL_EXPECTED_COMPOSITION_DSH'];

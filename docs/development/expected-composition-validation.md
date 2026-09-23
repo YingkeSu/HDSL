@@ -50,11 +50,17 @@ env -i PATH=/usr/bin:/bin \
 - `!!js` 原文逐字保留（`config.unevaluated = true`），并断言原文**不含**求值后的路径/环境值。
 - `disabled: !!js …` → `disabled = null`、`disabledKnown = false`，不猜测布尔。
 - 服务：终态固定 `basis='dump-config'` / `runtimeVerification='unavailable'`；`bundles`/`patchReload` 取自 profile 声明；stderr 与 config 原文在跨桥前做**脱敏**（绝对路径 → `<path>`），`!!js` 仍保留；running → `ENVIRONMENT_BUSY`；无活动代 → `NOT_FOUND`；取消后迟到结果被忽略。
-- 渲染：强制文案“期望组成（dump）≠ 运行期 ACTIVE”；stderr 警告与解析诊断如实显示。
+- 截断绝不静默：为强制 `truncated` 诊断保留一个槽位，凡诊断/行/段任一下降都在终态回填；6000 行 `!!js` 饱和回归断言 `rowCount=5000` 且必含 `truncated`。
+- 默认 CI 内的 port 边界用例（真实 `createExpectedCompositionPort` → `runCommand` → `spawn`）：宿主 `process.execPath` 被拒；子进程环境恰为受管映射/策略键（无宿主继承、无凭据键；macOS 仅允许系统注入 `__CF_USER_TEXT_ENCODING`）；`journalProcess:false` 不落 `.hdsl-process-children`。
+- 渲染：强制文案“期望组成（dump）≠ 运行期 ACTIVE”；stderr 警告与解析诊断如实显示；切换选中环境后在途/陈旧 dump 被清空/丢弃。
 
 opt-in 真实受管调用（`tests/plugins/expected-composition.test.ts`）：
 
 ```sh
+# runner 为 Node 24.21.0（pnpm/vitest 的 process.execPath）；
+# HDSL_EXPECTED_COMPOSITION_NODE 必须指向一个**不同的** node 可执行文件，
+# 否则 createExpectedCompositionPort 按设计拒绝（避免宿主/Electron 二进制）。
+PATH="$HOME/tools/node-24.21.0/bin:$PATH" \
 HDSL_EXPECTED_COMPOSITION_REAL=1 \
 HDSL_EXPECTED_COMPOSITION_DSH=/private/tmp/dsh-015/node_modules/@deepseek-ai/dsh/lib/bin.js \
 HDSL_EXPECTED_COMPOSITION_NODE=/Users/suyingke/tools/node-25.6.1/bin/node \

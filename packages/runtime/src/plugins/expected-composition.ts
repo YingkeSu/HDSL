@@ -72,9 +72,24 @@ type DiagnosticCode = ExpectedCompositionDiagnostic['code'];
 interface MutableParseState {
   readonly diagnostics: ExpectedCompositionDiagnostic[];
   rows: number;
-  truncated: boolean;
+  /** The diagnostics buffer saturated; detail entries were dropped. */
+  diagnosticsTruncated: boolean;
+  /** A row, group or the dump itself was dropped; the view is incomplete. */
+  viewTruncated: boolean;
+  /** Message for the guaranteed `truncated` diagnostic (first cause wins). */
+  truncationMessage: string | null;
 }
 
+const hasTruncationDiagnostic = (state: MutableParseState): boolean =>
+  state.diagnostics.some((diagnostic) => diagnostic.code === 'truncated');
+
+/**
+ * Pushes one diagnostic. Truncation is a hard postcondition: whenever anything
+ * is dropped (a diagnostic itself, a row or a group) a `truncated` entry is
+ * guaranteed to survive even if the detail buffer is saturated. One slot is
+ * always reserved for it, and `ensureTruncationDiagnostic` back-fills at the
+ * end so the drop can never be silent (spec/contracts §3.6).
+ */
 const pushDiagnostic = (
   state: MutableParseState,
   code: DiagnosticCode,
@@ -82,16 +97,43 @@ const pushDiagnostic = (
   groupLabel: string | null,
   line: number | null,
 ): void => {
-  if (state.diagnostics.length >= EXPECTED_DIAGNOSTICS_MAX) {
-    state.truncated = true;
+  const bounded = message.length > 500 ? `${message.slice(0, 499)}…` : message;
+  if (code === 'truncated') {
+    const reason = state.truncationMessage ?? bounded;
+    state.truncationMessage = reason;
+    state.viewTruncated = true;
+    if (!hasTruncationDiagnostic(state) && state.diagnostics.length < EXPECTED_DIAGNOSTICS_MAX) {
+      state.diagnostics.push({ code, message: reason, groupLabel, line });
+    }
     return;
   }
-  state.diagnostics.push({
-    code,
+  // Reserve one slot for the mandatory truncation diagnostic.
+  if (state.diagnostics.length >= EXPECTED_DIAGNOSTICS_MAX - 1) {
+    state.diagnosticsTruncated = true;
+    state.truncationMessage ??= 'more diagnostics than the bounded view keeps';
+    return;
+  }
+  state.diagnostics.push({ code, message: bounded, groupLabel, line });
+};
+
+/** Back-fills the mandatory `truncated` diagnostic when a detail dropped it. */
+const ensureTruncationDiagnostic = (state: MutableParseState): void => {
+  if ((!state.viewTruncated && !state.diagnosticsTruncated) || hasTruncationDiagnostic(state)) {
+    return;
+  }
+  const message = state.truncationMessage ?? 'the composed view is incomplete';
+  const diagnostic: ExpectedCompositionDiagnostic = {
+    code: 'truncated',
     message: message.length > 500 ? `${message.slice(0, 499)}…` : message,
-    groupLabel,
-    line,
-  });
+    groupLabel: null,
+    line: null,
+  };
+  if (state.diagnostics.length < EXPECTED_DIAGNOSTICS_MAX) {
+    state.diagnostics.push(diagnostic);
+  } else {
+    // Defensive: never exceed the schema bound, but never go silent either.
+    state.diagnostics[state.diagnostics.length - 1] = diagnostic;
+  }
 };
 
 /**
@@ -391,7 +433,13 @@ const readRow = (
  * explicit diagnostics; nothing is silently dropped.
  */
 export const parseExpectedCompositionDump = (raw: string): ExpectedCompositionParsedDump => {
-  const state: MutableParseState = { diagnostics: [], rows: 0, truncated: false };
+  const state: MutableParseState = {
+    diagnostics: [],
+    rows: 0,
+    diagnosticsTruncated: false,
+    viewTruncated: false,
+    truncationMessage: null,
+  };
   if (raw.length > EXPECTED_DUMP_MAX) {
     pushDiagnostic(state, 'truncated', 'dump exceeds the bounded parse size', null, 1);
     return { groups: [], diagnostics: state.diagnostics, rowCount: 0 };
@@ -436,7 +484,6 @@ export const parseExpectedCompositionDump = (raw: string): ExpectedCompositionPa
   for (const section of sections) {
     if (groups.length >= EXPECTED_GROUPS_MAX) {
       pushDiagnostic(state, 'truncated', 'more sections than the bounded view keeps', null, section.startLine);
-      state.truncated = true;
       break;
     }
     let body = section.body;
@@ -457,7 +504,6 @@ export const parseExpectedCompositionDump = (raw: string): ExpectedCompositionPa
     for (const item of parsed.items) {
       if (state.rows >= EXPECTED_ROWS_MAX) {
         pushDiagnostic(state, 'truncated', 'more rows than the bounded view keeps', section.label, section.startLine);
-        state.truncated = true;
         break;
       }
       const row = readRow(body, item, state, section.label);
@@ -467,14 +513,12 @@ export const parseExpectedCompositionDump = (raw: string): ExpectedCompositionPa
       }
     }
     groups.push({ label: section.label.slice(0, 256), rows });
-    if (state.truncated) {
+    if (state.viewTruncated) {
       break;
     }
   }
 
-  if (state.truncated && state.diagnostics.length < EXPECTED_DIAGNOSTICS_MAX) {
-    pushDiagnostic(state, 'truncated', 'the composed view is incomplete', null, null);
-  }
+  ensureTruncationDiagnostic(state);
 
   return { groups, diagnostics: state.diagnostics, rowCount: state.rows };
 };

@@ -5,13 +5,18 @@
  * test renders the real component with `react-dom/server`. Neither is evidence
  * about a real managed dump or Electron.
  */
-import type { ExpectedCompositionView } from '@hdsl/contracts';
+import type { ContractResponse, ExpectedCompositionView } from '@hdsl/contracts';
 import { FIXTURE_IDS, FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 import { RendererController } from '../../apps/desktop/src/renderer/controller.js';
 import { renderExpectedComposition } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import { INITIAL_STATE, type RendererActions } from '../../apps/desktop/src/renderer/view-model.js';
-import { createTestRendererClient } from './support/contract-client.js';
+import {
+  createDeferred,
+  createStubRendererClient,
+  createTestRendererClient,
+  stubOk,
+} from './support/contract-client.js';
 
 const noopActions: RendererActions = {
   load: () => undefined,
@@ -87,6 +92,62 @@ describe('RendererController compositions.expected', () => {
     expect(tracked?.status).toBe('failed');
     expect(tracked?.error?.code).toBe('INTERNAL_ERROR');
     expect(controller.getState().expectedComposition).toBeNull();
+    await controller.dispose();
+  });
+
+  it('clears the previously loaded dump when the selected environment changes', async () => {
+    const { client } = createTestRendererClient();
+    const controller = new RendererController({ client });
+    await controller.load();
+    await controller.loadExpectedComposition();
+    await flush();
+    const loaded = controller.getState().expectedComposition;
+    expect(loaded).not.toBeNull();
+    expect(loaded?.environmentId).toBe(FIXTURE_IDS.environment.running);
+
+    controller.selectEnvironment(FIXTURE_IDS.environment.stopped);
+    expect(controller.getState().expectedComposition).toBeNull();
+    await controller.dispose();
+  });
+
+  it('drops an in-flight dump for environment A after switching to B', async () => {
+    const envA = FIXTURE_SEED.environments[0];
+    const envB = FIXTURE_SEED.environments[1];
+    if (envA === undefined || envB === undefined) {
+      throw new Error('fixture environments are required');
+    }
+    const deferred = createDeferred<ContractResponse<unknown>>();
+    const { client } = createStubRendererClient((method) => {
+      if (method === 'environments.list') return stubOk([envA, envB]);
+      if (method === 'catalog.list') return stubOk([]);
+      if (method === 'compositions.expected') return stubOk({ operationId: 'op-composition' });
+      if (method === 'operations.get') return deferred.promise;
+      if (method === 'operations.subscribe') return stubOk({ subscriptionId: 'sub-1' });
+      if (method === 'operations.unsubscribe') return stubOk(null);
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment(envA.id);
+
+    const pending = controller.loadExpectedComposition();
+    await flush();
+    // The user switches before the dump for A resolves.
+    controller.selectEnvironment(envB.id);
+    deferred.resolve(
+      stubOk({
+        id: 'op-composition',
+        environmentId: envA.id,
+        kind: 'composition',
+        phase: 'finished',
+        status: 'succeeded',
+        sequence: 1,
+        output: { ...view, environmentId: envA.id },
+      }),
+    );
+    await pending;
+    expect(controller.getState().expectedComposition).toBeNull();
+    expect(controller.getState().selectedEnvironmentId).toBe(envB.id);
     await controller.dispose();
   });
 });
@@ -178,5 +239,21 @@ describe('ExpectedComposition markup', () => {
       actions: noopActions,
     });
     expect(html).toBe('');
+  });
+
+  it('does not render a dump that belongs to a different environment', () => {
+    const html = renderExpectedComposition({
+      state: {
+        ...INITIAL_STATE,
+        environments: FIXTURE_SEED.environments,
+        selectedEnvironmentId: FIXTURE_IDS.environment.running,
+        expectedComposition: { ...view, environmentId: FIXTURE_IDS.environment.stopped },
+      },
+      actions: noopActions,
+    });
+    // The panel still renders, but the stale dump body must not.
+    expect(html).toContain('期望组成');
+    expect(html).not.toContain('@deepseek-ai/dsh-session-persistence-jsonl');
+    expect(html).not.toContain('warning: something happened');
   });
 });

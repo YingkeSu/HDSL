@@ -55,7 +55,12 @@ export function ExpectedComposition({
   const reading =
     tracked !== null && tracked.kind === 'composition' && !isOperationTerminal(tracked.status);
   const error = tracked !== null && tracked.kind === 'composition' ? tracked.error : null;
-  const view = state.expectedComposition;
+  // Defence in depth: never render a dump that belongs to a different
+  // environment than the one currently selected.
+  const view =
+    state.expectedComposition !== null && state.expectedComposition.environmentId === environment.id
+      ? state.expectedComposition
+      : null;
   const busy = selectedEnvironmentIsBusy(state);
   return (
     <section className="panel" aria-labelledby="expected-composition-heading">
