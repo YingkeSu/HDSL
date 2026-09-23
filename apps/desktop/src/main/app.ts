@@ -341,7 +341,7 @@ const bootstrap = async (options: DesktopAppOptions): Promise<void> => {
             type: 'warning',
             message: '存在未能确认停止的受管进程',
             detail:
-              '上次退出时未能证明一个受管进程已停止。为避免覆盖归属或并发写入，新建/启动已被禁用；请先人工确认并清理残留进程后重启。',
+              '上次退出时未能证明一个受管进程已停止。为避免覆盖归属或并发写入，新建/启动/切换版本已被禁用；请先人工确认并清理残留进程后重启。',
           });
         }
         return contractFail(API_VERSION, contractErrorForCode('ENVIRONMENT_BUSY'));

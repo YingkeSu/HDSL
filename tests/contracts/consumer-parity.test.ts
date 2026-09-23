@@ -33,6 +33,7 @@ describe('renderer/main/preload consume the same contract', () => {
       'environments.create',
       'environments.start',
       'environments.stop',
+      'environments.switchCombination',
       'environments.openWebUI',
       'operations.get',
       'operations.cancel',

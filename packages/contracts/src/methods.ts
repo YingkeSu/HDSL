@@ -32,6 +32,8 @@ export const CONTRACT_METHODS = [
   'environments.create',
   'environments.start',
   'environments.stop',
+  // 1.1 addition (#114, A2): in-environment composition switch transaction.
+  'environments.switchCombination',
   'environments.openWebUI',
   'operations.get',
   'operations.cancel',
@@ -79,6 +81,12 @@ export const methodInputSchemas = {
     requestId: requestIdSchema,
     environmentId: environmentIdSchema,
     expectedRevision: revisionSchema,
+  }),
+  'environments.switchCombination': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    catalogCombinationId: catalogCombinationIdSchema,
   }),
   'environments.openWebUI': sObject({
     requestId: requestIdSchema,
@@ -174,6 +182,10 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'environments.create': define('environments.create', { readOnly: false, idempotent: true }),
   'environments.start': define('environments.start', { readOnly: false, idempotent: true }),
   'environments.stop': define('environments.stop', { readOnly: false, idempotent: true }),
+  'environments.switchCombination': define('environments.switchCombination', {
+    readOnly: false,
+    idempotent: true,
+  }),
   'environments.openWebUI': define('environments.openWebUI', {
     readOnly: false,
     idempotent: true,

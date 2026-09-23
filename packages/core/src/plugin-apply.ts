@@ -43,6 +43,7 @@ import { EnvironmentStore, type EnvironmentRecord } from './environment-store.js
 import { IdempotencyStore } from './idempotency-store.js';
 import { OperationStore, isTerminalStatus, toOperationSnapshot } from './operation-store.js';
 import { managedProfileName, publishGenerationProfile } from './generation-profile.js';
+import { dshCompatibilityWarning, readGenerationDshVersion } from './generation-version.js';
 import { applyJournalRecordPath, generationPaths, type AppDataLayout } from './layout.js';
 import { reuseGenerationRuntime } from './generation-runtime-reuse.js';
 import { readTargetProfileCache, readTargetProfileCacheForRemoval } from './target-profile-cache.js';
@@ -307,7 +308,7 @@ export class ChangeApplyService {
     }
     // Busy/reconciliation-required is a client-facing condition and must be
     // reported before any wiring/internal check.
-    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId)) {
+    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId) || this.#hasOpenSwitchJournal(command.environmentId)) {
       return portFail('ENVIRONMENT_BUSY', 'another change transaction is in progress for this environment');
     }
     if (guarded.value.action.kind === 'install' && this.#port === undefined) {
@@ -369,19 +370,31 @@ export class ChangeApplyService {
     if (tryReadJsonFile(paths.manifestPath) === undefined) {
       return portFail('NOT_FOUND', 'the target generation has no install manifest');
     }
+    // D5/D6: a downgrade to an older DSH version is allowed but explained with a
+    // bounded, NON-BLOCKING warning. Same version (the Node-only axis) and an
+    // unknown version on either side produce no warning.
+    const targetDshVersion = readGenerationDshVersion(
+      this.#layout,
+      command.environmentId,
+      command.targetGenerationId,
+    );
+    const compatibilityWarning = dshCompatibilityWarning({
+      targetDshVersion,
+      lastStartedDshVersion: environment.lastStartedDshVersion,
+    });
     // Idempotent no-op when the target is already active.
     if (environment.activeGenerationId === command.targetGenerationId) {
       const operationId = newOperationId();
       this.#operations.create({ id: operationId, kind: 'restore', environmentId: command.environmentId, phase: 'switched', status: 'running', createdAt: this.#now().toISOString() });
       const created = this.#operations.read(operationId);
       if (created !== undefined) {
-        this.#operations.update(created, { status: 'succeeded', phase: 'finished', output: this.#generationSummary(command, record) }, this.#now().toISOString());
+        this.#operations.update(created, { status: 'succeeded', phase: 'finished', output: this.#generationSummary(command, record, compatibilityWarning) }, this.#now().toISOString());
       }
       this.#reconcileLedger(command.requestId, operationId);
       return portOk({ operationId });
     }
     // Single-active: refuse while another apply/restore transaction is pending.
-    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId)) {
+    if (this.#inFlight.has(command.environmentId) || this.#hasOpenJournal(command.environmentId) || this.#hasOpenSwitchJournal(command.environmentId)) {
       return portFail('ENVIRONMENT_BUSY', 'another change transaction is in progress for this environment');
     }
     if (
@@ -460,6 +473,7 @@ export class ChangeApplyService {
             profileName: typeof record.profileName === 'string' ? record.profileName : managedProfileName(command.targetGenerationId),
             active: true,
             createdAt: record.createdAt ?? this.#now().toISOString(),
+            dshCompatibilityWarning: compatibilityWarning ?? null,
           },
         },
         this.#now().toISOString(),
@@ -473,6 +487,7 @@ export class ChangeApplyService {
   #generationSummary(
     command: RestoreGenerationCommand,
     record: { readonly compositionDigest?: string; readonly profileName?: string; readonly createdAt?: string },
+    compatibilityWarning?: string,
   ): Record<string, unknown> {
     return {
       generationId: command.targetGenerationId,
@@ -481,6 +496,7 @@ export class ChangeApplyService {
       profileName: typeof record.profileName === 'string' ? record.profileName : managedProfileName(command.targetGenerationId),
       active: true,
       createdAt: record.createdAt ?? this.#now().toISOString(),
+      dshCompatibilityWarning: compatibilityWarning ?? null,
     };
   }
 
@@ -1099,6 +1115,26 @@ export class ChangeApplyService {
 
   #hasOpenJournal(environmentId: string): boolean {
     return this.#listJournals().some((journal) => journal.environmentId === environmentId);
+  }
+
+  /**
+   * Cross-service single-active guard: a core `switch` transaction targets the
+   * same environment and would race this apply/restore. Core owns that journal
+   * namespace (`transactions/`), so it is read directly rather than duplicated.
+   */
+  #hasOpenSwitchJournal(environmentId: string): boolean {
+    for (const name of readDirectoryNames(this.#layout.transactions)) {
+      if (!name.endsWith('.json')) {
+        continue;
+      }
+      const record = tryReadJsonFile<{ kind?: unknown; environmentId?: unknown }>(
+        join(this.#layout.transactions, name),
+      );
+      if (record?.kind === 'switch' && record.environmentId === environmentId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   #readJournal(transactionId: string): ApplyJournalRecord | undefined {

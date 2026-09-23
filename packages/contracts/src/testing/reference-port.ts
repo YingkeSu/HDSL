@@ -24,6 +24,7 @@ import type {
   PluginSearchCommand,
   PortOutcome,
   RevisionCommand,
+  SwitchCombinationCommand,
 } from '../context.js';
 import { portFail, portOk } from '../context.js';
 import type {
@@ -267,6 +268,30 @@ export class ReferenceContractPort implements ContractPort {
     this.#endpoints.delete(environment.id);
     const operation = this.#recordOperation('stop', environment.id, 'succeeded');
     this.effects.push(`stopEnvironment:${environment.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
+  switchCombination(command: SwitchCombinationCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    // D1: only a stopped environment may switch; the fixture double never
+    // auto-stops or auto-restarts a process.
+    if (environment.state !== 'stopped') {
+      return portFail('ENVIRONMENT_BUSY', 'the environment must be stopped to switch combinations');
+    }
+    this.#environments.set(environment.id, {
+      ...environment,
+      revision: environment.revision + 1,
+      stateVersion: environment.stateVersion + 1,
+      compositionDigest: 'c'.repeat(64),
+    });
+    const operation = this.#recordOperation('switch', environment.id, 'succeeded');
+    this.effects.push(`switchCombination:${environment.id}`);
     return portOk({ operationId: operation.id });
   }
 

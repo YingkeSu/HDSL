@@ -26,6 +26,7 @@ import {
   type PortOutcome,
   type RevisionCommand,
   type RuntimeCombination,
+  type SwitchCombinationCommand,
 } from '@hdsl/contracts';
 import type {
   PluginInspectCommand,
@@ -145,6 +146,10 @@ export const createEnvironmentContractPort = (
 
     stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
       return service.stopEnvironment(command);
+    },
+
+    switchCombination(command: SwitchCombinationCommand): PortOutcome<OperationRef> {
+      return service.switchCombination(command);
     },
 
     openWebUI(command: EnvironmentCommand): PortOutcome<OpenWebUIResult> {

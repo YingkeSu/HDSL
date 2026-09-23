@@ -42,6 +42,7 @@
 | environments.create | requestId, name, catalogCombinationId | OperationRef | name 1–80 字符；`catalogCombinationId` 必须映射到 CompositionLock；平台必须匹配 |
 | environments.start | requestId, environmentId, expectedRevision | OperationRef | 重复启动不重复进程；组合修订变化则拒绝 |
 | environments.stop | requestId, environmentId, expectedRevision | OperationRef | 仅终止自己拥有的进程；重复停止幂等 |
+| environments.switchCombination | requestId, environmentId, expectedRevision, catalogCombinationId | OperationRef | 1.1 追加（#114 A2）：把已有环境的活动组成切到另一已支持组合。**仅 `stopped` 环境可切换**（操作专属停止前置，不传播为全局规则）；新代安装+验证后原子切指针；提交前失败保旧代且不置 `error`；旧代保留；目标组合已活动 → 幂等 no-op；与 `environments.create` 不共用方法（create 失败清指针，switch 失败必须保指针） |
 | environments.openWebUI | requestId, environmentId | OpenWebUIResult | 仅 main 原生打开属于当前受管进程的已验证 loopback endpoint；renderer 不接收携带 token 的 URL |
 | operations.get | operationId | OperationSnapshot | 支持查询最终状态；携带该 operation 的 `sequence` 以便重连检测缺口 |
 | operations.cancel | requestId, operationId | OperationSnapshot | 尽力取消；提交后返回 CANNOT_CANCEL |
@@ -61,6 +62,8 @@
 `CompositionLock` 保留下载来源记录 `sources: { node, dsh }`（各含 `url` 与 `sha256`），用于复现时的来源追溯；但 `RuntimeArtifactRef` **不含** `url`，且 `compositionDigest` 只对子集 `schemaVersion`、`node`/`dsh` 的 `version/platform/arch/sha256`、排序后的 `plugins` 做规范化 JSON + SHA-256。`sources` 永不进入摘要：改动下载 URL（含镜像、签名查询串）不改变摘要。规范化 JSON 的函数在 `packages/contracts/src/digest.ts`，T004 负责对其字节做 SHA-256 与持久化。
 
 **1.1 追加（ADR 0005 D13/D21，S2/S3）**：`CompositionLock` 新增**可选、非摘要**字段 `pluginSources`（`Record<pluginId, PluginSourceLock>`，缺失=无插件来源记录）。它记录已安装插件的精确 `repository/commitSha/manifestSha256/closureLockSha256` 来源身份，供卸载时按精确身份重验（不从 live 文件自建信任）；与 `sources` 同理**不进入 `compositionDigest`**（摘要输入投影只选 `schemaVersion`/`node`/`dsh`/`plugins`）。`pluginSources` 的 map 键与 `PluginLock.id`、`InstalledPlugin.id`、remove 目标 `pluginId` 一致，均为 **npm 包名**（可带 scope，如 `@deepseek-ai/dsh-base`）——比不透明 id 规则宽（真实 in-box bundle 与已安装插件都是包名），上界 214 字符；负控见 `tests/contracts/plugins-installed.test.ts`。
+
+**1.1 追加（#114 A2）**：新增操作 `OperationKind 'switch'` 与方法 `environments.switchCombination`（见上表）。可达代数据模型新增：durable `generation.json.dshVersion`（additive，缺失按未知）、环境记录 `lastStartedGenerationId`/`lastStartedDshVersion`（additive，不进 `EnvironmentSummary`）。`generations.restore` 的终态 `GenerationSummary` 新增**可选**字段 `dshCompatibilityWarning`（`string | null`）：当目标代 DSH 版本严格早于环境记录「最近成功启动 DSH 版本」时给出**非阻断**数据兼容提示；同版本（Node 轴正控）与任一版本未知时**不**提示；提示不撤销已写数据、不做 schema 降级。本切片不声称跨版本 home 兼容（ADR 0006 D6 / R006）。`stopped` 前置是 `switchCombination` 操作专属，不改 #116 运行期 entry 的 live reload 语义。
 
 ## 事件
 
@@ -115,6 +118,7 @@
 | environments.create | environments-create-legal | name-too-long / name-path / illegal-id / missing-request-id / unknown-field → `INVALID_INPUT`；unknown-combination → `NOT_FOUND`；platform-mismatch / unverified → `UNSUPPORTED_COMBINATION` |
 | environments.start | environments-start-legal | illegal-id / missing-revision / negative-revision → `INVALID_INPUT`；unknown → `NOT_FOUND`；revision → `REVISION_CONFLICT`；busy → `ENVIRONMENT_BUSY` |
 | environments.stop | environments-stop-legal | unknown → `NOT_FOUND`；revision → `REVISION_CONFLICT`；not-running → `ENVIRONMENT_BUSY` |
+| environments.switchCombination | environments-switch-legal | busy（running） → `ENVIRONMENT_BUSY`；revision → `REVISION_CONFLICT`；unknown environment/combination → `NOT_FOUND`；unsupported/unverified → `UNSUPPORTED_COMBINATION`；missing-request-id → `INVALID_INPUT` |
 | environments.openWebUI | environments-openwebui-legal | missing-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；stopped / token-url / port-zero / port-too-high / port-huge / port-leading-zero → `WEBUI_UNAVAILABLE` |
 | operations.get | operations-get-legal | illegal-id / unknown-field → `INVALID_INPUT`；unknown → `NOT_FOUND` |
 | operations.cancel | operations-cancel-legal | missing-request-id → `INVALID_INPUT`；unknown → `NOT_FOUND`；final → `CANNOT_CANCEL` |
