@@ -17,11 +17,11 @@ QA only — no production changes, no `apps/desktop/**` edits, no root config or
 | Test-injection lane (`qa-entry`) diagnostics/credential | **Executed and passing** (injection lane, not the native menu/dialog) |
 | Fixture harness | **17/17 green**, always on |
 | Isolated real-browser authenticated page (injected opener) | **Executed and passing on `2cdea54`** — real Chrome + temp profile + CDP |
-| Real managed-process unexpected exit (contract boundary) | **Executed and passing** on current main (`E2E-FAULT-EXIT-01`) |
+| Real managed-process unexpected exit (contract boundary) | **Executed and passing** on this batch head `3f51e06` (`E2E-FAULT-EXIT-01`) |
 | Native menu+dialogs / real `shell.openExternal` / Windows x64 | **Blocked / manual** — see the validation doc |
 | Renderer auto-refresh after an unexpected managed-process exit | **Defect** — core converges to `stopped`, renderer stays `运行中` (issue #108) |
 
-Machine counts: default (gated) `20 passed | 21 skipped (41)`; the 21 opt-in cases run
+Machine counts (this batch head `3f51e06`): default (gated) `20 passed | 21 skipped (41)`; the 21 opt-in cases run
 only under their gates (see Run).
 
 `HDSL_E2E_DESKTOP=1` is the opt-in gate: the real matrix launches Electron, performs a

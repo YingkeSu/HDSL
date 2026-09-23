@@ -3,7 +3,7 @@
  * Controlled stand-in for the real DSH CLI, used only by T005 process tests.
  *
  * It reproduces the observable contract the process lifecycle depends on:
- * - accepts `web --no-open --host <h> --port <p>`;
+ * - accepts the production managed-launch argv (`--profile <p> --no-open --host <h> --port <p>`;
  * - prints `dsh web: http://<host>:<port>/?token=…` only after the HTTP server
  *   is listening (real readiness is verified by a loopback connect, not a
  *   sleep);

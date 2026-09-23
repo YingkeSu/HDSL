@@ -17,7 +17,9 @@
  *   self-built synthetic canary value (never a personal credential);
  * - a second `ProcessManager` on the same dataRoot that adopts both running
  *   processes via `recover()`, then stops them;
- * - host `HOME` / `~/.dsh` byte-level unchanged.
+ * - host-guard reports no change: `captureHostDefaults`/`diffHostDefaults`
+ *   compares HOME top-level for additions and the depth-4 tree of `~/.dsh` plus
+ *   the conventional HDSL app-data locations (sha256 only for files <= 256 KiB).
  *
  * Opt-in only:
  *   HDSL_QA_REAL_DSH=1 \
@@ -49,7 +51,6 @@ import { captureHostDefaults, diffHostDefaults } from './support/isolation.js';
 const enabled = process.env['HDSL_QA_REAL_DSH'] === '1';
 const keep = process.env['HDSL_EVIDENCE_KEEP'] === '1';
 const providedRoot = process.env['HDSL_QA_REAL_DSH_DATA_ROOT'];
-const dataRoot = providedRoot ?? mkdtempSync(join(tmpdir(), 'hdsl-t007-two-'));
 
 interface ManagedLaunch {
   readonly environmentId: string;
@@ -64,6 +65,9 @@ interface ManagedLaunch {
 
 describe.skipIf(!enabled)('real two-environment isolation and restart adoption (opt-in)', () => {
   it('starts two real environments concurrently, adopts both after a manager restart, and stops both', async () => {
+    // Created inside the test body (not at module scope) so a default run that
+    // skips this opt-in lane leaves no temporary directory behind.
+    const dataRoot = providedRoot ?? mkdtempSync(join(tmpdir(), 'hdsl-t007-two-'));
     const before = captureHostDefaults();
     const canary = `hdsl-t007-canary-${randomUUID()}`;
     const provider: OsCredentialProvider = {

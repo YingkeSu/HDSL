@@ -63,7 +63,14 @@ pnpm exec vitest run tests/integration/install tests/integration/process
 - **I｜注入 lane**：`qa-entry` 测试入口/注入 opener/注入凭据 setup；不能替代原生菜单或真实 `shell.openExternal`。
 - **H｜测试宿主**：`sender-frame-host.mjs`，纵深验证列，不是产品第一层防线。
 
-当前基线：`3dcb99273c61cc7f7c526aefbbf447a84142e098`（macOS 26.3 arm64 / Node 24.21.0 / Electron 44.4.3）。默认套件实测 `1029 passed | 28 skipped`。
+阶段 1 基线与**本批执行 head** 分开记录；仓库规则：R 层结果只对实际执行的精确 SHA 有效。
+
+| 角色 | 精确 SHA | 默认套件实测 |
+| --- | --- | --- |
+| 阶段 1 只读核查基线 | `3dcb99273c61cc7f7c526aefbbf447a84142e098` | `1029 passed \| 28 skipped` |
+| **本批（S1–S7）执行 head** | `3f51e066b5d196767dac8f0aee3b431b1c758c87` | `1030 passed \| 30 skipped`；`tests/e2e` 默认 `20 passed \| 21 skipped (41)` |
+
+环境（两行同一台机）：macOS 26.3 arm64 / Node 24.21.0 / pnpm 11.7.0 / Electron 44.4.3。本批新增用例（如 `argv-boundary`）只存在于本批 head；不得把本批计数当作基线计数。
 
 | FR | D｜确定性用例（`pnpm test`） | R｜真实边界（opt-in） | 未测 / 缺口 |
 | --- | --- | --- | --- |

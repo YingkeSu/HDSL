@@ -6,6 +6,13 @@ Owned paths: this directory and
 [`docs/development/process-validation.md`](../../../docs/development/process-validation.md).
 QA only — no production changes, no PR review.
 
+> Update (T007, 2026-09-23): the T005 module (`packages/runtime/src/{process,reconcile,credentials}`)
+> landed and #45/#31 are CLOSED. The Status table below is the **original planning
+> snapshot**, not current execution state; executed coverage now lives in
+> `process.integration.test.ts`, `lock*.integration.test.ts`,
+> `argv-boundary.integration.test.ts` and `two-environments.real.test.ts`.
+> See `scenarios/process-scenario-plan.ts` for the same historical note.
+
 ## Status
 
 | Item | State |
