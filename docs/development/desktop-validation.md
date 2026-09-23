@@ -12,6 +12,52 @@
 >
 > 真实 lane：`HDSL_E2E_FAULTS=1 pnpm exec vitest run tests/e2e/desktop.faults.real.test.ts` → **2 passed / 1 file（119.27s）**，无 `hdsl-e2e-run-*` 残留、无 keychain 残留。真实 UI 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 在首条切片**不做 UI 验收**（[#123](https://github.com/YingkeSu/HDSL/issues/123) 决议：产品入口固定 `--port 0`、就绪预算内部固定；不加测试专用 hook），只按 D 层 + 契约层验收。
 
+## #100 原生收尾复核（当前 main `9cc2759`）
+
+> 复核切片：issue [#100](https://github.com/YingkeSu/HDSL/issues/100)（本机 macOS 生产入口主流程收尾）。基线 `origin/main` = `9cc275947323b5836f3c86648d559d577fae3349`（2026-09-23）。本节只记录在**该精确 SHA** 上、用生产入口与已注册隔离临时根实际复跑的结果；不修改上方绑定 `2cdea54` / `fb5da94` 的历史记录。
+
+环境（本轮）：macOS 26.3（Build `25D125`）arm64；Node `24.21.0`；pnpm `11.7.0`；Electron `44.4.3`。
+
+### 本轮实际复跑（opt-in 真实/注入 lane）
+
+| lane | 命令（前缀 `pnpm exec vitest run`） | 结果 |
+| --- | --- | --- |
+| 真实窗口/IPC/信任/锁/键盘创建 | `HDSL_E2E_DESKTOP=1 tests/e2e/desktop.real.test.ts` | **9 passed / 1 file（61.69s）** |
+| 授权精确性 + 生产入口无 hook | `HDSL_E2E_DESKTOP=1 tests/e2e/desktop.findings.real.test.ts` | **2 passed / 1 file（41.08s）** |
+| 测试注入列（诊断导出 + 凭据引用） | `HDSL_E2E_DESKTOP=1 tests/e2e/desktop.injected.real.test.ts` | **3 passed / 1 file（62.10s）** |
+| 生产 React UI 启停 | `HDSL_E2E_GUI=1 tests/e2e/desktop.gui.real.test.ts` | **1 passed / 1 file（46.80s）** |
+| 正常退出/租约释放 | `HDSL_E2E_DESKTOP=1 tests/e2e/desktop.quit.real.test.ts` | **3 passed / 1 file（1.12s）** |
+| 受管进程异常退出 + 启动器崩溃重启对账 | `HDSL_E2E_FAULTS=1 tests/e2e/desktop.faults.real.test.ts` | **2 passed / 1 file（113.69s）** |
+| 隔离真实浏览器（注入 opener）认证页 | `HDSL_E2E_BROWSER=1 tests/e2e/desktop.browser.real.test.ts` | **1 passed / 1 file（45.88s）** |
+| 真实两环境隔离/并发启停/重启采纳 | `HDSL_QA_REAL_DSH=1 tests/integration/process/two-environments.real.test.ts` | **1 passed / 1 file（82.42s）**；`recoverResolutions=["adopted","adopted"]`、`hostHomeUntouched=true`、两环境 origin 互不相同 |
+
+默认套件（同 SHA）：`pnpm test` → **1183 passed | 32 skipped（1215；122 passed files / 13 skipped）**；`tests/e2e` 默认 → **20 passed | 22 skipped（42）**；`pnpm run typecheck` 与 `python3 scripts/check_repository.py` 均 PASS。
+
+### #100 验收项 → 当前 main 证据
+
+| #100 验收项 | 当前 main 证据 | 状态 |
+| --- | --- | --- |
+| 创建 | `E2E-CREATE-01`（纯键盘 → 真实受管 `npm ci` 安装 → 落盘 `environment.json`/`composition.lock.json`/`install-manifest.json` → `stopped`）；`E2E-WIN-02` 受控输入/焦点 | ✅ 通过 |
+| 不同组合的两环境隔离 | `two-environments.real.test.ts`：两个真实 DSH 并发、独立 loopback origin、宿主 HOME/`~/.dsh` 未变；manager 重启后两个真实进程均 `adopted` 后停止 | ✅ 通过 |
+| 启动/停止 | `E2E-GUI-START-STOP-01`：生产 React UI 真实鼠标点击 → 操作面板 + `运行中`/`已停止` 终态 | ✅ 通过 |
+| 正常退出 | `desktop.quit.real.test.ts`：SIGTERM 与 renderer `window.close()` 均 10s 内 `code 0`/无 signal/租约删除；不可确认释放时 `code 1` + 固定 `[hdsl] exit incomplete reason=` 信号、不阻塞原生模态（#88 回归） | ✅ 通过 |
+| 真实原生凭据引用导入（NSOpenPanel） | 无自动证据；`qa-entry --hdsl-qa-import-path` 注入列**不互代** | ❌ 未测（人工） |
+| 诊断导出（NSSavePanel） | 注入列 `E2E-QAENTRY-DIAG-01`：白名单 + 脱敏 + 幂等重放不重写；**原生保存框未测** | ⚠️ 注入列通过；原生未测 |
+| WebUI 打开（`shell.openExternal`） | 注入 opener 列 `E2E-BROWSER-01`：真实 Chrome + 注册临时 profile + CDP，rc2 应用身份断言 + 无 cookie 负向对照；**真实 `shell.openExternal` 未测** | ⚠️ 注入列通过；原生未测 |
+
+**结论**：#100 中不依赖第三方插件/契约冻结的自动化验收项，在 `9cc2759` 上均以生产入口 + 隔离临时根复跑通过。剩余两项原生入口（NSOpenPanel/NSSavePanel 与真实 `shell.openExternal`）以及真实上游 `.credentials.yaml` 排除，仍是**人工/外部条件**，当前没有安全可复现的自动化切片。
+
+### 原生项不可自动化的当前依据（未变）
+
+- Electron `dialog` 无 automation hook（本地 `electron.d.ts`：`showOpenDialogSync`/`showSaveDialogSync` 无测试钩子）；`shell.openExternal` 的 `OpenExternalOptions` 仅 `activate`/`workingDirectory`/`logUsage`，**无 profile 隔离参数**。
+- 当前宿主 AX：菜单项可 `AXPress`、原生面板窗口可按名观测，但面板 AX 元素树无可驱动控件；`osascript` 发送按键被拒 `error 1002`（**具体 TCC 类别未经独立证实**）。
+- 因此无法在**不接触个人默认浏览器 profile、不更改默认浏览器、不改系统授权、不使用个人凭据**的前提下稳定驱动；本切片不新增测试专用后门、不伪造原生通过。
+- 精确人工步骤与所需外部条件见下方「真实外部验收：可操作人工步骤」；本节不重复。
+
+### 本轮清理与边界
+
+无 `hdsl-e2e-run-*` 残留、无 `hdsl-qa-*` keychain 项、无残留 HDSL Electron 进程；注入列使用自建随机 keychain canary（`finally` 删除）与注册临时 Chrome profile。未使用个人凭据、未调用模型、未触碰 `~/.dsh` 或用户浏览器 profile。未改生产代码、未改 #116/#114/#97/#98 文件。
+
 ## 执行矩阵（2cdea54）
 
 真实 Electron 窗口 + 真实 CDP 驱动，全部带显式超时（无无界等待）：
