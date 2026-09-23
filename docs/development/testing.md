@@ -51,3 +51,46 @@ pnpm exec vitest run tests/integration/install tests/integration/process
 - [桌面 E2E](../../tests/e2e/README.md)：需要可运行 Electron 的桌面环境；真实 DSH 下载需要网络。
 
 跳过的测试不计为通过。历史结果保留在各验证记录中，新提交应记录本次实际执行的结果。
+
+## FR-001..FR-008 证据映射（T007）
+
+本表把 001 规格的每个 FR 映射到**可执行用例 ID**与**证据分层**，作为 T007 的完成条件。它不使用历史对话结论：标 `R` 的行只在注明的 opt-in 命令实际执行后成立，未执行时按“未测”读。
+
+分层口径：
+
+- **D｜确定性默认套件**：`pnpm test` 覆盖。真实生产代码 + 真实子进程/文件，但入口是受控替身（`fake-dsh.mjs` / `fixture-process.mjs` / 合成 tar / 内存端口）。
+- **R｜真实生产边界**：opt-in，真实受管 `npm ci` 安装、真实 DSH、真实 keychain、真实 production Electron。
+- **I｜注入 lane**：`qa-entry` 测试入口/注入 opener/注入凭据 setup；不能替代原生菜单或真实 `shell.openExternal`。
+- **H｜测试宿主**：`sender-frame-host.mjs`，纵深验证列，不是产品第一层防线。
+
+当前基线：`3dcb99273c61cc7f7c526aefbbf447a84142e098`（macOS 26.3 arm64 / Node 24.21.0 / Electron 44.4.3）。默认套件实测 `1029 passed | 28 skipped`。
+
+| FR | D｜确定性用例（`pnpm test`） | R｜真实边界（opt-in） | 未测 / 缺口 |
+| --- | --- | --- | --- |
+| FR-001 隔离目录/ID/默认 home | `tests/core/creation.test.ts` › creates two independent environments…；`tests/integration/install/install.integration.test.ts` › `INST-ISO-01F`、`INST-HOME-01` | `INST-ISO-01`（`HDSL_QA_REAL_INSTALL=1`）；`tests/integration/process/two-environments.real.test.ts`（`HDSL_QA_REAL_DSH=1`）：两环境并发启动、目录/origin 互不相同、宿主 HOME 不变 | — |
+| FR-002 精确版本/平台/来源/SHA-256 | `tests/install/composition.test.ts`（仅 macOS ARM64、digest golden）；`tests/install/download.test.ts`（`DIGEST_MISMATCH`）；`tests/core/creation.test.ts` › rejects unknown, unverified and platform-mismatched…；`INST-DIG-01`、`INST-CAT-01` | `INST-COMP-REAL-01`（真实闭包 manifest/lock/preflight）；`two-environments.real.test.ts` 的 `npm-ci` 安装 | Windows/Linux 组合不在 catalog（未测平台） |
+| FR-003 适配器/参数数组/显式 env/无 shell | `tests/process/lifecycle.test.ts` › injects credentials through the explicit environment…；`tests/process/core-loader-wiring.test.ts`；`tests/integration/process/process.credential-wiring.integration.test.ts` › `PROCESS-ENV-MAP01`；**`tests/integration/process/argv-boundary.integration.test.ts`（S4：exact argv + 无 `sh -c`）** | `tests/process/real-process.evidence.test.ts`（`HDSL_REAL_PROCESS=1`） | — |
+| FR-004 有界就绪/仅 loopback | `tests/process/readiness.test.ts`；`tests/process/webui-bootstrap.test.ts`；`tests/desktop/webui.test.ts`；`tests/contracts/security.test.ts` | `tests/process/real-webui-bootstrap.evidence.test.ts`（`HDSL_REAL_WEBUI_BOOTSTRAP=1`）；`E2E-BROWSER-01`（`HDSL_E2E_BROWSER=1`，I 列） | 真实 `shell.openExternal`（→ T008a）；真实 Electron 上的 `START_TIMEOUT`/`PORT_UNAVAILABLE` 到 UI（产品无注入钩子，保持未测） |
+| FR-005 幂等启停/进程退出/不误杀 | `tests/process/lifecycle.test.ts`；`tests/integration/process/process.integration.test.ts`（`PROC-READY/TREE/PORT/TIMEOUT/CRASH/PID/OWN`）；`tests/core/data-root-lock.process.test.ts` | `tests/process/real-process.evidence.test.ts`；`two-environments.real.test.ts`（真实启停 + 重启采纳）；`E2E-FAULT-EXIT-01`（`HDSL_E2E_FAULTS=1`）**contract 侧** `stopped` | 真实 UI 自动反映意外退出：**缺陷 #108**（core 已 stopped，渲染器仍「运行中」） |
+| FR-006 operation 阶段/终态/可重试 | `tests/contracts/{fixtures,idempotency,boundary}.test.ts`；`tests/core/lifecycle-coordination.test.ts`；`tests/renderer/ui.test.ts`（进度已知/未知、受控错误码 + retry） | `E2E-GUI-START-STOP-01`（`HDSL_E2E_GUI=1`）；`E2E-FAULT-EXIT-01` contract 侧 `PROCESS_EXITED` 收敛 | UI 侧终态展示：**缺陷 #108** |
+| FR-007 脱敏/凭据引用/上游本地产物 | `tests/credentials/*`；`tests/contracts/security.test.ts`；`tests/desktop/main-diagnostics.test.ts`（白名单 + canary） | `tests/credentials/keychain-canary.evidence.test.ts`（`HDSL_KEYCHAIN_CANARY=1`）；`tests/process/real-process.evidence.test.ts`（launch record 无 canary/`token=`）；`E2E-QAENTRY-DIAG-01`（`HDSL_E2E_DESKTOP=1`，I 列；向真实 home 植入 `.credentials.yaml`+`logs/` 合成 canary 并断言导出排除） | 真实原生菜单导入/导出（→ T008a） |
+| FR-008 失败诊断/重启对账 | `tests/core/creation.test.ts`（journal/restart/idempotency）；`tests/process/reconcile.test.ts`；`INST-JRN-02`、`INST-IDEM-02`（真实子进程重启） | `two-environments.real.test.ts`（`HDSL_QA_REAL_DSH=1`）：新 `ProcessManager` 对同一 dataRoot 调用 `recover()`，两个真实 DSH 进程均为 `adopted`，随后停止 | 真实 Electron 应用崩溃/重启对账（仅 contract/进程层已验） |
+
+### 复跑命令
+
+```sh
+# D 层：默认套件
+pnpm test
+
+# R 层（各自独立临时根；真实网络/安装/Electron；无模型调用）
+HDSL_QA_REAL_INSTALL=1  pnpm exec vitest run tests/install/real-install.evidence.test.ts
+HDSL_REAL_PROCESS=1     pnpm exec vitest run tests/process/real-process.evidence.test.ts
+HDSL_REAL_WEBUI_BOOTSTRAP=1 pnpm exec vitest run tests/process/real-webui-bootstrap.evidence.test.ts
+HDSL_KEYCHAIN_CANARY=1  pnpm exec vitest run tests/credentials/keychain-canary.evidence.test.ts
+HDSL_QA_REAL_DSH=1      pnpm exec vitest run tests/integration/process/two-environments.real.test.ts
+HDSL_E2E_DESKTOP=1      pnpm exec vitest run tests/e2e/desktop.injected.real.test.ts
+HDSL_E2E_GUI=1          pnpm exec vitest run tests/e2e/desktop.gui.real.test.ts
+HDSL_E2E_FAULTS=1       pnpm exec vitest run tests/e2e/desktop.faults.real.test.ts
+```
+
+`R` 层结果只对实际执行的精确 SHA 有效；候选变更后必须复跑，不得引用旧结果。
