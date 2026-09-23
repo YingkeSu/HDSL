@@ -33,8 +33,10 @@
  * `PORT_UNAVAILABLE` / `START_TIMEOUT` are intentionally *not* driven here: the
  * production UI only ever starts the managed DSH with `--port 0` (OS-assigned)
  * and a fixed internal readiness budget, so neither terminal code is reachable
- * without adding a product backdoor. Those stay recorded as untested for the
- * real UI in the FR mapping; this lane must not fake them.
+ * through a product entry. Issue #123 decided to exclude both from first-slice
+ * real-UI acceptance (no test-only product hook); the acceptance surface is the
+ * deterministic D-layer/contract coverage plus the renderer's controlled-code
+ * rendering. This lane must not fake them.
  *
  * Opt-in with `HDSL_E2E_FAULTS=1`.
  */
