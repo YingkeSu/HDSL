@@ -183,7 +183,8 @@ try {
     parsed.hasIpc === false &&
     typeof rootLength === 'number' &&
     rootLength > 0 &&
-    parsed.members.join(',') === 'call,onOperationUpdated,selectEnvironment';
+    parsed.members.join(',') ===
+      'call,onEnvironmentUpdated,onOperationUpdated,selectEnvironment';
   await finish(ok ? 0 : 1, {
     ok,
     dataRoot,

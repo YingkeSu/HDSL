@@ -7,18 +7,22 @@
  *
  * The bridge is treated as untrusted input: the client re-validates the response
  * envelope against the frozen version, and every pushed event is validated
- * against `operationUpdatedEventSchema` before it can reach the controller. The
- * renderer never receives a token-bearing URL (only a loopback origin).
+ * against either `operationUpdatedEventSchema` (operation progress) or
+ * `environmentUpdatedEventSchema` (a managed-process-exit projection) before it
+ * can reach the controller. The renderer never receives a token-bearing URL
+ * (only a loopback origin).
  */
 import {
   API_VERSION,
   CONTRACT_METHODS,
   contractErrorForCode,
   contractFail,
+  environmentUpdatedEventSchema,
   isPlainRecord,
   operationUpdatedEventSchema,
   type ContractMethod,
   type ContractResponse,
+  type EnvironmentSummary,
   type OperationUpdatedEvent,
   type ValidationIssue,
 } from '@hdsl/contracts';
@@ -35,6 +39,7 @@ export const isPreloadBridge = (value: unknown): value is PreloadBridge => {
   return (
     typeof value['call'] === 'function' &&
     typeof value['onOperationUpdated'] === 'function' &&
+    typeof value['onEnvironmentUpdated'] === 'function' &&
     typeof value['selectEnvironment'] === 'function'
   );
 };
@@ -61,6 +66,15 @@ export const createBridgeEventSource = (bridge: PreloadBridge): RendererEventSou
       const parsed = operationUpdatedEventSchema(raw, 'event', issues);
       if (parsed !== undefined) {
         listener(parsed);
+      }
+    });
+  },
+  subscribeEnvironment(listener: (environment: EnvironmentSummary) => void): () => void {
+    return bridge.onEnvironmentUpdated((raw) => {
+      const issues: ValidationIssue[] = [];
+      const parsed = environmentUpdatedEventSchema(raw, 'event', issues);
+      if (parsed !== undefined) {
+        listener(parsed.environment);
       }
     });
   },

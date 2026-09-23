@@ -145,6 +145,65 @@ describe('DesktopIpcHost subscription scope and quota', () => {
   });
 });
 
+describe('DesktopIpcHost environment projection', () => {
+  it('broadcasts a validated environment summary to every open window', () => {
+    const { host, port, sent } = buildHost();
+    const listed = port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const base = listed.value[0];
+    expect(base).toBeDefined();
+    if (base === undefined) {
+      return;
+    }
+    const environment = {
+      ...base,
+      state: 'stopped' as const,
+      stateVersion: base.stateVersion + 1,
+    };
+    expect(host.broadcastEnvironmentUpdate(environment)).toBe(2);
+    expect(sent[1]).toEqual([{ environment }]);
+    expect(sent[2]).toEqual([{ environment }]);
+  });
+
+  it('drops an invalid projection instead of forwarding it', () => {
+    const { host, sent } = buildHost();
+    const invalid = { id: 'bad id' } as unknown as Parameters<
+      typeof host.broadcastEnvironmentUpdate
+    >[0];
+    expect(host.broadcastEnvironmentUpdate(invalid)).toBe(0);
+    expect(sent[1]).toEqual([]);
+    expect(sent[2]).toEqual([]);
+  });
+
+  it('keeps delivering to the remaining windows when one sender throws', () => {
+    const { port } = createReferenceRuntime();
+    const host = new DesktopIpcHost({ port, policy: { allowedDocumentUrl: DOCUMENT_URL } });
+    const received: unknown[] = [];
+    host.openWindow({
+      webContentsId: 1,
+      send: () => {
+        throw new Error('window destroyed');
+      },
+    });
+    host.openWindow({ webContentsId: 2, send: (event) => received.push(event) });
+    const listed = port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined) {
+      return;
+    }
+    expect(host.broadcastEnvironmentUpdate(environment)).toBe(1);
+    expect(received).toEqual([{ environment }]);
+  });
+});
+
 describe('DesktopIpcHost selection', () => {
   it('stores only a selection that resolves in the current environment list', async () => {
     const { host, port } = buildHost();

@@ -371,6 +371,12 @@ const bootstrap = async (options: DesktopAppOptions): Promise<void> => {
       return undefined;
     },
   });
+  // FR-005 projection: a managed process that exits on its own updates core
+  // state outside any renderer-issued operation. Forward that authoritative
+  // summary to every window so the UI converges without a manual refresh.
+  created.onEnvironmentChanged((environment) => {
+    ipcHost?.broadcastEnvironmentUpdate(environment);
+  });
   registerIpc(options);
   await createLauncherWindow();
   rebuildMenu(options);

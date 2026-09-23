@@ -57,7 +57,12 @@ describe.skipIf(!ENABLED)('desktop real E2E (frozen candidate 2cdea54)', () => {
       ),
     ) as Record<string, unknown>;
     expect(bridge['has']).toBe(true);
-    expect(bridge['members']).toEqual(['call', 'onOperationUpdated', 'selectEnvironment']);
+    expect(bridge['members']).toEqual([
+      'call',
+      'onEnvironmentUpdated',
+      'onOperationUpdated',
+      'selectEnvironment',
+    ]);
     expect(bridge['require']).toBe('undefined');
     expect(bridge['process']).toBe('undefined');
     expect(bridge['ipc']).toBe('undefined');

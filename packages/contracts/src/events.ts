@@ -17,6 +17,7 @@
  */
 import { operationIdSchema, subscriptionIdSchema } from './ids.js';
 import {
+  environmentSummarySchema,
   operationPhaseSchema,
   operationStatusSchema,
   sanitizeOperationPhase,
@@ -42,6 +43,23 @@ export const operationUpdatedEventSchema = sObject({
   progress: sOptional(sNumber({ min: 0, max: 100 })),
 });
 export type OperationUpdatedEvent = Infer<typeof operationUpdatedEventSchema>;
+
+/**
+ * `environment.updated` projects one environment's authoritative summary to the
+ * renderer when its state changed **without** a renderer-issued operation — a
+ * managed process exiting on its own (FR-005).
+ *
+ * It carries the exact same bounded, secret-free {@link EnvironmentSummary} as
+ * `environments.list`, so the renderer merges the pushed projection instead of
+ * inventing local state or polling. `stateVersion` is monotonic, so a late
+ * event can never regress a newer list read.
+ */
+export const ENVIRONMENT_UPDATED_CHANNEL = 'environment.updated' as const;
+
+export const environmentUpdatedEventSchema = sObject({
+  environment: environmentSummarySchema,
+});
+export type EnvironmentUpdatedEvent = Infer<typeof environmentUpdatedEventSchema>;
 
 interface SubscriptionEntry {
   readonly operationId: string | null;

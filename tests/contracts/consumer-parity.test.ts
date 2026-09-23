@@ -6,11 +6,13 @@
 import {
   API_VERSION,
   CONTRACT_METHODS,
+  ENVIRONMENT_UPDATED_CHANNEL,
   OPERATION_UPDATED_CHANNEL,
 } from '@hdsl/contracts';
 import { MAIN_CONTRACT_API_VERSION } from '../../apps/desktop/src/main/contract.js';
 import {
   PRELOAD_CONTRACT_METHODS,
+  PRELOAD_ENVIRONMENT_UPDATED_CHANNEL,
   PRELOAD_OPERATION_UPDATED_CHANNEL,
 } from '../../apps/desktop/src/preload/index.js';
 import { RENDERER_CONTRACT_API_VERSION } from '../../apps/desktop/src/renderer/contract.js';
@@ -47,8 +49,10 @@ describe('renderer/main/preload consume the same contract', () => {
     ]);
   });
 
-  it('exposes a single fixed event channel', () => {
+  it('exposes fixed event channels for operation progress and environment state', () => {
     expect(PRELOAD_OPERATION_UPDATED_CHANNEL).toBe(OPERATION_UPDATED_CHANNEL);
     expect(OPERATION_UPDATED_CHANNEL).toBe('operation.updated');
+    expect(PRELOAD_ENVIRONMENT_UPDATED_CHANNEL).toBe(ENVIRONMENT_UPDATED_CHANNEL);
+    expect(ENVIRONMENT_UPDATED_CHANNEL).toBe('environment.updated');
   });
 });
