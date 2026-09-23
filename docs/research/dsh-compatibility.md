@@ -203,6 +203,36 @@ DSH_HOME=<env-home> node <install>/node_modules/@deepseek-ai/dsh/lib/bin.js \
 - 未找到上游用户级 pack/registry 证据（“未找到证据”，非“不支持”）。
 - 上游处于 developer preview，`latest` dist-tag 会漂移；catalog 必须固定精确版本 + tag commit + tarball SHA-256。
 
+<a id="r007"></a>
+
+## R007 — A2 Tier 2 候选 `0.1.7-rc.1`（只读来源复核，2026-09-24）
+
+“纳入第二个 DSH 版本”曾是 A2 Tier 2 的阻塞项。按**只读**来源（public npm registry 元数据、GitHub tag/release、上游 tag 源码）收敛为 `@deepseek-ai/dsh@0.1.7-rc.1`；未安装、未执行任何 DSH 代码、未使用任何凭据。tarball 摘要另行下载后**独立重算**。
+
+| 项 | 值 |
+| --- | --- |
+| 版本 | `0.1.7-rc.1` |
+| 来源 | `https://registry.npmjs.org/@deepseek-ai/dsh/-/dsh-0.1.7-rc.1.tgz` |
+| 发布时间 | `2026-09-23T13:44:12.289Z` |
+| registry dist-tags | `next` → `0.1.7-rc.1`；`latest` → `0.1.5-rc.3`；`alpha` → `0.1.7-alpha.2`（**dist-tag 不构成支持**） |
+| GitHub tag → commit | `dsh-v0.1.7-rc.1` → `46a7f68b0922371ce7144b668b90e377d8e799f4`（GitHub API 复核一致） |
+| GitHub Release | 存在，`prerelease: true` |
+| tarball SHA-256（独立重算） | `efc7f91923ae5e7bc35a654fd80a8eee9d36ed05a141ce61083973182d78cd42` |
+| npm `dist.shasum`（sha1，重算一致） | `780753d730eb92564148e3039ed758088d34e9c5` |
+| npm `dist.integrity`（sha512，重算一致） | `sha512-O1K076aCmqE+h4fB5J+mi3twNSAnh26OqHepaqvS5f1tccFnxhVyGpUmjcncVM5x1SX4niznmvsGrsRo9p733A==` |
+| 根 `engines.node`（tag 源码） | `^22.19.0 \|\| >=24.0.0` |
+| `packageManager` | `pnpm@11.7.0` |
+| `SESSION_FORMAT_VERSION`（tag 源码 `packages/core/session/src/types.ts`） | `4`（`0.1.5-rc.2` = `3`） |
+| 基线 | `0.1.5-rc.2` sha256 `f4c54839…7480`，session format `3` |
+
+关键依赖边界：`0.1.7-rc.1` 闭包解析到 `@deepseek-ai/cordis 4.0.4` / `cordis-plugin-loader 1.0.5` / `cordis-plugin-timer 1.1.6` / `cordis-plugin-include 1.0.9`，**无** `cordis-plugin-hmr`；基线 `rc.2` 闭包仍 pin `cordis 4.0.2` / `loader 1.0.3` / `timer 1.1.4` / `include 1.0.7`。两闭包独立存在，互不改写（`packages/runtime/catalog/dsh-0.1.7-rc.1/**`）。
+
+HDSL 支持只来自证据：`0.1.7-rc.1` 在 macOS ARM64 的真实安装/启动/停止与跨版本回退证据见 [version-switch-validation.md §5](../development/version-switch-validation.md#5-tier-2-真实跨版本证据131已运行)。未验证平台（Windows/Linux）保持未测。
+
+### R006 补充（0.1.7 边界）
+
+R006 记录 rc.2 / 0.1.6-alpha.2 的 `SESSION_FORMAT_VERSION = 3`。A2 Tier 2 复核确认 `0.1.7-rc.1` 提升到 `4`，带 `v3→v4` 迁移链，且旧版对更高格式 fail-closed。这是 HDSL `generations.restore` 降级提示要解释的真实数据边界；HDSL 自身**不**迁移、不回滚、不撤销新版写入。
+
 ## 复现步骤
 
 ```sh

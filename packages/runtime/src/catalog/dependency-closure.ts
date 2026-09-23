@@ -1,14 +1,14 @@
 /**
- * The audited DSH dependency closure.
+ * The audited DSH dependency closures.
  *
- * `@deepseek-ai/dsh@0.1.5-rc.2` declares ~60 direct dependencies and resolves
- * to 585 packages, so installing only the top-level tarball does not produce a
- * runnable CLI. The frozen `CompositionLock` shape has no field for a transitive
- * tree, so the closure is shipped as an internal catalog asset next to the
- * catalog module instead:
+ * Each audited DSH release declares dozens of direct dependencies and resolves
+ * to hundreds of packages, so installing only the top-level tarball does not
+ * produce a runnable CLI. The frozen `CompositionLock` shape has no field for a
+ * transitive tree, so each closure is shipped as an internal catalog asset next
+ * to the catalog module instead:
  *
  * ```text
- * packages/runtime/catalog/dsh-0.1.5-rc.2/
+ * packages/runtime/catalog/dsh-<version>/
  *   package.json       canonical npm root project
  *   package-lock.json  lockfileVersion 3, integrity for every package
  *   closure.json       binding metadata (dsh sha256 + lock sha256 + tool versions)

@@ -25,9 +25,11 @@
 
 - [x] T201 renderer「切换版本」控件 + 回退结果非阻断展示提示（独立组件文件
   `SwitchVersion.tsx`，不编辑 A1 列表组件）（#132，UI-only，未新增事务语义）。
-- [ ] T202 扩展支持范围：纳入第二个 DSH 版本（安装/验证证据），单独 PR，改
-  `packages/runtime/src/catalog/**`。
-- [ ] T203 Tier 2 跨版本真实回退证据与数据兼容提示实测。
+- [x] T202 扩展支持范围：纳入第二个 DSH 版本 `0.1.7-rc.1`（独立组合 + 独立闭包 +
+  安装/验证证据），改 `packages/runtime/src/catalog/**`；基线 `0.1.5-rc.2` 组合 id/字节
+  不变；`CATALOG_REVISION` 更新（#131）。
+- [x] T203 Tier 2 跨版本真实回退证据与数据兼容提示实测（macOS ARM64 opt-in，
+  `tests/install/real-cross-version.evidence.test.ts`）（#131）。
 
 ## 停止条件
 

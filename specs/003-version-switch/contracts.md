@@ -95,3 +95,18 @@ planned → staged → verified → committed(activeGenerationId 原子写入) �
   operation output 携带 `dshCompatibilityWarning`（有界、无路径、无秘密）。
 - 提示**不阻断**恢复；不撤销/不删除新代写入的数据；不做 schema 降级。
 - 同版本、升级、任一版本未知 → 无提示。
+
+## 7. Catalog 扩展（#131，无 schema 变更）
+
+- `catalog.list` 现在返回 4 个已受审组合：Node `22.19.0`/`24.21.0` × DSH
+  `0.1.5-rc.2`/`0.1.7-rc.1`。组合 id 仍为 opaque/path-safe（`.` 替换为 `_`），
+  既有 rc.2 组合 id 与字节不变。
+- `versions.dsh` 的 `supported`/`catalogCombinationIds` 仍从 `catalog.list` 的
+  `compatibility.status === 'verified'` 组合派生；`latest`/`next`/`alpha` dist-tag
+  不构成支持（未经审计的版本保持 `supported: false`）。
+- 新增组合自带独立依赖闭包资产（`catalog/dsh-0.1.7-rc.1/{package.json,
+  package-lock.json,closure.json}`）；`dshSha256`/`lockSha256`/`rootIntegritySha512`/
+  `packageCount` 在构建/安装时校验，不静默升级既有 rc.2 组合。
+- `generation.json.dshVersion`、`environment.json.lastStartedDshVersion`、
+  `GenerationSummary.dshCompatibilityWarning` 字段不变；Tier 2 只是用真实第二个 DSH
+  版本补真实触发路径。

@@ -8,6 +8,7 @@
 import { describe, expect, it } from 'vitest';
 import { dshVersionListingSchema, type RuntimeCombination } from '@hdsl/contracts';
 import {
+  VERIFIED_COMBINATIONS,
   auditedDshVersions,
   createNpmDshVersionSource,
   type VersionFetchLike,
@@ -188,5 +189,47 @@ describe('createNpmDshVersionSource', () => {
 
   it('exposes the audited versions from the catalog', () => {
     expect(auditedDshVersions(CATALOG)).toEqual(['0.1.5-rc.2']);
+  });
+});
+
+describe('real audited catalog coverage (A2 Tier 2 / #131)', () => {
+  it('marks exactly the two audited DSH releases supported, regardless of dist-tags', async () => {
+    // Source facts: `latest` still points at the baseline line while `next`/`alpha`
+    // point at unaudited versions. Support must come from the combination table.
+    const body = {
+      'dist-tags': { latest: '0.1.5-rc.3', next: '0.1.7-rc.1', alpha: '0.1.7-alpha.2' },
+      versions: {
+        '0.1.5-rc.2': { name: '@deepseek-ai/dsh' },
+        '0.1.5-rc.3': { name: '@deepseek-ai/dsh' },
+        '0.1.7-alpha.2': { name: '@deepseek-ai/dsh' },
+        '0.1.7-rc.1': { name: '@deepseek-ai/dsh' },
+      },
+      time: {},
+    };
+    const fetch: VersionFetchLike = () => Promise.resolve(jsonResponse(body));
+    const source = createNpmDshVersionSource({ fetch, catalog: VERIFIED_COMBINATIONS, now: CLOCK });
+    const outcome = await source.listVersions(new AbortController().signal);
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    const byVersion = new Map(outcome.value.versions.map((entry) => [entry.version, entry]));
+
+    const baseline = byVersion.get('0.1.5-rc.2');
+    expect(baseline?.supported).toBe(true);
+    expect(baseline?.catalogCombinationIds).toEqual([
+      'darwin-arm64-node22_19_0-dsh0_1_5-rc_2',
+      'darwin-arm64-node24_21_0-dsh0_1_5-rc_2',
+    ]);
+
+    const tier2 = byVersion.get('0.1.7-rc.1');
+    expect(tier2?.supported).toBe(true);
+    expect(tier2?.catalogCombinationIds).toEqual([
+      'darwin-arm64-node22_19_0-dsh0_1_7-rc_1',
+      'darwin-arm64-node24_21_0-dsh0_1_7-rc_1',
+    ]);
+
+    // Dist-tags and unaudited versions must not fabricate support.
+    expect(byVersion.get('0.1.5-rc.3')?.supported).toBe(false);
+    expect(byVersion.get('0.1.7-alpha.2')?.supported).toBe(false);
+    expect(auditedDshVersions(VERIFIED_COMBINATIONS)).toEqual(['0.1.5-rc.2', '0.1.7-rc.1']);
   });
 });

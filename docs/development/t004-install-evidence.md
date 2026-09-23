@@ -142,3 +142,12 @@ P1（issue #37）已按修复不变量重做：
 - 磁盘不足只用了注入守卫与 `ENOSPC→DISK_FULL` 映射；未在真实写满卷上复现（QA #31 的 tiny-volume 方案可覆盖）。
 - 摘要跨平台“相同语义”只证明算法平台无关（golden 摘要由独立 `shasum` 复算），未在第二平台实测。
 - 跨进程/dataRoot 锁与安装阶段子进程树终止未实现（见上）。
+
+## #131 更新（A2 Tier 2）：安装矩阵扩展到 4 组合
+
+本文件的 DSH `0.1.5-rc.2` 证据仍有效且字节未变。A2 Tier 2（#131）新增第二个已受审
+DSH 版本 `0.1.7-rc.1`（独立闭包资产
+`packages/runtime/catalog/dsh-0.1.7-rc.1/{package.json,package-lock.json,closure.json}`），
+并使 `tests/install/real-install.evidence.test.ts` 覆盖全部 4 个已受审组合
+（Node `22.19.0`/`24.21.0` × DSH `0.1.5-rc.2`/`0.1.7-rc.1`）。真实结果与逐组合摘要见
+[version-switch-validation.md §5.3](version-switch-validation.md#53-受管安装矩阵hdsl_real_install4-组合)。
