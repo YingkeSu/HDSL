@@ -58,7 +58,7 @@ contract dispatcher；离线合成 tarball，仍校验 SHA-256；两个组合共
 ## 3. 边界与已知限制
 
 - 本切片只覆盖 Node 轴 + 切换事务；**不**承诺跨版本 home 兼容（ADR 0006 D6 / R006）。
-- renderer「切换版本」控件与回退确认框**未实现**（本 PR 不触碰 renderer）。
+- #114 首个 PR **未**触碰 renderer；renderer 接线见 §4（#132，UI-only，未改变事务语义）。
 - 第二个 DSH 版本与 `packages/runtime/src/catalog/**` **未**改动。
 - 跨服务互斥：`switchCombination` 与 apply/restore 通过各自的 journal 命名空间互斥；
   未新增跨进程全局锁（沿用既有 data-root lease 与单事务不变量）。
@@ -66,3 +66,20 @@ contract dispatcher；离线合成 tarball，仍校验 SHA-256；两个组合共
   活跃 switch 事务时结清为受控失败；create 侧同形窗口不在本切片范围（既有行为）。
 - 提交前失败/回滚只删新 stage 代目录；已发布但未被引用的 `hdsl-<gen>` profile 保留在
   共享 home（沿用 MF1 无 GC 决策），属已知残留。
+
+## 4. renderer 接线（#132，UI-only）
+
+范围：只把已合入的 `environments.switchCombination` 与
+`generations.restore` 的 `dshCompatibilityWarning` 接到桌面界面，**不**新增事务/契约语义。
+
+- 新增独立组件 `apps/desktop/src/renderer/components/SwitchVersion.tsx`（不编辑 A1 的
+  `DshVersions.tsx`）：目标组合 = `catalog.list` 中 `compatibility.status === 'verified'`
+  **且**由 `versions.dsh` 已支持条目 `catalogCombinationIds` 引用的**已支持组合**；未支持/
+  未知组合不作为可切换项。
+- 仅 `stopped` 环境可发起切换；`running`/`starting`/`stopping` 禁用入口并提示先停止，
+  不自动停进程。发起时携带当前 `environment.revision`，终态经既有 `OperationPanel` 跟踪；
+  成功后代控制器刷新环境（新代、`revision+1`、仍 `stopped`），失败保留旧代并显示受控脱敏错误。
+- `generations.restore` 终态的非阻断 `dshCompatibilityWarning` 存于 renderer 状态并在代际
+  面板结果处展示；同版本/未知版本（契约返回 `null`）不提示，不撤销已写数据。
+- 证据：`tests/renderer/switch-version.test.ts`（controller 用 TEST-ONLY reference runtime
+  与 stub client；markup 用 `react-dom/server`）。真实受管安装/进程与 Electron 仍**未测**。

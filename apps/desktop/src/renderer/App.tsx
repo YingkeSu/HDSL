@@ -11,6 +11,7 @@ import { OperationPanel } from './components/OperationPanel.js';
 import { PluginDiscovery } from './components/PluginDiscovery.js';
 import { PluginInstall } from './components/PluginInstall.js';
 import { PluginRemoval } from './components/PluginRemoval.js';
+import { SwitchVersion } from './components/SwitchVersion.js';
 import { LaunchBar } from './components/LaunchBar.js';
 import { Icon } from './components/Icon.js';
 import { ENVIRONMENT_STATE_LABELS } from './format.js';
@@ -211,6 +212,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
               </section>
             )}
             <EnvironmentDetail state={state} actions={actions} />
+            <SwitchVersion state={state} actions={actions} />
             {page === 'environments' && <ExpectedComposition state={state} actions={actions} />}
             <div className={page === 'home' ? 'home-grid' : ''}>
               {state.environments.length > 0 && <EnvironmentList state={state} actions={actions} />}

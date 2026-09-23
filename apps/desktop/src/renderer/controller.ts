@@ -71,11 +71,13 @@ import {
 import type { RendererContractClient } from './contract.js';
 import {
   INITIAL_STATE,
+  canSwitchVersion,
   installSourceSelector,
   isOperationTerminal,
   selectedEnvironment,
   selectedInstalledPlugin,
   selectedPluginHit,
+  supportedCombinationIds,
   type RendererActions,
   type RendererState,
   type TrackedOperation,
@@ -299,6 +301,8 @@ export class RendererController implements RendererActions {
       // Expected composition is environment-scoped: a previously loaded dump
       // must never be shown for a newly selected environment.
       expectedComposition: null,
+      // A downgrade warning belongs to one restore of one environment.
+      restoreWarning: null,
     });
   }
 
@@ -311,6 +315,57 @@ export class RendererController implements RendererActions {
   async stopSelected(): Promise<void> {
     await this.#runCommand(async () => {
       await this.#revisionCommand('environments.stop');
+    });
+  }
+
+  /**
+   * Switches a stopped environment's active composition to another supported
+   * combination (A2/#114). The supported set is the audited `versions.dsh`
+   * listing; a non-stopped environment and any unsupported/unknown combination
+   * are refused locally without dispatching (defence in depth; core re-validates
+   * and owns the rollback semantics). Switching never auto-stops the environment.
+   */
+  async switchVersion(catalogCombinationId: string): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('INVALID_INPUT') });
+        return;
+      }
+      if (!canSwitchVersion(environment)) {
+        this.#update({
+          actionError: contractErrorForCode('ENVIRONMENT_BUSY'),
+          notice: null,
+        });
+        return;
+      }
+      if (!supportedCombinationIds(this.#state).has(catalogCombinationId)) {
+        this.#update({
+          actionError: contractErrorForCode('UNSUPPORTED_COMBINATION'),
+          notice: null,
+        });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, webUIOrigin: null });
+      const result = await this.#call(
+        'environments.switchCombination',
+        {
+          requestId: this.#newRequestId(),
+          environmentId: environment.id,
+          expectedRevision: environment.revision,
+          catalogCombinationId,
+        },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+      await this.#refreshEnvironments();
     });
   }
 
@@ -624,7 +679,7 @@ export class RendererController implements RendererActions {
     await this.#runCommand(async () => {
       const environment = selectedEnvironment(this.#state);
       if (environment === null) { this.#update({ actionError: contractErrorForCode('INVALID_INPUT') }); return; }
-      this.#update({ actionError: null, notice: null });
+      this.#update({ actionError: null, notice: null, restoreWarning: null });
       const result = await this.#call('generations.restore', {
         requestId: this.#newRequestId(),
         environmentId: environment.id,
@@ -1087,7 +1142,10 @@ export class RendererController implements RendererActions {
         this.#update({ actionError: contractErrorForCode('INTERNAL_ERROR') });
         return;
       }
-      this.#update({ notice: `已恢复到代际 ${parsed.generationId}；重启环境后生效。` });
+      this.#update({
+        notice: `已恢复到代际 ${parsed.generationId}；重启环境后生效。`,
+        restoreWarning: parsed.dshCompatibilityWarning ?? null,
+      });
       return;
     }
     if (tracked.kind === 'apply') {

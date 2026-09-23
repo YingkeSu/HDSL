@@ -41,6 +41,7 @@ const actions: RendererActions = {
     selectInstalledPlugin: () => undefined,
     previewPluginRemoval: () => undefined,
     loadDshVersions: () => undefined,
+    switchVersion: () => undefined,
     loadExpectedComposition: () => undefined,
 };
 

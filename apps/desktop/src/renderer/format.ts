@@ -29,6 +29,8 @@ export const OPERATION_KIND_LABELS: Record<string, string> = {
   create: '创建',
   start: '启动',
   stop: '停止',
+  switch: '切换版本',
+  restore: '恢复代际',
   openWebUI: '打开 WebUI',
   export: '导出诊断',
   search: '检索插件',
