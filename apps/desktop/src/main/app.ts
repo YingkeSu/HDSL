@@ -231,9 +231,15 @@ const createLauncherWindow = async (): Promise<void> => {
     webPreferences: { ...SECURE_WINDOW_DEFAULTS, preload: PRELOAD_BRIDGE },
   });
   mainWindow = window;
+  // Capture the id while the window still owns its WebContents. The `closed`
+  // handler below runs after the window is destroyed, where `window.webContents`
+  // is gone and reading it throws `Object has been destroyed`; that uncaught
+  // error used to abort the quit sequence into a blocking native error dialog
+  // (issue #88). The id is stable for the window lifetime.
+  const webContentsId = window.webContents.id;
   applyWindowSecurity(window, TRUSTED_URL_POLICY);
   ipcHost.openWindow({
-    webContentsId: window.webContents.id,
+    webContentsId,
     send: (event) => {
       if (!window.isDestroyed()) {
         window.webContents.send(HDSL_OPERATION_UPDATED_CHANNEL, event);
@@ -244,7 +250,7 @@ const createLauncherWindow = async (): Promise<void> => {
     window.show();
   });
   window.on('closed', () => {
-    ipcHost?.closeWindow(window.webContents.id);
+    ipcHost?.closeWindow(webContentsId);
     if (mainWindow === window) {
       mainWindow = undefined;
     }
@@ -383,10 +389,19 @@ const focusMainWindow = (): void => {
 /**
  * Applies the quit/close sequence. On a confirmed release the app quits
  * normally. When close cannot confirm release, main does **not** claim the lock
- * is still held: it reports the residue, exits, and relies on the next
+ * is still held: it reports the residue, exits non-zero, and relies on the next
  * instance's `recover()` plus the main-side recovery gate before any new
  * create/start.
+ *
+ * The failure path must never wait on a native modal: on macOS
+ * `dialog.showErrorBox` runs a modal loop, so a dialog here would stall the very
+ * exit it announces and leave the process lingering (issue #88). The residue is
+ * reported through a fixed, secret-free stderr signal, and the lease/launch
+ * records stay on disk as evidence for the next start's reconciliation.
  */
+export const formatExitIncompleteSignal = (code: string): string =>
+  `[hdsl] exit incomplete reason=${code}\n`;
+
 const applyQuitSequence = (): void => {
   if (quitting || composition === undefined) {
     return;
@@ -400,18 +415,11 @@ const applyQuitSequence = (): void => {
         app.quit();
         return;
       }
-      dialog.showErrorBox(
-        '退出未完全释放',
-        `受管进程或数据目录租约未能确认释放（${report.failure?.code ?? 'INTERNAL_ERROR'}）。\n` +
-          '进程即将退出；租约/启动记录会作为残留证据保留。下次启动会先对账，若仍有不可证进程将禁止新建与启动，需人工处置。',
-      );
+      process.stderr.write(formatExitIncompleteSignal(report.failure?.code ?? 'INTERNAL_ERROR'));
       app.exit(1);
     })
     .catch(() => {
-      dialog.showErrorBox(
-        '退出失败',
-        '关闭受管进程或释放数据目录租约时发生异常；进程将退出并保留残留证据，下次启动先对账。',
-      );
+      process.stderr.write(formatExitIncompleteSignal('INTERNAL_ERROR'));
       app.exit(1);
     });
 };
