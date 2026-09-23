@@ -116,7 +116,7 @@ describe('plugins.search (GitHub read-only adapter)', () => {
     expect(outcome.value.hits[0]?.htmlUrl).toBe('https://github.com/octo/AI_Animation');
   });
 
-  it('maps 403/429 to RATE_LIMITED with a machine-readable retry delay', async () => {
+  it('maps reliably signalled 403/429 to RATE_LIMITED with a machine-readable retry delay', async () => {
     const retryAfter = setup(() =>
       Promise.resolve(new Response('{}', { status: 429, headers: { 'retry-after': '42' } })),
     );
@@ -130,7 +130,10 @@ describe('plugins.search (GitHub read-only adapter)', () => {
       Promise.resolve(
         new Response('{}', {
           status: 403,
-          headers: { 'x-ratelimit-reset': String(1_000_120) },
+          headers: {
+            'x-ratelimit-remaining': '0',
+            'x-ratelimit-reset': String(1_000_120),
+          },
         }),
       ),
       { now: () => new Date(1_000_000 * 1000) },
@@ -310,10 +313,29 @@ describe('rateLimitRetryAfterSeconds', () => {
     get: (name: string) => values[name] ?? null,
   });
 
-  it('prefers retry-after, falls back to the reset epoch and clamps at one second', () => {
+  it('prefers retry-after and only derives a delay from reset when the limit is exhausted', () => {
     expect(rateLimitRetryAfterSeconds(headers({ 'retry-after': '30' }), 0)).toBe(30);
-    expect(rateLimitRetryAfterSeconds(headers({ 'x-ratelimit-reset': '1000120' }), 1_000_000_000)).toBe(120);
-    expect(rateLimitRetryAfterSeconds(headers({ 'x-ratelimit-reset': '900' }), 1_000_000_000)).toBe(1);
+    // A bare `x-ratelimit-reset` (present on every response) is NOT a retry hint.
+    expect(rateLimitRetryAfterSeconds(headers({ 'x-ratelimit-reset': '1000120' }), 1_000_000_000)).toBeUndefined();
+    expect(
+      rateLimitRetryAfterSeconds(
+        headers({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '1000120' }),
+        1_000_000_000,
+      ),
+    ).toBe(120);
+    expect(
+      rateLimitRetryAfterSeconds(
+        headers({ 'x-ratelimit-remaining': '0', 'x-ratelimit-reset': '900' }),
+        1_000_000_000,
+      ),
+    ).toBe(1);
+    // remaining > 0 with a reset header still must not fabricate a retry time.
+    expect(
+      rateLimitRetryAfterSeconds(
+        headers({ 'x-ratelimit-remaining': '57', 'x-ratelimit-reset': '1000120' }),
+        1_000_000_000,
+      ),
+    ).toBeUndefined();
     expect(rateLimitRetryAfterSeconds(headers({}), 0)).toBeUndefined();
   });
 });

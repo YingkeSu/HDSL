@@ -14,7 +14,14 @@
  * - a real GitHub probe is opt-in and explicitly bounded; a fixture response is
  *   not evidence about the real API (D19).
  *
- * Error mapping follows D11: 403/429 → `RATE_LIMITED` (+`retryAfterSeconds`),
+ * Error mapping follows D11/D16 (#95): `429` is always `RATE_LIMITED`; a `403`
+ * is `RATE_LIMITED` only with GitHub's documented rate-limit evidence
+ * (`retry-after`, an exhausted `x-ratelimit-remaining: 0`, or an explicit
+ * rate-limit/abuse message). A `403` without that evidence is a
+ * permission/authentication/abuse rejection → non-retryable
+ * `SOURCE_ACCESS_DENIED`. A bare `x-ratelimit-reset` is sent on every response
+ * and is therefore NOT evidence on its own.
+ *
  * 404 → `SOURCE_NOT_FOUND`, 422 → `INVALID_INPUT`, connection-before failure
  * (DNS/offline/TLS/timeout) → `NETWORK_UNAVAILABLE`, any other established
  * HTTP/parse failure → `DOWNLOAD_FAILED`.
@@ -205,7 +212,13 @@ const mapRepositoryDetail = (value: unknown): PluginRepositoryDetail | undefined
 const isValidAgainst = <T>(schema: Schema<T>, value: unknown): boolean =>
   schema(value, 'value', []) !== undefined;
 
-/** Parses `retry-after` (seconds) or `x-ratelimit-reset` (epoch seconds). */
+/**
+ * Parses the *reliable* retry delay. `retry-after` is authoritative on its
+ * own; `x-ratelimit-reset` (epoch seconds) is only used together with
+ * `x-ratelimit-remaining: 0`, GitHub's documented exhausted-limit signal.
+ * A bare `x-ratelimit-reset` is present on every response, so using it alone
+ * would fabricate a retry time that GitHub never promised (#95).
+ */
 export const rateLimitRetryAfterSeconds = (
   headers: { get(name: string): string | null },
   nowMs: number,
@@ -215,14 +228,58 @@ export const rateLimitRetryAfterSeconds = (
     return Number(retryAfter);
   }
   const reset = headers.get('x-ratelimit-reset');
-  if (reset !== null && /^\d{1,12}$/.test(reset)) {
+  const exhausted = headers.get('x-ratelimit-remaining') === '0';
+  if (exhausted && reset !== null && /^\d{1,12}$/.test(reset)) {
     return Math.max(1, Number(reset) - Math.floor(nowMs / 1000));
   }
   return undefined;
 };
 
+/**
+ * GitHub's own rate-limit wording for secondary limits / abuse protection. The
+ * docs state a secondary limit carries an explicit message even when the
+ * headers cannot prove it, so the bounded body excerpt is the third reliable
+ * signal (#95).
+ */
+const RATE_LIMIT_MESSAGE = /rate[ -]?limit|abuse detection/i;
+
+/**
+ * True only when the response carries GitHub's documented rate-limit evidence
+ * (ADR 0005 D11/D16, #95). `429` is the limiter status by definition; for `403`
+ * the reliable signals are `retry-after`, an exhausted
+ * `x-ratelimit-remaining: 0`, or GitHub's explicit rate-limit/abuse message.
+ */
+export const hasRateLimitEvidence = (
+  status: number,
+  headers: { get(name: string): string | null },
+  bodyExcerpt: string | null,
+): boolean => {
+  if (status === 429) {
+    return true;
+  }
+  if (status !== 403) {
+    return false;
+  }
+  const retryAfter = headers.get('retry-after');
+  if (retryAfter !== null && /^\d{1,7}$/.test(retryAfter)) {
+    return true;
+  }
+  if (headers.get('x-ratelimit-remaining') === '0') {
+    return true;
+  }
+  return bodyExcerpt !== null && RATE_LIMIT_MESSAGE.test(bodyExcerpt);
+};
+
+/** Upper bound on the classification-only error body excerpt (never forwarded). */
+const MAX_ERROR_EXCERPT = 2048;
+
 type Attempt =
-  | { readonly kind: 'response'; readonly response: Response }
+  | {
+      readonly kind: 'response';
+      readonly response: Response;
+      /** Bounded classification-only body excerpt for 403 rate-limit evidence. */
+      readonly excerpt: string | null;
+    }
   | { readonly kind: 'parsed'; readonly response: Response; readonly body: unknown }
   | { readonly kind: 'unparseable'; readonly response: Response }
   | { readonly kind: 'unreachable' };
@@ -242,6 +299,23 @@ const rejectOnAbort = (signal: AbortSignal): Promise<never> =>
       { once: true },
     );
   });
+
+/**
+ * Reads a bounded, classification-only excerpt of a failed response body. It is
+ * raced against the same abort signal as the main request and never reaches the
+ * wire; a body that is missing, stalled or non-text simply yields `null`.
+ */
+const readErrorExcerpt = async (response: Response, signal: AbortSignal): Promise<string | null> => {
+  if (typeof response.text !== 'function') {
+    return null;
+  }
+  try {
+    const text = await Promise.race([response.text(), rejectOnAbort(signal)]);
+    return typeof text === 'string' ? text.slice(0, MAX_ERROR_EXCERPT) : null;
+  } catch {
+    return null;
+  }
+};
 
 export const createGitHubPluginSource = (
   options: GitHubPluginSourceOptions,
@@ -274,7 +348,9 @@ export const createGitHubPluginSource = (
         headers: { accept: 'application/vnd.github+json', 'user-agent': userAgent },
       });
       if (!response.ok) {
-        return { kind: 'response', response };
+        const excerpt =
+          response.status === 403 ? await readErrorExcerpt(response, inner.signal) : null;
+        return { kind: 'response', response, excerpt };
       }
       try {
         const body = await Promise.race([response.json(), rejectOnAbort(inner.signal)]);
@@ -295,9 +371,18 @@ export const createGitHubPluginSource = (
     }
   };
 
-  const failureForStatus = (response: Response): PortOutcome<never> => {
+  const failureForStatus = (
+    response: Response,
+    excerpt: string | null = null,
+  ): PortOutcome<never> => {
     const status = response.status;
     if (status === 403 || status === 429) {
+      if (!hasRateLimitEvidence(status, response.headers, excerpt)) {
+        return portFail(
+          'SOURCE_ACCESS_DENIED',
+          `GitHub denied access with HTTP ${String(status)}`,
+        );
+      }
       const retryAfterSeconds = rateLimitRetryAfterSeconds(response.headers, now().getTime());
       return portFail(
         'RATE_LIMITED',
@@ -329,7 +414,7 @@ export const createGitHubPluginSource = (
         return portFail('NETWORK_UNAVAILABLE', 'the GitHub commit request could not connect');
       }
       if (commitAttempt.kind === 'response') {
-        return failureForStatus(commitAttempt.response);
+        return failureForStatus(commitAttempt.response, commitAttempt.excerpt);
       }
       if (commitAttempt.kind === 'unparseable') {
         return portFail('DOWNLOAD_FAILED', 'the GitHub commit response was not JSON');
@@ -353,7 +438,7 @@ export const createGitHubPluginSource = (
         if (outcome.kind === 'response') {
           return outcome.response.status === 404
             ? { kind: 'missing' }
-            : { kind: 'failure', outcome: failureForStatus(outcome.response) };
+            : { kind: 'failure', outcome: failureForStatus(outcome.response, outcome.excerpt) };
         }
         if (outcome.kind === 'unparseable') {
           return { kind: 'failure', outcome: portFail('DOWNLOAD_FAILED', 'the GitHub contents response was not JSON') };
@@ -396,7 +481,7 @@ export const createGitHubPluginSource = (
         return portFail('NETWORK_UNAVAILABLE', 'the GitHub search request could not connect');
       }
       if (outcome.kind === 'response') {
-        return failureForStatus(outcome.response);
+        return failureForStatus(outcome.response, outcome.excerpt);
       }
       if (outcome.kind === 'unparseable') {
         return portFail('DOWNLOAD_FAILED', 'the GitHub search response was not JSON');
@@ -438,7 +523,7 @@ export const createGitHubPluginSource = (
         return portFail('NETWORK_UNAVAILABLE', 'the GitHub repository request could not connect');
       }
       if (outcome.kind === 'response') {
-        return failureForStatus(outcome.response);
+        return failureForStatus(outcome.response, outcome.excerpt);
       }
       if (outcome.kind === 'unparseable') {
         return portFail('DOWNLOAD_FAILED', 'the GitHub repository response was not JSON');

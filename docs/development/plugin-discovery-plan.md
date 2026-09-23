@@ -42,7 +42,7 @@
     占位符，由 E2E 宿主在生成临时页时注入共享版本（当前无 QA owner 修改这些文件，本片承接）。
 - 新 surface 只包含 S1 已实现的部分：`plugins.search`、`plugins.inspect`、
   `operationKind` 的 `search`/`inspect`、`OperationSnapshot.output?`、
-  `ContractError.retryAfterSeconds?`、D11 的 15 个新错误码。
+  `ContractError.retryAfterSeconds?`、D11 的 16 个新错误码。
   `preview`/`apply`/`restore` 方法与 kind 由 S2+ 在同一未打标签的 1.1 内补齐（ADR §5.4 允许中间构建）。
 
 ## 测试 seam

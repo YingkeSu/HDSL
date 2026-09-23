@@ -53,8 +53,6 @@ const removalErrorHint = (error: ContractError): string => {
       return '网络不可用（连接未建立）。卸载未提交，环境组成不变；请检查网络后重试。';
     case 'DOWNLOAD_FAILED':
       return '包获取或完整性校验失败（连接建立后中断）。卸载未提交，环境组成不变；请稍后重试。';
-    case 'RATE_LIMITED':
-      return 'registry 限流。卸载未提交，环境组成不变；请按提示稍后重试。';
     case 'CANNOT_CANCEL':
       return '事务已提交，不能再取消。可在代际列表显式恢复到上一代。';
     case 'NOT_FOUND':

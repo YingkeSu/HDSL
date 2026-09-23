@@ -164,6 +164,10 @@ const PLUGIN_RATE_LIMIT_SEED: ReferenceSeed = {
   ...FIXTURE_SEED,
   pluginSearch: { failure: 'RATE_LIMITED', retryAfterSeconds: 60 },
 };
+const PLUGIN_ACCESS_DENIED_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  pluginSearch: { failure: 'SOURCE_ACCESS_DENIED' },
+};
 const PLUGIN_NETWORK_SEED: ReferenceSeed = {
   ...FIXTURE_SEED,
   pluginSearch: { failure: 'NETWORK_UNAVAILABLE' },
@@ -1013,6 +1017,19 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     }),
     expected: 'ok',
     seed: PLUGIN_RATE_LIMIT_SEED,
+  },
+  {
+    id: 'plugins-search-access-denied',
+    method: 'plugins.search',
+    kind: 'legal',
+    description:
+      'a permission-class 403 (SOURCE_ACCESS_DENIED, non-retryable) still returns an operation reference',
+    request: request('plugins.search', {
+      requestId: 'req-plugin-access-denied',
+      query: 'topic:dsh-plugin',
+    }),
+    expected: 'ok',
+    seed: PLUGIN_ACCESS_DENIED_SEED,
   },
   {
     id: 'plugins-search-network-failure',

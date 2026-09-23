@@ -40,6 +40,9 @@ export const ERROR_CODES = [
   // NETWORK_UNAVAILABLE are retryable; the rest are deterministic rejections.
   'RATE_LIMITED',
   'NETWORK_UNAVAILABLE',
+  // 1.1 addition (#95): a 403 with no reliable rate-limit evidence is a
+  // permission/authentication/abuse rejection, NOT a retryable throttle.
+  'SOURCE_ACCESS_DENIED',
   'SOURCE_NOT_FOUND',
   'SOURCE_MANIFEST_INVALID',
   'NOT_A_PLUGIN',
@@ -107,6 +110,8 @@ export const ERROR_MESSAGES: Record<ErrorCode, string> = {
   INTERNAL_ERROR: 'unclassified internal error',
   RATE_LIMITED: 'GitHub rate limit reached; retry after the reported time',
   NETWORK_UNAVAILABLE: 'the network is unavailable',
+  SOURCE_ACCESS_DENIED:
+    'GitHub denied access to the source (permissions, authentication or abuse protection)',
   SOURCE_NOT_FOUND: 'the GitHub repository, ref or commit was not found',
   SOURCE_MANIFEST_INVALID: 'the source manifest is unreadable or invalid',
   NOT_A_PLUGIN: 'the source does not declare the DSH bundle patch',

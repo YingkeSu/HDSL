@@ -285,4 +285,15 @@ describe('renderer removal markup (DOM-free real React)', () => {
     expect(html).toContain('网络不可用');
     expect(html).toContain('确认卸载');
   });
+
+  it('never claims a registry rate limit on the removal path (no reliable signal exists, #95)', () => {
+    const html = renderPluginRemoval({
+      state: state({
+        phase: 'ready',
+        actionError: { code: 'RATE_LIMITED', message: 'unexpected', retryable: true },
+      }),
+      actions,
+    });
+    expect(html).not.toContain('registry 限流');
+  });
 });
