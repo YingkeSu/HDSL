@@ -44,6 +44,7 @@ import {
   changePlanSchema,
   changeApplicationSchema,
   dshVersionListingSchema,
+  expectedCompositionViewSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
   installedPluginsViewSchema,
@@ -161,6 +162,7 @@ const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> 
   apply: changeApplicationSchema,
   restore: generationSummarySchema,
   versions: dshVersionListingSchema,
+  composition: expectedCompositionViewSchema,
 };
 
 /**
@@ -567,6 +569,32 @@ const execute = (
         return executedFailure(outcome);
       }
       const reference = validatePortValue(operationRefSchema, outcome.value, 'versions.dsh');
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
+    }
+    case 'compositions.expected': {
+      // Environment-scoped read-only expected composition (#118). Existence is a
+      // pure guard so an unknown environment cannot poison the requestId; the
+      // port owns the busy/generation checks. The terminal
+      // `ExpectedCompositionView` is read from `output`.
+      const typed = input as MethodInputs['compositions.expected'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      markInProgress();
+      const outcome = runtime.port.describeExpectedComposition({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(
+        operationRefSchema,
+        outcome.value,
+        'compositions.expected',
+      );
       publishIfKnown(runtime, reference.operationId);
       return { response: contractOk(API_VERSION, reference), executed: true };
     }

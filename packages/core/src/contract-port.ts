@@ -32,10 +32,12 @@ import type {
   PluginSearchCommand,
 } from '@hdsl/contracts';
 import type { DshVersionCommand } from '@hdsl/contracts';
+import type { ExpectedCompositionCommand } from '@hdsl/contracts';
 import type { DiagnosticsExporter, InstalledPluginsPort } from './ports.js';
 import type { EnvironmentService } from './creation-service.js';
 import type { PluginDiscoveryService } from './plugin-discovery-service.js';
 import type { VersionDiscoveryService } from './version-discovery-service.js';
+import type { ExpectedCompositionService } from './expected-composition-service.js';
 import type { ChangePreviewService } from './plugin-preview.js';
 import type { ChangeApplyService } from './plugin-apply.js';
 
@@ -51,6 +53,8 @@ export interface EnvironmentContractPortOptions {
   readonly pluginDiscovery?: PluginDiscoveryService;
   /** Global read-only upstream DSH version discovery (`versions.dsh`, A1/#113). */
   readonly versionDiscovery?: VersionDiscoveryService;
+  /** Environment-scoped read-only expected composition (`compositions.expected`, #118). */
+  readonly expectedComposition?: ExpectedCompositionService;
   /** Environment-scoped plugin change preview (ADR 0005 D6). */
   readonly changePreview?: ChangePreviewService;
   /** Environment-scoped plugin change apply (ADR 0005 D8). */
@@ -68,6 +72,7 @@ export const createEnvironmentContractPort = (
   const exporter = options.exportDiagnostics;
   const pluginDiscovery = options.pluginDiscovery;
   const versionDiscovery = options.versionDiscovery;
+  const expectedComposition = options.expectedComposition;
   const changePreview = options.changePreview;
   const changeApply = options.changeApply;
 
@@ -119,6 +124,7 @@ export const createEnvironmentContractPort = (
       return (
         plugin ??
         versionDiscovery?.findOperation(operationId) ??
+        expectedComposition?.findOperation(operationId) ??
         changePreview?.findOperation(operationId) ??
         changeApply?.findOperation(operationId) ??
         service.findOperation(operationId)
@@ -150,6 +156,7 @@ export const createEnvironmentContractPort = (
       return (
         plugin ??
         versionDiscovery?.cancelOperation(command.operationId) ??
+        expectedComposition?.cancelOperation(command.operationId) ??
         changePreview?.cancelOperation(command.operationId) ??
         changeApply?.cancelOperation(command.operationId) ??
         service.cancelOperation(command.operationId)
@@ -172,6 +179,12 @@ export const createEnvironmentContractPort = (
       return versionDiscovery === undefined
         ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
         : versionDiscovery.listVersions();
+    },
+
+    describeExpectedComposition(command: ExpectedCompositionCommand): PortOutcome<OperationRef> {
+      return expectedComposition === undefined
+        ? portFail('INTERNAL_ERROR', 'the expected-composition reader is not wired')
+        : expectedComposition.describe(command.environmentId);
     },
 
     exportDiagnostics(command: EnvironmentCommand) {

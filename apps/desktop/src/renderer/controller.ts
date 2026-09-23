@@ -52,6 +52,7 @@ import {
   changePlanSchema,
   changeApplicationSchema,
   dshVersionListingSchema,
+  expectedCompositionViewSchema,
   generationSummaryListSchema,
   generationSummarySchema,
   installedPluginsViewSchema,
@@ -468,6 +469,36 @@ export class RendererController implements RendererActions {
       const result = await this.#call(
         'versions.dsh',
         { requestId: this.#newRequestId() },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
+  }
+
+  /**
+   * Starts the read-only `compositions.expected` dump for the selected
+   * environment (#118). It runs the managed `--dump-config` offline; the terminal
+   * view is re-validated in `#applyPluginOutput` and is always labelled the
+   * desired/expected composition, never the runtime ACTIVE plugin set.
+   */
+  async loadExpectedComposition(): Promise<void> {
+    await this.#runCommand(async () => {
+      const environment = selectedEnvironment(this.#state);
+      if (environment === null) {
+        this.#update({ actionError: contractErrorForCode('NOT_FOUND') });
+        return;
+      }
+      this.#update({ actionError: null, notice: null, expectedComposition: null });
+      const result = await this.#call(
+        'compositions.expected',
+        { requestId: this.#newRequestId(), environmentId: environment.id },
         operationRefSchema,
       );
       if (this.#disposed) {
@@ -1085,6 +1116,16 @@ export class RendererController implements RendererActions {
         return;
       }
       this.#update({ dshVersions: parsed });
+      return;
+    }
+    if (tracked.kind === 'composition') {
+      const issues: ValidationIssue[] = [];
+      const parsed = expectedCompositionViewSchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ expectedComposition: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ expectedComposition: parsed });
     }
   }
 

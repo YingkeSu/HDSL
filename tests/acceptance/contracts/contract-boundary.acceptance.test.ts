@@ -82,6 +82,7 @@ const harness = (
     listGenerations: base.listGenerations.bind(base),
     listInstalledPlugins: base.listInstalledPlugins.bind(base),
     listDshVersions: base.listDshVersions.bind(base),
+    describeExpectedComposition: base.describeExpectedComposition.bind(base),
     previewChange: base.previewChange.bind(base),
     applyChange: base.applyChange.bind(base),
     restoreGeneration: base.restoreGeneration.bind(base),

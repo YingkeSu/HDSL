@@ -12,6 +12,8 @@
 import type {
   InstalledPluginsView,
   CompositionLock,
+  ExpectedCompositionDiagnostic,
+  ExpectedCompositionGroup,
   ExportResult,
   OpenWebUIResult,
   PortOutcome,
@@ -49,6 +51,40 @@ export interface InstalledRuntimeArtifacts {
 /** Read-only installed-plugin listing of an environment's active generation. */
 export interface InstalledPluginsPort {
   list(environmentId: string): PortOutcome<InstalledPluginsView>;
+}
+
+/** Inputs for one managed `--dump-config` read of an active generation (#118). */
+export interface ExpectedCompositionDumpRequest {
+  readonly nodeExecutable: string;
+  readonly dshEntrypoint: string;
+  readonly profileName: string;
+  readonly homeDirectory: string;
+  readonly cwd: string;
+  readonly timeoutMs?: number;
+}
+
+/** Parsed grouped `--dump-config` result (never the runtime ACTIVE set). */
+export interface ExpectedCompositionDumpResult {
+  readonly groups: readonly ExpectedCompositionGroup[];
+  readonly diagnostics: readonly ExpectedCompositionDiagnostic[];
+  readonly rowCount: number;
+  readonly stderr: string;
+  readonly stdoutBytes: number;
+  readonly exitCode: number;
+  readonly timedOut: boolean;
+  readonly observedAt: string;
+}
+
+/**
+ * Managed read-only `--dump-config` adapter. Implementations run the managed
+ * Node + DSH entrypoint offline (no plugin execution, no credential) and must
+ * honour the abort signal.
+ */
+export interface ExpectedCompositionPort {
+  describeExpectedComposition(
+    request: ExpectedCompositionDumpRequest,
+    signal: AbortSignal,
+  ): Promise<PortOutcome<ExpectedCompositionDumpResult>>;
 }
 
 export interface ManagedRuntimePort {
