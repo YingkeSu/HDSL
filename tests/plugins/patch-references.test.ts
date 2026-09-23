@@ -4,7 +4,7 @@
  * `- insert: [{id, name}]`, `- id: X` overrides, `inject` = services).
  */
 import { describe, expect, it } from 'vitest';
-import { PATCH_SCAN_MAX, scanPatchReferences } from '@hdsl/runtime';
+import { PATCH_SCAN_MAX, hasUnresolvedReferences, scanPatchReferences } from '@hdsl/runtime';
 
 /** Trimmed from the managed `@deepseek-ai/dsh-base/cordis.patch.yml` shape. */
 const REAL_BUNDLE_PATCH = [
@@ -80,6 +80,61 @@ describe('scanPatchReferences (real rc.2 Cordis patch schema)', () => {
     const oversized = scanPatchReferences('user patch', 'x'.repeat(PATCH_SCAN_MAX + 1));
     expect(oversized.references).toEqual([]);
     expect(oversized.unknown[0]?.reason).toContain('bounded parse size');
+  });
+
+  it('fails closed on the managed dialect executable tag !!js (insert name, inject, row value)', () => {
+    // `!!js` / `tag:yaml.org,2002:js` is the tag the rc.2 loader later evaluates
+    // (new Function + eval). The static scanner does not interpret it, so it must
+    // land in `unknown` (never as a literal package/service name).
+    const insertName = scanPatchReferences(
+      'user patch',
+      ['- insert:', '    - id: js-row', "      name: !!js '1 + 1'"].join('\n'),
+    );
+    expect(insertName.references).toEqual([]);
+    expect(insertName.unknown.length).toBeGreaterThanOrEqual(1);
+    expect(hasUnresolvedReferences([insertName])).toBe(true);
+
+    const injectEntry = scanPatchReferences(
+      'user patch',
+      ['- id: js-row', "  inject: [!!js '1 + 1']"].join('\n'),
+    );
+    expect(injectEntry.services).toEqual([]);
+    expect(injectEntry.unknown.length).toBeGreaterThanOrEqual(1);
+    expect(hasUnresolvedReferences([injectEntry])).toBe(true);
+
+    const rowValue = scanPatchReferences(
+      'user patch',
+      ['- id: js-row', '  config:', "    value: !!js '1 + 1'"].join('\n'),
+    );
+    expect(rowValue.unknown.length).toBeGreaterThanOrEqual(1);
+    expect(hasUnresolvedReferences([rowValue])).toBe(true);
+  });
+
+  it('fails closed on the js sub-tag family and the canonical tag form', () => {
+    const subTag = scanPatchReferences(
+      'user patch',
+      ['- insert:', '    - id: js-row', "      name: !!js/function '1 + 1'"].join('\n'),
+    );
+    expect(subTag.references).toEqual([]);
+    expect(hasUnresolvedReferences([subTag])).toBe(true);
+
+    const canonical = scanPatchReferences(
+      'user patch',
+      ['- insert:', '    - id: js-row', "      name: !<tag:yaml.org,2002:js> '1 + 1'"].join('\n'),
+    );
+    expect(canonical.references).toEqual([]);
+    expect(hasUnresolvedReferences([canonical])).toBe(true);
+  });
+
+  it('accepts ordinary core-schema tags as plain values (no false rejection)', () => {
+    const scan = scanPatchReferences(
+      'user patch',
+      ['- insert:', '    - id: core-row', '      name: !!str demo-plugin', '  inject: [!!str webStartup]'].join('\n'),
+    );
+    expect(scan.unknown).toEqual([]);
+    expect(scan.references).toEqual(['demo-plugin']);
+    expect(scan.services).toEqual(['webStartup']);
+    expect(hasUnresolvedReferences([scan])).toBe(false);
   });
 
   it('never emits a local absolute path in a source label', () => {
