@@ -47,6 +47,30 @@ describe('production entry has no test hooks', () => {
     expect(pkg.files?.some((entry) => entry.includes('qa-entry'))).toBe(true);
   });
 
+  it('checks the exclusive data-root lease before creating any window or IPC host', () => {
+    // #6 supplement acceptance: the single-instance/dataRoot-exclusive gate must
+    // be in effect *before* any UI operation. `bootstrap` must therefore inspect
+    // `created.available` (which reflects the awaited `service.open()` lease)
+    // before it constructs the IPC host or loads the launcher window, and the
+    // refused branch must exit without creating a window.
+    const app = source('apps/desktop/src/main/app.ts');
+    const start = app.indexOf('const bootstrap = async');
+    const end = app.indexOf('const focusMainWindow');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(end).toBeGreaterThan(start);
+    const bootstrap = app.slice(start, end);
+    const leaseGate = bootstrap.indexOf('if (!created.available)');
+    const ipcHost = bootstrap.indexOf('ipcHost = new DesktopIpcHost');
+    const window = bootstrap.indexOf('await createLauncherWindow()');
+    expect(leaseGate).toBeGreaterThanOrEqual(0);
+    expect(ipcHost).toBeGreaterThan(leaseGate);
+    expect(window).toBeGreaterThan(leaseGate);
+    const refusal = bootstrap.slice(leaseGate, ipcHost);
+    expect(refusal).toContain('app.exit(1)');
+    expect(refusal).not.toContain('createLauncherWindow');
+    expect(refusal).not.toContain('new BrowserWindow');
+  });
+
   it('writes the data-root-unavailable signal before the modal and exits non-zero', () => {
     const app = source('apps/desktop/src/main/app.ts');
     const signalIndex = app.indexOf('formatDataRootUnavailableSignal');
