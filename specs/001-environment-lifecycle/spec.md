@@ -2,7 +2,7 @@
 
 **Feature Branch**: `001-environment-lifecycle`（规划分支，实施时创建）
 **Created**: 2026-09-20
-**Status**: Draft — 上游适配证据待补，尚未实施
+**Status**: 已实现，完整验收仍在收尾；当前状态见 tasks.md 与开发验证记录。
 **Input**: HDSL 简洁 UI、版本管理与隔离需求的首条纵向切片。
 
 ## User Scenarios & Testing
@@ -64,4 +64,4 @@ Environment、CompositionLock、RuntimeArtifact、Operation；字段草案见 da
 
 ## Assumptions
 
-首版目标 macOS ARM64 与 Windows x64；具体 OS 最低版本、DSH 与 Node 组合由 research 决定。网络和用户凭据是启动前置条件。FR-007 的上游落盘行为（`.credentials.yaml` 0600）依据 PR #14 探针（固定 commit c092f67），仍需 T001 在 `docs/research/dsh-compatibility.md` 复核转正；在复核前按待验证处理，不据此声称支持。插件编辑、升级/恢复和包分享不在此切片内，但在产品 MVP 内。
+当前以本机 macOS ARM64 验收；Windows x64 由维护者稍后自行测试，未测前不声称支持，也不阻塞 macOS 后续阶段（ADR 0007）。具体 OS 最低版本、DSH 与 Node 组合由 research 决定。网络和用户凭据是启动前置条件。FR-007 的上游落盘行为（`.credentials.yaml` 0600）依据 PR #14 探针（固定 commit c092f67），仍需 T001 在 `docs/research/dsh-compatibility.md` 复核转正；在复核前按待验证处理，不据此声称支持。插件编辑、升级/恢复和包分享不在此切片内，但在产品 MVP 内。

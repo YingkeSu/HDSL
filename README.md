@@ -11,7 +11,7 @@ HDSL 是面向 DeepSeek Harness（DSH）的桌面启动器，用于管理独立�
 - 启动、停止受管进程，查看操作进度、错误和恢复状态。
 - 通过系统凭据存储引用加载 API key，导出脱敏诊断。
 
-当前受管运行时仅包含 **macOS Apple Silicon（ARM64）** 组合：DSH `0.1.5-rc.2` 搭配 Node.js `22.19.0` 或 `24.21.0`。Windows 和 Linux 尚未纳入运行时目录。插件管理、升级与代际恢复、整合包导入导出属于[后续规划](docs/development/roadmap.md)。
+当前受管运行时仅包含 **macOS Apple Silicon（ARM64）** 组合：DSH `0.1.5-rc.2` 搭配 Node.js `22.19.0` 或 `24.21.0`。Windows 和 Linux 尚未纳入运行时目录。macOS 插件发现、安装、卸载保护、显式构建授权与代际组成恢复已实现；未知服务依赖的插件仍会被阻止卸载。整合包与内测分发属于[后续规划](docs/development/roadmap.md)。当前验收在本机 macOS 完成，Windows 由维护者稍后自行测试。
 
 环境目录隔离不等于操作系统沙箱；DSH 及其插件仍可能访问环境外的文件。
 
@@ -67,4 +67,4 @@ docs/               产品设计、架构、开发指南与验证记录
 
 ## 许可
 
-HDSL 自有代码的许可证尚未确定，当前标记为 `UNLICENSED`。第三方依赖遵循各自许可证，见[第三方说明](THIRD_PARTY_NOTICES.md)。
+HDSL 自有内容采用 [HDSL 分发有限许可](LICENSE)，按 PCL 官方同款许可适配：允许不以软件本身收费的原样分发，其余权利保留。这是自定义有限许可。第三方依赖遵循各自许可证，见[第三方说明](THIRD_PARTY_NOTICES.md)。

@@ -26,7 +26,7 @@
 
 当前使用 Vitest 测试核心与契约，真实桌面测试通过 Electron 与 CDP 驱动；工具版本由 workspace 依赖锁定。不要为每个 DSH 版本乘上所有插件组合：支持矩阵选受支持边界版本与代表性组合，未知组合明确标识。
 
-CI 包含仓库文档检查，以及 Ubuntu 上的类型检查、构建和默认 Vitest 测试。真实 DSH、凭据和 GUI 场景通过环境变量单独启用，不属于默认 CI；路径、权限、锁、rename 与进程树等平台敏感项由 T008 实机验收，不得用 ubuntu 结果代替 macOS/Windows 结论。macOS ARM64 可在本机执行；Windows x64 无实机前标记未测，不声称支持。
+CI 包含仓库文档检查，以及 Ubuntu 上的类型检查、构建和默认 Vitest 测试。真实 DSH、凭据和 GUI 场景通过环境变量单独启用，不属于默认 CI；路径、权限、锁、rename 与进程树等平台敏感项由 T008 实机验收，不得用 ubuntu 结果代替 macOS/Windows 结论。当前验收在本机 macOS ARM64 完成；Windows x64 由维护者稍后自行测试，未测前不声称支持、不阻塞 macOS 阶段，见 [ADR 0007](../adr/0007-macos-acceptance-and-internal-distribution.md)。
 
 故障修复增加能复现旧故障的测试；检查通过后没有新变化不反复跑全套。测试替身必须在结果中显式标注，不得把 mock 记作实机证据。
 

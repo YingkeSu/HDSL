@@ -28,7 +28,7 @@
 
 - [ ] T007 在 tests/integration/{install,process} 与 tests/e2e 验证 spec 全部 FR 和风险场景。完成条件：产出 FR-001..FR-008 → 用例 ID 映射表与真实执行结果；真实文件与进程边界覆盖隔离、冲突、超时、重启、秘密；不把 mock 结果视为实机结果。文件所有权：tests/integration/install/**、tests/integration/process/**、tests/e2e/**、docs/development/testing.md。
 - [ ] T008a 在 docs/development/validation-001.md 记录 macOS ARM64 的真实验收与缺口（本机可执行）。完成条件：每项明确通过/失败/未测，不将 mock 结果标作实机支持。依赖 T007。
-- [ ] T008b 在 docs/development/validation-001.md 记录 Windows x64 的真实验收与缺口。依赖外部 Windows x64 主机与 T007；在拿到主机前保持 needs-info/ready-for-human，标记未测，不声称支持。文件所有权：docs/development/validation-001.md。
+- [ ] T008b 在 docs/development/validation-001.md 记录 Windows x64 的真实验收与缺口。由维护者稍后自行执行，依赖 Windows 运行时适配、外部 Windows x64 主机与 T007；标记未测，不声称支持，不阻塞当前 macOS 阶段（ADR 0007）。文件所有权：docs/development/validation-001.md。
 
 ## 执行纪律
 

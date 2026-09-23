@@ -12,6 +12,7 @@
 | 凭据适配与引用存储 | [运行时凭据](development/credentials.md)、[core loader](development/core-credential-loader.md) |
 | 数据目录锁与生命周期 | [所有权协调](development/dataroot-ownership.md) |
 | 当前进展与后续工作 | [路线图](development/roadmap.md) |
+| 本机验收与内测准备 | [macOS 内测准备](development/macos-internal-readiness.md) |
 
 ## 设计与规格
 

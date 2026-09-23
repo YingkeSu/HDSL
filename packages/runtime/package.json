@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "Managed artifact install, composition, real DSH process lifecycle and upstream adaptation. Must not depend on Electron.",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN ../../LICENSE",
   "type": "module",
   "exports": {
     ".": {

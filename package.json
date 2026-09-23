@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "description": "HDSL — Hello DSH Launcher. Managed local environments for DeepSeek Harness.",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE",
   "type": "module",
   "packageManager": "pnpm@11.7.0",
   "engines": {

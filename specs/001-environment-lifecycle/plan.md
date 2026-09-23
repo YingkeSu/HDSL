@@ -14,7 +14,7 @@
 - 工程：pnpm workspace，core/runtime/contracts 独立边界。
 - 存储：应用数据目录中的 JSON 锁定记录、操作状态与代际目录；凭据在 OS store。
 - 测试：领域单元、文件/进程集成、有限 UI E2E；Vitest 与 Electron/CDP。
-- 平台：macOS ARM64、Windows x64 目标；最低版本待上游验证。Windows 目前无实机证据，只称目标平台。
+- 当前平台：本机 macOS ARM64；最低版本待上游验证。Windows x64 由维护者稍后自行测试，仍是未测目标平台，不阻塞 macOS 阶段，见 [ADR 0007](../../docs/adr/0007-macos-acceptance-and-internal-distribution.md)。
 - 约束：启动就绪默认上限拟定 60 秒，可配置；下载有取消与有限重试，实际阈值验证后锁定。无远程管理、无后台遥测。
 - 契约：本行记录的 `API_VERSION = "1.0"` 为 001 历史实施计划（不改写）；当前 wire 版本与演进机制见 [ADR 0005](../../docs/adr/0005-plugin-contract-evolution.md) 与当前 [contracts/local-api.md](contracts/local-api.md)（`1.1`；`1.0` 保留为标签 `contracts-v1.0.0` 的历史注记）。包络携带 apiVersion；DTO 见 [data-model.md](data-model.md)。
 - 凭据边界：见 [ADR 0002](../../docs/adr/0002-credential-boundary.md)；受管用户凭据按 OS store 引用，上游本地凭据产物按含密数据处理。
