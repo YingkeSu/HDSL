@@ -1,8 +1,11 @@
 # 真实第三方 DSH 插件 macOS 安装、启停与卸载验收（#98）
 
-状态：**历史 PASS 仅对 `17556e74076bfe583028aee547291d7cfbe14296` 工作树成立**（当时测试文件 `tests/integration/plugins/third-party-plugin.real.test.ts` 是**未提交的工作树工件**，并非 `17556e7` 提交内容；`create` 走旧的直连 `service.createEnvironment(...)` 路径；branch-only）。该 PASS 为 install → preview → apply → start/ready → stop → B1 包移除 → restart 的完整闭环。
+状态（分栏，勿混读）：
 
-当前 PR #136 的**测试执行版本** `e83c95cccf5ed6c3e3562ed90bdd67372bf0356f`（含平台门 + dispatcher 路径修复，代码复审 APPROVED）**尚无真实链通过记录**：实际执行的真实链在 merge 树 `47adeff`（`origin/main 9585c62` + `e83c95c`）上**两次失败**于第 1 阶段 preview（`INTERNAL_ERROR`），原因归属未定，见 §3.7 与 [#141](https://github.com/YingkeSu/HDSL/issues/141)。
+- **历史 P0 通过（仅存档）**：`17556e74076bfe583028aee547291d7cfbe14296` 工作树曾通过一次（1 passed / 140.84s）。当时测试文件是**未提交的工作树工件**（不在 `17556e7` 提交内），`create` 走旧直连 `service.createEnvironment(...)` 路径，branch-only。**不得**外推到任何后续 head。
+- **修复前失败（已定位）**：测试执行版本 `e83c95cccf5ed6c3e3562ed90bdd67372bf0356f` 的真实链在 merge 树 `47adeff`（`origin/main 9585c62` + `e83c95c`）**两次失败**于第 1 阶段 preview `INTERNAL_ERROR`（见 §1.2/§3.7 与 [#141](https://github.com/YingkeSu/HDSL/issues/141)）。
+- **组合验证树 PASS**：产品 `4f1841b9ae9f1f6d9070054a819eac26e97b2b70`（#141 固定 commit 官方 codeload transport 修复）+ 更新后 QA（sha256 `fa803406…`）→ **3 passed / 149.54s**（§1.3）。该修复已并入 main（PR #142，merge `2e855946e5679bfe8bd177ba2f0f352b58393d07`）。
+- **当前正式 head 证据**：测试执行版本 `ac435300fa9dab616b8945570923943f1ad1c4f8`（本 PR 分支合并新 main `2e85594` 后）→ **3 passed / 96.45s**（§1.4、§3.8、§5.2）。本文档为随后 docs 提交，不改变该测试执行版本。
 
 本记录只对下方注明的 SHA、候选 pin、平台与测试条件有效；未测项保持未测。
 
@@ -13,7 +16,7 @@
 - 运行期相位 ACTIVE/ACK 无 launcher 侧公开路径（E1b [#116](https://github.com/YingkeSu/HDSL/issues/116) 的确认切片为 no-go，见 [#129](https://github.com/YingkeSu/HDSL/issues/129)）；本记录不冒充 HDSL 运行期集合，也不新增私有观测 bridge。
 - `hasCustomTag` 门禁缺口按 [#107](https://github.com/YingkeSu/HDSL/pull/110) 登记为 deferred：本验收不改代码、不降门槛、不合并该 PR。
 
-## 1. 基线与环境
+## 1. 基线与环境（分栏）
 
 ### 1.1 历史实测运行（本记录 §2–§9 全部结果的来源）
 
@@ -29,7 +32,7 @@
 | 实测命令 | `HDSL_REAL_THIRD_PARTY_PLUGIN=1 HDSL_98_EVIDENCE_FILE=<path> pnpm exec vitest run tests/integration/plugins/third-party-plugin.real.test.ts` |
 | 实测结果 | **1 passed / 1 file（140.84s）** |
 
-### 1.2 本轮测试执行版本与失败 merge 树（与 §1.1 不是同一 head）
+### 1.2 修复前失败（`e83c95c` / merge `47adeff`，与 §1.1 不是同一 head）
 
 | 项 | 值 |
 | --- | --- |
@@ -39,6 +42,22 @@
 | branch-only 真实链 | **无 PASS 记录**（未执行） |
 | 实际失败 merge 树 | `47adeff` = `origin/main 9585c62` + `e83c95c` |
 | merge 树真实链结果 | **2 次失败**，均在第 1 阶段 preview：`INTERNAL_ERROR`（223s / 246s）；见 §3.7 |
+
+### 1.3 组合验证树 PASS（#141 修复 + 更新后 QA）
+
+| 项 | 值 |
+| --- | --- |
+| 产品（修复）SHA | `4f1841b9ae9f1f6d9070054a819eac26e97b2b70`（#141 transport 修复；已并入 main `2e85594`） |
+| QA 测试工件（未提交进修复 PR #142） | `tests/integration/plugins/third-party-plugin.real.test.ts` sha256 `fa80340684a9b046deec8396e9443a4fc706dcc4b4a05370aa7dab0d266d8cbc` |
+| 变更 | 发布 profile 声明断言由 `github:<owner>/<name>#<commit>` **替换并加强**为同 commit codeload URL，并加 `gitHosted: true`/`integrity:`/无 `github:` 前缀校验；同时保留 manifest/patch/entry 摘要、无 `allowBuilds`、无脚本授权、移除与重启断言 |
+| 结果 | **3 passed（1 file）/ 149.54s** |
+
+### 1.4 当前正式 head 证据
+
+| 项 | 值 |
+| --- | --- |
+| 测试执行版本（本 PR 分支合并新 main 后） | `ac435300fa9dab616b8945570923943f1ad1c4f8`（merge `1145801`，main `2e85594`） |
+| 结果 | **3 passed（1 file）/ 96.45s**；机器可读证据见 §5.2 |
 
 受管安装使用真实网络下载固定 Node/DSH 产物与 DSH 依赖闭包（`npm ci`），不重用宿主 npm 缓存；数据根、HOME、DSH_HOME、TMPDIR 全部在一次性临时目录内，DSH 进程环境由生产 `createProcessManager` 显式白名单化（HOME/DSH_HOME/DSH_AGENTS_HOME/PATH/TMPDIR + `DSH_TELEMETRY_DISABLED=1`/`NODE_NO_WARNINGS=1`），不继承宿主 `AO_*`/令牌类变量。
 
@@ -129,15 +148,23 @@ bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuil
 - 移除代发布 profile 的 `node_modules/asu-skills`：**不存在**（`removed_profile_package_node_modules_present = false`，pnpm 按剪枝后的声明/锁收敛）。
 - 边界：本记录不做静态服务依赖证明、不承诺无损卸载、不伪造 `known-empty`；服务耦合轴按上面的 informational risk 记录。旧代目录/旧发布 profile 的保留策略未在本轮单独测量（未测），不作为“已无损”证据。
 
-### 3.7 当前测试执行版本 / merge 树的真实链结果（未通过，归属未定）
+### 3.7 修复前失败（`e83c95c` / merge `47adeff`，已定位）
 
-测试执行版本 `e83c95c` 的真实 opt-in 链中，`create` 与受管安装 `succeeded`，但第 1 阶段 **preview 失败**：
+测试执行版本 `e83c95c` 的真实 opt-in 链中（**修复前**），`create` 与受管安装 `succeeded`，但第 1 阶段 **preview 失败**：
 
 - 实际执行树：`47adeff` = `origin/main 9585c62` + `e83c95c`（两次运行均在此 merge 树；**本 head 未做 branch-only 真实链运行**）。
 - 失败 #1：223s；失败 #2：246s。均为 `kind=preview, status=failed, error.code=INTERNAL_ERROR, message="unclassified internal error"`（operation snapshot 按 `packages/contracts/src/errors.ts` 脱敏，底层消息不可见）。
 - 有界定位（隔离 `/tmp`，非重跑全链）：pin 的 GitHub commit / `contents` 请求 `200` 且 `package.json` sha256 命中 pin；`PNPM_EXECUTOR_SPEC` 的 tgz 与 entry 摘要命中；冻结 pnpm@11.7.0 纯 registry 解析 `<45s` 成功；而 pin 的 `github:Hisn00w/ASu-skills#feb7730…` 依赖在 `install --lockfile-only --ignore-scripts` 下停滞 `>200s` 且无 lockfile。生产 `packages/runtime/src/plugins/target-profile.ts` 的 `TARGET_PROFILE_RESOLUTION_TIMEOUT_MS = 180_000` 超时/非零 → `INTERNAL_ERROR`，与该停滞时长一致。
 - **归属未定**：不认为已证明产品回归、网络故障或 pnpm 上游缺陷；具体未知=停滞发生在 pnpm 的哪个内部请求。详见诊断 issue [#141](https://github.com/YingkeSu/HDSL/issues/141) 与 PR #136 评论 `5799581978`。
 - 旧的 `1 passed / 140.84s` 属于 §1.1 历史运行，**不得外推**到 `e83c95c` / `47adeff`。
+
+### 3.8 修复后结果：组合验证树与当前正式 head（均 PASS）
+
+- #141 修复（固定 commit 官方 codeload transport）并入 main（merge `2e85594`）后：
+  - **组合验证树**（产品 `4f1841b` + QA sha256 `fa803406…`）：`3 passed / 149.54s`。
+  - **当前正式 head**（测试执行版本 `ac43530`，merge main `2e85594`）：`3 passed / 96.45s`。
+- 两次均完整通过 install → preview → apply → start/ready → stop → B1 移除 → restart；关键证据见 §5.2：`scriptAssessment=none-detected`、`requiresBuildAuthorization=false`、发布 profile 声明为精确同 commit codeload URL、发布 `pnpm-lock.yaml` 含 `gitHosted: true` 与 `integrity`、`removed_profile_package_node_modules_present=false`。
+- 边界不变：`!!js` 求值仍未直接观测（§3.4）；unknown 服务仍仅作 risk；本结果只对注明的执行树/pin 有效。
 
 ## 4. install-time 与 load-time 的执行边界（措辞纪律）
 
@@ -147,7 +174,9 @@ bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuil
 
 ## 5. 机器可读证据
 
-`HDSL_98_EVIDENCE_FILE` 输出（**历史实测**，工作树 SHA `17556e7`；不对应 `e83c95c` / `47adeff`）：
+### 5.1 历史实测（工作树 `17556e7`；不对应 `e83c95c` / `47adeff`）
+
+`HDSL_98_EVIDENCE_FILE` 输出：
 
 ```json
 {
@@ -184,9 +213,38 @@ bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuil
 }
 ```
 
+### 5.2 当前正式 head（测试执行版本 `ac43530`，merge main `2e85594`）
+
+`HDSL_98_EVIDENCE_FILE` 输出：
+
+```json
+{
+  "candidate": "Hisn00w/ASu-skills@feb77307b45e9c4a9890e385748eebe5a919eb1b",
+  "queriedAt": "2026-09-23",
+  "stars": 5031,
+  "archiveSha256": "a864cf2786c5e05408e6ce76195b6cb19a2be9fa24490617d220f1451325a663",
+  "manifestSha256": "3f97ad14125d544069a4d8f75cf8c233f34679077e0722cc620878e75088c7e2",
+  "patchSha256": "d05da6d7fea17a111a59c986e301d3c7d470940f0c6da304a801c0f6bf3b3d56",
+  "entrySha256": "7ac439fd9c048f4c1ef7a9f5aa70c44e08950f4a433b16ce2cf958703965a45a",
+  "scriptAssessment": "none-detected",
+  "requiresBuildAuthorization": false,
+  "planInputsDigest": "89e9331c3a257327836ea7b71abb929647109db20fba50c8c58c6c456aa73077",
+  "sourceClosureLockSha256": "0b54d743f1242bf6e9581245fb739436305b9874f5391ddcbcdca4eeacaaaff0",
+  "baselineGeneration": "gen-96a4b1a04c3d4bb5",
+  "installedGeneration": "gen-dea4ecd94b6a4fd4",
+  "removedGeneration": "gen-65a9b509683e42b7",
+  "notes": [
+    "lsof_mentions_asu_skills=false",
+    "removed_profile_package_node_modules_present=false"
+  ]
+}
+```
+
+（组合验证树 `4f1841b` + QA `fa803406…` 的同形结果：`3 passed / 149.54s`；generations `gen-185afe1009e547ea`/`gen-fba6895ce5d0460f`/`gen-bc3a5576c04f4af2`。两者仅在随机 generation id 上有差异。）
+
 ## 6. 验收对照（Agent Brief）
 
-> 本节对照的是 §1.1 历史运行（工作树 `17556e7`）。当前测试执行版本 `e83c95c` 的真实链**未通过**（§3.7），故 #98 整体验收当前为 **BLOCKED**，不以 CI 绿或历史绿收口。
+> 本节对照的是 §1.1 历史运行（工作树 `17556e7`）。修复（#141，PR #142 → main `2e85594`）后：组合验证树与**当前正式 head**（§1.3/§1.4/§3.8）均完成 install → preview → apply → start/ready → stop → B1 移除 → restart 全链 **PASS**；`!!js` 未直接观测等边界不变（§7）。
 
 - [x] 记录查询日期、stars、精确 commit、tree/文件摘要、许可、manifest、DSH 入口、产物摘要；来源漂移 fail-closed（摘要不匹配即失败）。
 - [x] 预览/安装未请求、也未写入构建授权或 `allowBuilds`；`requiresBuildAuthorization=false`，未触发“需授权即停”分支。
@@ -205,7 +263,7 @@ bundledSkillDir: !!js process.getBuiltinModule('node:path').join(process.getBuil
 - 运行期 ACTIVE/ACK 集合与 `--dump-config` 期望组成的等价性（E9）：未证，本记录不声称等价。
 - 旧代目录/旧发布 profile 的长期保留与磁盘残留量化：未测。
 - Windows/Linux：不在受管 catalog，未测。
-- 测试执行版本 `e83c95c` / merge `47adeff` 的真实链：**未通过**（第 1 阶段 preview `INTERNAL_ERROR`，归属未定）；见 §3.7 与 [#141](https://github.com/YingkeSu/HDSL/issues/141)。
+- 修复前 `e83c95c` / merge `47adeff` 的真实链：preview `INTERNAL_ERROR`（已定位并修复：#141 / PR #142 → main `2e85594`）。修复后：组合验证树与当前正式 head（§1.3/§1.4/§3.8）全链 PASS，无未通过项。
 - 技能载荷（`skills/**` 9 个 `SKILL.md` 与 `job-apply`/`make-resume` 路径）的运行期行为：本次不调用、不评估。
 - 运行期遥测/网络副作用的包级审计：D 层边界外（阶段 1 独立复核已记录）。
 
@@ -229,7 +287,7 @@ HDSL_REAL_THIRD_PARTY_PLUGIN=1 \
 
 平台门与默认套件负控：真实 lane 仅在 `process.platform === 'darwin' && process.arch === 'arm64'` 时运行（`describe.skipIf`），并把真实 host 透传给 `createRuntimePort` / `createManagedInstall`，`environments.create` 走冻结 dispatcher 的 `unsupportedCombinationReason`。默认套件（无网络、opt-in 关闭）另有一条负控：在真实的 `createManagedInstall` 上用 `linux/x64` host + `fetch` 探针 dispatch `environments.create`，断言返回 `UNSUPPORTED_COMBINATION`，且 **fetch 从未被调用、无 environment 行、无 operation 台账条目**——即拒绝发生在下载/安装副作用之前，而不是用跳过真实 lane 代替断言。
 
-以上平台门 / 负控属于**测试执行版本 `e83c95c`**；该版本的真实 opt-in lane 尚无通过记录（§3.7）。
+以上平台门 / 负控属于**测试执行版本 `ac43530`**（组合验证树先用 `4f1841b` + QA `fa803406…` 验证，再在合并新 main 的正式 head 上复跑）。
 
 ## 10. 引用
 
@@ -240,4 +298,4 @@ HDSL_REAL_THIRD_PARTY_PLUGIN=1 \
 
 ## 11. 检查
 
-本记录随附的代码变更涉及 `tests/integration/plugins/third-party-plugin.real.test.ts`（测试执行版本 `e83c95c`）与本文档（随后的 docs-only 校正提交，不改变测试执行版本）。测试除 opt-in 真实 lane 外还包含默认套件（无网络）的平台门断言：直接验证生产 `unsupportedCombinationReason`，并通过 `createContractRuntime(...).dispatch('environments.create')` 在 `linux/x64` 下断言 `UNSUPPORTED_COMBINATION` 且无下载/安装副作用。本地门禁结果见 PR 正文；默认 `pnpm test` 不运行 opt-in 真实链。`e83c95c` 的真实链**尚无通过记录**（见 §3.7），故本记录不能作为该测试执行版本的验收通过证据。
+本记录随附的代码变更涉及 `tests/integration/plugins/third-party-plugin.real.test.ts`（测试执行版本 `ac43530`，本 PR 分支合并新 main `2e85594` 之后）与本文档（随后的 docs 提交，不改变该测试执行版本）。QA 断言由 `github:` 声明**替换并加强**为同 commit codeload URL（并加 `gitHosted`/`integrity`/无 `github:` 前缀校验），未删除既有断言。测试除 opt-in 真实 lane 外还包含默认套件（无网络）的平台门断言：直接验证生产 `unsupportedCombinationReason`，并通过 `createContractRuntime(...).dispatch('environments.create')` 在 `linux/x64` 下断言 `UNSUPPORTED_COMBINATION` 且无下载/安装副作用。本地门禁与 CI 见 PR 正文；默认 `pnpm test` 不运行 opt-in 真实链。正式 head 的真实链**已 PASS**（§1.4/§3.8/§5.2）。
