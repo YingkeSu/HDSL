@@ -48,6 +48,7 @@ describe('renderer/main/preload consume the same contract', () => {
       'generations.list',
       'generations.restore',
       'versions.dsh',
+      'compositions.expected',
     ]);
   });
 

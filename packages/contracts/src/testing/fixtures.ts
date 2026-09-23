@@ -1383,6 +1383,37 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     seed: DSH_VERSIONS_NETWORK_SEED,
   },
 
+  // compositions.expected (environment-scoped read-only expected composition; #118)
+  {
+    id: 'compositions-expected-legal',
+    method: 'compositions.expected',
+    kind: 'legal',
+    description: 'starts a read-only expected-composition operation for a stopped environment',
+    request: request('compositions.expected', {
+      requestId: 'req-composition',
+      environmentId: FIXTURE_IDS.environment.stopped,
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'compositions-expected-missing-request-id',
+    method: 'compositions.expected',
+    kind: 'illegal',
+    description: 'an expected-composition read without a requestId is rejected',
+    request: request('compositions.expected', {
+      environmentId: FIXTURE_IDS.environment.stopped,
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'compositions-expected-missing-environment',
+    method: 'compositions.expected',
+    kind: 'illegal',
+    description: 'an expected-composition read without an environmentId is rejected',
+    request: request('compositions.expected', { requestId: 'req-composition-bad' }),
+    expected: 'INVALID_INPUT',
+  },
+
 ];
 
 export const ALL_CONTRACT_FIXTURES: readonly ContractFixture[] = [

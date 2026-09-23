@@ -113,6 +113,12 @@ export interface DshVersionCommand {
   readonly requestId: string;
 }
 
+/** `compositions.expected`: a read-only expected-composition read for one environment. */
+export interface ExpectedCompositionCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+}
+
 /**
  * Terminal payload a plugin-source adapter returns for `plugins.search`.
  * `PluginSearchResult` is the wire DTO; re-exported name keeps the port seam
@@ -214,6 +220,15 @@ export interface ContractPort {
    * never touches an environment composition and never runs plugin code.
    */
   listDshVersions(command: DshVersionCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable, read-only expected-composition read for one
+   * environment (`compositions.expected`). The terminal `ExpectedCompositionView`
+   * is read only from `OperationSnapshot.output`. It runs the managed
+   * `--dump-config` offline (no plugin execution, no credential) and never
+   * claims the runtime ACTIVE plugin set.
+   */
+  describeExpectedComposition(command: ExpectedCompositionCommand): PortOutcome<OperationRef>;
 
   /**
    * Starts a cancellable `changes.preview` for one environment. The terminal

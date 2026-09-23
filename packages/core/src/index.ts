@@ -29,6 +29,7 @@ export * from './plugin-source.js';
 export * from './plugin-discovery-service.js';
 export * from './version-source.js';
 export * from './version-discovery-service.js';
+export * from './expected-composition-service.js';
 export * from './journal.js';
 export * from './idempotency-store.js';
 export * from './ports.js';

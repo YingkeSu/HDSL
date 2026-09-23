@@ -194,6 +194,8 @@ export const operationKindSchema = sLiteral(
   'restore',
   // 1.1 addition (#113, A1): read-only upstream DSH version listing.
   'versions',
+  // 1.1 addition (#118): read-only expected composition from `--dump-config`.
+  'composition',
 );
 export type OperationKind = Infer<typeof operationKindSchema>;
 
@@ -302,6 +304,108 @@ export const dshVersionListingSchema = sObject({
   versions: sArray(dshUpstreamVersionSchema, { maxLength: DSH_UPSTREAM_VERSIONS_MAX }),
 });
 export type DshVersionListing = Infer<typeof dshVersionListingSchema>;
+
+// ---------------------------------------------------------------------------
+// 1.1 addition (#118): read-only EXPECTED composition from the managed
+// `dsh --profile <p> --dump-config` output. It is explicitly the desired/
+// EXPECTED composition, NEVER the runtime ACTIVE plugin set: `--dump-config`
+// resolves config offline, preserves `!!js` expressions verbatim without
+// evaluating them, and the dump <-> runtime-loaded-set equivalence (E9) is NOT
+// established. The view carries `basis: 'dump-config'` and
+// `runtimeVerification: 'unavailable'` so it can never read as ACTIVE.
+// ---------------------------------------------------------------------------
+
+/** Per-view bounds; a dump over these caps is truncated with a diagnostic. */
+export const EXPECTED_COMPOSITION_GROUPS_MAX = 512;
+export const EXPECTED_COMPOSITION_ROWS_MAX = 5000;
+export const EXPECTED_COMPOSITION_DIAGNOSTICS_MAX = 64;
+export const EXPECTED_COMPOSITION_ROW_CONFIG_MAX = 4096;
+export const EXPECTED_COMPOSITION_STDERR_MAX = 8192;
+export const EXPECTED_COMPOSITION_BUNDLES_MAX = 256;
+
+/** Verbatim config subtree of one expected row; `!!js` stays literal (unrun). */
+export const expectedCompositionConfigSchema = sObject({
+  /** Verbatim YAML text (bounded); unevaluated `!!js` expressions stay literal. */
+  text: sString({ maxLength: EXPECTED_COMPOSITION_ROW_CONFIG_MAX }),
+  truncated: sBoolean,
+  /** True when the subtree carries an unevaluated custom tag, alias or merge key. */
+  unevaluated: sBoolean,
+});
+export type ExpectedCompositionConfig = Infer<typeof expectedCompositionConfigSchema>;
+
+/** One expected row: `(id, name, disabled, config?)` from a `# ==` section. */
+export const expectedCompositionRowSchema = sObject({
+  id: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  /** Row `name` (package reference) when it is a plain scalar. */
+  name: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  /** False when `name` is an explicit tag / alias / block scalar / non-string. */
+  nameKnown: sBoolean,
+  disabled: sNullable(sBoolean),
+  /** False when `disabled` is an unevaluated `!!js` expression or non-boolean. */
+  disabledKnown: sBoolean,
+  config: sOptional(expectedCompositionConfigSchema),
+});
+export type ExpectedCompositionRow = Infer<typeof expectedCompositionRowSchema>;
+
+export const expectedCompositionGroupSchema = sObject({
+  /** The `# == <label>` header that introduced this section. */
+  label: sString({ minLength: 1, maxLength: 256 }),
+  rows: sArray(expectedCompositionRowSchema, { maxLength: EXPECTED_COMPOSITION_ROWS_MAX }),
+});
+export type ExpectedCompositionGroup = Infer<typeof expectedCompositionGroupSchema>;
+
+export const expectedCompositionDiagnosticCodeSchema = sLiteral(
+  'preamble-ignored',
+  'group-parse-failed',
+  'row-ignored',
+  'unresolved-construct',
+  'truncated',
+);
+export type ExpectedCompositionDiagnosticCode = Infer<
+  typeof expectedCompositionDiagnosticCodeSchema
+>;
+
+export const expectedCompositionDiagnosticSchema = sObject({
+  code: expectedCompositionDiagnosticCodeSchema,
+  /** Value-free, redacted explanation (raw `!!js` text is never echoed here). */
+  message: sString({ minLength: 1, maxLength: 512 }),
+  groupLabel: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  line: sNullable(sInteger({ min: 1 })),
+});
+export type ExpectedCompositionDiagnostic = Infer<typeof expectedCompositionDiagnosticSchema>;
+
+/**
+ * Terminal `compositions.expected` payload (ADR 0005 D5 model, read-only).
+ * `basis`/`runtimeVerification` are fixed literals so the view can never be
+ * presented as the runtime ACTIVE plugin set.
+ */
+export const expectedCompositionViewSchema = sObject({
+  environmentId: environmentIdSchema,
+  revision: revisionSchema,
+  generationId: sNullable(generationIdSchema),
+  profileName: sString({ minLength: 1, maxLength: 256 }),
+  /** Fixed: produced from the offline dump, never from a running process. */
+  basis: sLiteral('dump-config'),
+  /** Fixed: HDSL does not observe the runtime ACTIVE set in this slice. */
+  runtimeVerification: sLiteral('unavailable'),
+  /** Declared bundles from the profile declaration source. */
+  bundles: sArray(sString({ minLength: 1, maxLength: 214 }), {
+    maxLength: EXPECTED_COMPOSITION_BUNDLES_MAX,
+  }),
+  patchReload: sLiteral('live', 'startup', 'unknown'),
+  groups: sArray(expectedCompositionGroupSchema, { maxLength: EXPECTED_COMPOSITION_GROUPS_MAX }),
+  rowCount: sInteger({ min: 0, max: EXPECTED_COMPOSITION_ROWS_MAX }),
+  stdoutBytes: sInteger({ min: 0 }),
+  /** Bounded stderr text, surfaced as-is (redacted) and never silently dropped. */
+  stderr: sString({ maxLength: EXPECTED_COMPOSITION_STDERR_MAX }),
+  exitCode: sInteger({ min: -1, max: 255 }),
+  timedOut: sBoolean,
+  diagnostics: sArray(expectedCompositionDiagnosticSchema, {
+    maxLength: EXPECTED_COMPOSITION_DIAGNOSTICS_MAX,
+  }),
+  observedAt: sString({ minLength: 1, maxLength: 64 }),
+});
+export type ExpectedCompositionView = Infer<typeof expectedCompositionViewSchema>;
 
 export const exportResultSchema = sObject({
   exportId: exportIdSchema,

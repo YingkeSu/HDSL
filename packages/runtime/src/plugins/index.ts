@@ -16,3 +16,4 @@ export * from './removal-port.js';
 export * from './pnpm-failure.js';
 export * from './lock-closure.js';
 export * from './build-authorization.js';
+export * from './expected-composition.js';

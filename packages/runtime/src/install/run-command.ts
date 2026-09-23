@@ -40,6 +40,12 @@ export interface RunCommandOptions {
   readonly maxOutputBytes?: number;
   /** Explicit install-child journal directory; derived from `env` by default. */
   readonly processJournalDirectory?: string;
+  /**
+   * Set false for a read-only inspection child (e.g. `--dump-config`) that must
+   * not leave an install-child ownership record behind. Defaults to true so
+   * every install/process owner keeps its durable identity.
+   */
+  readonly journalProcess?: boolean;
   readonly probe?: ProcessProbe;
 }
 
@@ -83,7 +89,9 @@ export const runCommand = (
     });
 
     const journalDirectory =
-      options.processJournalDirectory ?? installChildDirectoryForEnvironment(options.env);
+      options.journalProcess === false
+        ? undefined
+        : (options.processJournalDirectory ?? installChildDirectoryForEnvironment(options.env));
     const journal = journalDirectory === undefined ? undefined : new InstallChildJournal(journalDirectory);
     const token = randomUUID();
     let journalWrite: Promise<void> | undefined;

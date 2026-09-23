@@ -17,6 +17,7 @@ import type {
   OperationCommand,
   ApplyChangeCommand,
   DshVersionCommand,
+  ExpectedCompositionCommand,
   PluginInspectCommand,
   PreviewChangeCommand,
   RestoreGenerationCommand,
@@ -30,6 +31,7 @@ import type {
   ChangePlan,
   DshVersionListing,
   EnvironmentSummary,
+  ExpectedCompositionView,
   ExportResult,
   GenerationSummary,
   InstalledPluginsView,
@@ -72,6 +74,12 @@ export interface ReferenceSeed {
     readonly failure?: ErrorCode;
     readonly retryAfterSeconds?: number;
   };
+  /** Terminal payload (or controlled failure) for `compositions.expected` (#118). */
+  readonly expectedComposition?: {
+    readonly result?: ExpectedCompositionView;
+    readonly failure?: ErrorCode;
+    readonly retryAfterSeconds?: number;
+  };
   /** Seeded `plugins.installed` view per environment id (else an empty list). */
   readonly installedPlugins?: Readonly<Record<string, InstalledPluginsView>>;
   /** Terminal payload (or controlled failure) for a remove `changes.preview`. */
@@ -102,6 +110,7 @@ export class ReferenceContractPort implements ContractPort {
   readonly #pluginSearch: ReferenceSeed['pluginSearch'];
   readonly #pluginInspection: ReferenceSeed['pluginInspection'];
   readonly #dshVersions: ReferenceSeed['dshVersions'];
+  readonly #expectedComposition: ReferenceSeed['expectedComposition'];
   readonly #installedPlugins: ReferenceSeed['installedPlugins'];
   readonly #removal: ReferenceSeed['removal'];
   #environmentCounter = 0;
@@ -127,6 +136,7 @@ export class ReferenceContractPort implements ContractPort {
     this.#pluginSearch = seed.pluginSearch;
     this.#pluginInspection = seed.pluginInspection;
     this.#dshVersions = seed.dshVersions;
+    this.#expectedComposition = seed.expectedComposition;
     this.#installedPlugins = seed.installedPlugins;
     this.#removal = seed.removal;
   }
@@ -373,6 +383,37 @@ export class ReferenceContractPort implements ContractPort {
     return portOk({ operationId: operation.id });
   }
 
+  describeExpectedComposition(command: ExpectedCompositionCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    const config = this.#expectedComposition;
+    if (config?.failure !== undefined) {
+      const failed = this.#recordPluginOperation(
+        'composition',
+        {
+          status: 'failed',
+          error: config.failure,
+          ...(config.retryAfterSeconds === undefined
+            ? {}
+            : { retryAfterSeconds: config.retryAfterSeconds }),
+        },
+        command.environmentId,
+      );
+      this.effects.push(`describeExpectedComposition:${failed.id}`);
+      return portOk({ operationId: failed.id });
+    }
+    const result = config?.result ?? defaultExpectedCompositionView(command.environmentId, environment);
+    const operation = this.#recordPluginOperation(
+      'composition',
+      { status: 'succeeded', output: result },
+      command.environmentId,
+    );
+    this.effects.push(`describeExpectedComposition:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
     const environment = this.#environments.get(command.environmentId);
     if (environment === undefined) {
@@ -519,17 +560,18 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore' | 'versions',
+    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore' | 'versions' | 'composition',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;
       readonly error?: ErrorCode;
       readonly retryAfterSeconds?: number;
     },
+    environmentId: string | null = null,
   ): OperationSnapshot {
     const operation: OperationSnapshot = {
       id: `op-${String((this.#operationCounter += 1))}`,
-      environmentId: null,
+      environmentId,
       kind,
       phase: terminal.status === 'succeeded' ? 'finished' : 'failed',
       status: terminal.status,
@@ -626,4 +668,55 @@ export const defaultDshVersionListing = (): DshVersionListing => ({
       catalogCombinationIds: ['combo-darwin-arm64'],
     },
   ],
+});
+
+/**
+ * Deterministic `compositions.expected` fixture (#118). It is explicitly the
+ * desired/expected dump (`basis: 'dump-config'`, `runtimeVerification:
+ * 'unavailable'`) and includes a `!!js` row whose config text is preserved
+ * verbatim, never evaluated.
+ */
+export const defaultExpectedCompositionView = (
+  environmentId: string,
+  environment: EnvironmentSummary,
+): ExpectedCompositionView => ({
+  environmentId,
+  revision: environment.revision,
+  generationId: environment.activeGenerationId,
+  profileName: 'hdsl-fixture-generation',
+  basis: 'dump-config',
+  runtimeVerification: 'unavailable',
+  bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
+  patchReload: 'live',
+  groups: [
+    {
+      label: '@deepseek-ai/dsh-base',
+      rows: [
+        { id: 'timer', name: '@deepseek-ai/cordis-plugin-timer', nameKnown: true, disabled: null, disabledKnown: false },
+        {
+          id: 'hmr',
+          name: '@deepseek-ai/cordis-plugin-hmr',
+          nameKnown: true,
+          disabled: true,
+          disabledKnown: true,
+          config: { text: 'root:\n  - .', truncated: false, unevaluated: false },
+        },
+        {
+          id: 'sessions',
+          name: '@deepseek-ai/dsh-session-persistence-jsonl',
+          nameKnown: true,
+          disabled: null,
+          disabledKnown: false,
+          config: { text: "root: !!js dshHomePath('sessions')", truncated: false, unevaluated: true },
+        },
+      ],
+    },
+  ],
+  rowCount: 3,
+  stdoutBytes: 128,
+  stderr: '',
+  exitCode: 0,
+  timedOut: false,
+  diagnostics: [],
+  observedAt: '2026-01-02T03:04:05Z',
 });

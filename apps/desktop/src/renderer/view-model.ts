@@ -16,6 +16,7 @@ import {
   type ChangeApplication,
   type ChangePlan,
   type DshVersionListing,
+  type ExpectedCompositionView,
   type GenerationSummary,
   type ContractError,
   type EnvironmentSummary,
@@ -122,6 +123,8 @@ export interface RendererState {
   readonly selectedInstalledPluginId: string | null;
   /** Last succeeded `versions.dsh` upstream DSH version listing, or null. */
   readonly dshVersions: DshVersionListing | null;
+  /** Last succeeded `compositions.expected` desired-composition view, or null. */
+  readonly expectedComposition: ExpectedCompositionView | null;
 }
 
 /**
@@ -171,6 +174,11 @@ export interface RendererActions {
   previewPluginRemoval(): void;
   /** Starts a read-only upstream DSH version listing (`versions.dsh`, A1/#113). */
   loadDshVersions(): void;
+  /**
+   * Starts a read-only EXPECTED composition read for the selected environment
+   * (`compositions.expected`, #118). The result is never the runtime ACTIVE set.
+   */
+  loadExpectedComposition(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -205,6 +213,7 @@ export const INITIAL_STATE: RendererState = {
   installedPlugins: null,
   selectedInstalledPluginId: null,
   dshVersions: null,
+  expectedComposition: null,
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */
