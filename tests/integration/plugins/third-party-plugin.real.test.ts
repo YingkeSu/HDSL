@@ -472,9 +472,21 @@ describe.skipIf(!enabled || !supportedHost)('real third-party DSH plugin accepta
           readonly dependencies?: Record<string, string>;
           readonly dsh?: { readonly profile?: { readonly bundles?: readonly string[] } };
         };
-        expect(profileDeclaration.dependencies?.[CANDIDATE.packageName]).toBe(
-          `github:${CANDIDATE.owner}/${CANDIDATE.name}#${CANDIDATE.ref}`,
-        );
+        // #141: the declared dependency is the SAME commit's official codeload
+        // transport URL (transport form only — the recorded SOURCE stays GitHub).
+        const expectedTransport = `https://codeload.github.com/${CANDIDATE.owner}/${CANDIDATE.name}/tar.gz/${CANDIDATE.ref}`;
+        expect(profileDeclaration.dependencies?.[CANDIDATE.packageName]).toBe(expectedTransport);
+        expect(expectedTransport.startsWith('https://codeload.github.com/')).toBe(true);
+        expect(profileDeclaration.dependencies?.[CANDIDATE.packageName]).not.toContain('github:');
+        // SOURCE provenance is unchanged: GitHub repository + exact pinned commit.
+        expect(plan.sourceLock.commitSha).toBe(CANDIDATE.ref);
+        expect(plan.sourceLock.manifestSha256).toBe(CANDIDATE.manifestSha256);
+        // The published profile lock keeps the git-hosted closure identity and
+        // the tarball integrity for the same commit (no floating source).
+        const profileLockText = readFileSync(join(publishedProfile, 'pnpm-lock.yaml'), 'utf8');
+        expect(profileLockText).toContain(`asu-skills@${expectedTransport}`);
+        expect(profileLockText).toContain('gitHosted: true');
+        expect(profileLockText).toContain('integrity:');
         expect(profileDeclaration.dsh?.profile?.bundles).toContain(CANDIDATE.packageName);
         // No build authorization / allowBuilds may exist anywhere in the applied
         // declaration (the default-deny path must not leave one behind).
