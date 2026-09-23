@@ -1,16 +1,16 @@
-# 本地 API 契约 v1.1（冻结）
+# 本地 API 契约 v1.2（冻结）
 
-文档 rev = v1.1（2026-09-23）；wire 包络版本为 `API_VERSION = "1.1"`（见下节）。文档 rev 记录本文件的修订，`API_VERSION` 是 preload 桥的运行时契约版本；两者独立演进，冲突时以 `API_VERSION` 与可执行实现为准。`1.0` 是已冻结版本，保留为标签 `contracts-v1.0.0` 的历史注记，见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
+文档 rev = v1.2（2026-09-23）；wire 包络版本为 `API_VERSION = "1.2"`（见下节）。文档 rev 记录本文件的修订，`API_VERSION` 是 preload 桥的运行时契约版本；两者独立演进，冲突时以 `API_VERSION` 与可执行实现为准。`1.0` / `1.1` 是已冻结版本，分别保留为标签 `contracts-v1.0.0` / `contracts-v1.1.0` 的历史注记，见 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
 
 实现为 preload 白名单桥，非任意 HTTP 远程控制接口。main 必须校验发送方和所有输入；TypeScript 类型不替代运行时校验。**权威顺序**：`packages/contracts/src`（`version.ts`/`methods.ts`/`errors.ts`/`dto.ts`/`dispatcher.ts`）是方法、字段、错误码与校验顺序的可执行权威；[data-model.md](../data-model.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md) 记录修订语义与 1.1 新增 DTO 的归属；本文件汇总调用方法、幂等、错误与事件语义。真实持久化、安装、进程与桌面验收见对应验证记录；**本文件不声称平台验收**。
 
 ## 契约版本
 
-- 导出常量 `API_VERSION = "1.1"`（`major.minor`），位于 `packages/contracts/src`，renderer 与 main 共用同一构建产物。历史：`1.0` 冻结于标签 `contracts-v1.0.0`，不移动、不重打。
+- 导出常量 `API_VERSION = "1.2"`（`major.minor`），位于 `packages/contracts/src`，renderer 与 main 共用同一构建产物。历史：`1.0` 冻结于标签 `contracts-v1.0.0`，`1.1` 冻结于标签 `contracts-v1.1.0`；均不移动、不重打。`1.2` 是 additive：仅新增 `entries.patch` 及其 DTO，不修改任何 `1.1` 方法、字段或错误语义。
 - 每个请求与响应包络都携带 `apiVersion`。main 在产生任何副作用前**要求完全匹配**：任何 major 或 minor 不一致 → 拒绝，错误码 `CONTRACT_VERSION_MISMATCH`，不执行方法。
 - 采用完全匹配的理由：renderer 与 main 共用同一构建产物，且 main 对未知字段严格拒绝；若允诺 minor 兼容，更高 minor 的新增字段必然被拒，承诺不可执行。因此不提供 minor 向后兼容；升级必须是两侧同步的显式变更。
 - 版本升级是显式变更并更新本文件，同步更新可执行 fixture 表（`packages/contracts/src/testing/fixtures.ts`）；不得静默放宽字段或错误语义。
-- 差异场景必须在「方法 × 合法/非法 fixture × 期望错误码」表中逐条固化；`1.1` 的标签由编排者按合入后的精确提交打 `contracts-v1.1.0`（ADR 0005 §5.4）。
+- 差异场景必须在「方法 × 合法/非法 fixture × 期望错误码」表中逐条固化；`1.2` 的标签由编排者按合入后的精确提交打 `contracts-v1.2.0`（ADR 0005 §5.4）。
 
 ## 通用规则
 
@@ -56,6 +56,7 @@
 | generations.restore | requestId, environmentId, expectedRevision, targetGenerationId | OperationRef | 1.1 追加（ADR 0005 D4/D8，1.0 标签不动）；把活动代指针原子切回已记录代；提交前失败保旧代；终态 `GenerationSummary` 仅从 `OperationSnapshot.output` 读取；目标 DSH 版本低于环境最近成功启动版本时给出**非阻断** `dshCompatibilityWarning`，同版本/未知不提示，不撤销已写数据、不做 schema 降级 |
 | versions.dsh | requestId | OperationRef | 1.1 追加（A1/#113，1.0 标签不动）；全局（`environmentId=null`）只读上游 DSH 版本清单，终态 `DshVersionListing` 仅从 `OperationSnapshot.output` 读取；只访问白名单主机 `registry.npmjs.org`、无凭据、不下载/不执行任何包；按受审组合标注 `supported`，未受审版本不得呈现为可安装；网络错误按 D11 分类（`NETWORK_UNAVAILABLE`/`RATE_LIMITED`/`SOURCE_ACCESS_DENIED`/`SOURCE_NOT_FOUND`/`DOWNLOAD_FAILED`） |
 | compositions.expected | requestId, environmentId | OperationRef | 1.1 追加（#118，1.0 标签不动）；环境级只读**期望组成**：离线运行受管 `dsh --profile <p> --dump-config` 并解析分组 `# == <label>` YAML，终态 `ExpectedCompositionView` 仅从 `OperationSnapshot.output` 读取；`basis='dump-config'`、`runtimeVerification='unavailable'` 固定，**永不表示运行期 ACTIVE 集合**；`!!js` 逐字保留不求值，stderr/解析失败显式呈现；不执行插件代码、不使用凭据；running/starting/stopping → `ENVIRONMENT_BUSY`，无活动代 → `NOT_FOUND` |
+| entries.patch | requestId, environmentId, operation { kind, rowId, config? } | EntryPatchResult | 1.2 追加（#135，E1-T1，1.0/1.1 标签不动）；把**环境级 home 用户 patch**（DSH `$DSH_HOME/cordis.patch.yml`）做四类 desired-config 编辑（`enable`/`disable`/`config`/`remove`）。**绝不**写每代不可变的 profile 声明源（`profiles/hdsl-<gen>/cordis.patch.yml`，ADR 0006 / `profileDeclarationFingerprint`）。文件缺失视为合法空数组 `[]`；`config` 仅 `kind='config'` 必填且整行替换；`remove` 目标不在 home patch → `NOT_FOUND`，不触碰 bundle/profile 层；0 字节 / 映射根 / 多文档 / `insert` 非序列 → `INVALID_INPUT`（fail loud，不吞）。结果恒为 `saved: true` + `runtime: 'pending'` + `runtimeVerification: 'unavailable'` + `activation ∈ {restart-required, live-reload-unverified}` + `restartRequired`：**保存 ≠ ACTIVE**。同一环境的读-改-写同步串行化；`starting`/`stopping` → `ENVIRONMENT_BUSY`，运行中允许编辑（热加载路径，仍未确认 ACTIVE） |
 
 `OpenWebUIResult` 只返回 `{ loopbackOrigin }`；`loopbackOrigin` 为 `http(s)://127.0.0.1:<port>` 或 `[::1]` 形式，端口必须是 1–65535 的**规范十进制**（拒绝 `:0`、`:65536`、`:99999` 与前导零 `:00080`），**不含 token、cookie 或查询串**。成功即已原生打开，失败一律走错误码，不设 `opened: false` 这种第二套失败表示。main 必须在打开前核对 `LaunchRecord.endpoint` 属于该环境的当前受管进程，且地址为 loopback；否则返回 `WEBUI_UNAVAILABLE`。返回体在出站前按 `openWebUIResultSchema` 校验，额外字段（如 `tokenUrl`/`cookie`）会导致 `INTERNAL_ERROR`。
 
@@ -156,6 +157,7 @@
 | generations.restore | generations-restore-legal | missing-target → `INVALID_INPUT` |
 | versions.dsh | versions-dsh-legal / versions-dsh-network-failure | missing-request-id → `INVALID_INPUT` |
 | compositions.expected | compositions-expected-legal | missing-request-id / missing-environment → `INVALID_INPUT` |
+| entries.patch | entries-patch-legal-enable / entries-patch-legal-config | config-missing / config-not-allowed / unknown-field → `INVALID_INPUT`；not-found（remove 目标不在 home patch）→ `NOT_FOUND`；busy（starting/stopping）→ `ENVIRONMENT_BUSY` |
 | idempotency-conflict | — | 同 `requestId` 不同 `name` → `IDEMPOTENCY_CONFLICT` |
 | idempotency-guard-retry | 先 `NOT_FOUND` 再修正参数 | 修正后同 `requestId` → `ok`（守卫拒绝不锁死参数） |
 
@@ -173,13 +175,15 @@
 
 1.1 新增 DTO：`PluginSearchResult` / `PluginSearchHit`、`PluginInspection`、`PluginSourceLock`、`ChangePlan` / `ChangePlanAction` / `ChangeBlockingReference`、`BuildScriptEntry` / `BuildAuthorization`、`ChangeApplication`、`GenerationSummary`、`InstalledPlugin` / `InstalledPluginsView`、`DshVersionListing` / `DshUpstreamVersion`、`ExpectedCompositionView`。既有 DTO 的 additive 可选字段：`ContractError.retryAfterSeconds?`、`CompositionLock.pluginSources?`、`GenerationSummary.dshCompatibilityWarning?`、`OperationSnapshot.output?`。字段权威与边界见 `packages/contracts/src/dto.ts`；`pluginSources` 等非摘要字段不进入 `compositionDigest`。
 
+**1.2 追加（#135，E1-T1）**：新增方法 `entries.patch` 与 DTO `EntryPatchResult`（含有界 `EntryPatchRow[]` / `EntryPatchDiagnostic[]`）。它直接同步返回终态编辑结果（不新增 `OperationKind`，不走 `OperationSnapshot.output`）。`EntryPatchResult` 不含任何本地路径，且 `saved`/`runtime`/`runtimeVerification` 为固定字面量（`true` / `'pending'` / `'unavailable'`），因此 UI 无法把一次文件保存渲染为运行期 ACTIVE。`EntryPatchOperation` 为严格判别联合：`config` 仅 `kind='config'` 必填且其他 kind 携带 `config` 为 `INVALID_INPUT`。
+
 ## 已接受的行为边界与未实测项
 
 已接受的边界（不写成更强保证）：
 
 - **版本管理**：支持范围 = 已有安装/验证证据的组合；未知版本不虚报为已支持（**未知 ≠ 危险**），逐版本安全审计不是永久门禁。同环境切换只由 `environments.switchCombination`（**仅 `stopped`**，操作专属前置，不传播为全局规则）与 `generations.restore` 承担。
 - **包管理**：profile `package.json` 的 `dependencies` 与 `dsh.profile.bundles` 变更**需重启**才生效（DSH 无 watcher）；共享/传递依赖按锁闭包保留，不承诺无损/未使用；安装期脚本默认拒执行，需显式精确授权（#78 retain）。
-- **desired config（saved/pending）**：写 profile `cordis.patch.yml` 成功只表示 desired config 已原子保存；`patchReload=live` 时预计热重载但 HDSL 未观测，**保存 ≠ 运行期 ACTIVE**。保存/等待应用与显式重启 fallback 属产品接线切片，本契约不新增方法（[#116](https://github.com/YingkeSu/HDSL/issues/116)）。
+- **desired config（saved/pending）**：`entries.patch` 写环境级 home 用户 patch（`$DSH_HOME/cordis.patch.yml`）成功只表示 desired config 已原子保存；`patchReload=live` 时预计热重载但 HDSL 未观测，`runtime='pending'` / `runtimeVerification='unavailable'` 固定，**保存 ≠ 运行期 ACTIVE**，任何 UI 文案不得显示“已生效/已加载”。`activation='restart-required'` 时用户可显式重启环境使配置确定生效；不写每代不可变的 profile 声明源（[#116](https://github.com/YingkeSu/HDSL/issues/116) / [#135](https://github.com/YingkeSu/HDSL/issues/135)）。
 - **动态 DSH 职责**：动态 load/unload 与影响判断交 DSH；HDSL 不 in-process 挂载 Cordis、不伪造认证会话、不承诺无损卸载、**不做静态服务依赖证明门禁**；服务核验只作 `riskItems` 信息项。
 - **期望组成**：`compositions.expected` 的 `basis='dump-config'`、`runtimeVerification='unavailable'` 固定，**永不表示运行期 ACTIVE**。
 
@@ -193,4 +197,4 @@
 
 ## 后续接口预留
 
-`pack.inspect` / `pack.import` / `pack.export` 在 003 规格中定义，本契约不暴露。Registry 与小程序接口须另设版本化规格。1.1 白名单内的 21 个方法均已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
+`pack.inspect` / `pack.import` / `pack.export` 在 003 规格中定义，本契约不暴露。Registry 与小程序接口须另设版本化规格。1.2 白名单内的 22 个方法均已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。

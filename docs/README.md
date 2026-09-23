@@ -35,6 +35,7 @@
 | WebUI 认证 | [bootstrap 验证](development/t006-webui-bootstrap-evidence.md) |
 | renderer 界面交互 | [界面验证与重现](development/ui-design-a.md) |
 | 桌面主流程 | [桌面验证记录](development/desktop-validation.md)、[E2E 运行说明](../tests/e2e/README.md) |
+| macOS ARM64 实机验收汇总（T008a #137） | [验收证据汇总](development/validation-001.md)（FR-001..FR-008 逐项来源 SHA/命令/分层/未测边界） |
 | 插件发现与详情（S1） | [验证记录](development/plugin-discovery-validation.md)（含 opt-in 真实 GitHub 只读探针） |
 | 插件代际 home 派生与回滚（#76 前置） | [实证记录](development/plugin-home-derivation-validation.md)（合成运行时 + 真实事务/恢复代码） |
 | 插件 profile 接线（#76 A2） | [验证记录](development/plugin-a2-profile-validation.md)（适配器/进程夹具 + opt-in 真实 npm-ci 全链） |
@@ -42,6 +43,7 @@
 | 插件卸载、内置保护与合法保留（#77 S3） | [验证记录](development/plugin-remove-validation.md)、[服务核验边界](development/plugin-remove-service-verification.md) |
 | 显式构建授权（#78 S4） | [验证边界与证据分层](development/plugin-build-authorization-validation.md)、[GitHub fixture 发布/实测记录](development/plugin-build-authorization-github-fixture-publication.md) |
 | 运行期 entry（E1 #116） | [desired-config 边界 + 合法非空数组移除实验](development/plugin-runtime-entry-validation.md)（opt-in、隔离、同 PID 卸载） |
+| 插件 pnpm transport 规格（#141） | [固定 commit 的官方 codeload tarball](development/plugin-transport-spec.md)（transport ≠ 来源；旧 plan `PLAN_STALE`） |
 | 期望组成查看（E2 #118） | [只读 `--dump-config` 解析验证记录](development/expected-composition-validation.md)（opt-in 真实受管 dump；期望 ≠ 运行期 ACTIVE） |
 | 同环境版本切换（A2 #114） | [测试与边界](development/version-switch-validation.md)（确定性事务/回滚/恢复证据；真实 opt-in 未测） |
 

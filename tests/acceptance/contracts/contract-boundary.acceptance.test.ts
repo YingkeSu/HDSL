@@ -83,6 +83,7 @@ const harness = (
     listInstalledPlugins: base.listInstalledPlugins.bind(base),
     listDshVersions: base.listDshVersions.bind(base),
     describeExpectedComposition: base.describeExpectedComposition.bind(base),
+    patchEntry: base.patchEntry.bind(base),
     previewChange: base.previewChange.bind(base),
     applyChange: base.applyChange.bind(base),
     restoreGeneration: base.restoreGeneration.bind(base),
@@ -125,7 +126,7 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
       expect(base.effects).toEqual([]);
     });
 
-    it.each(['2.0', '1.2', '01.0'])('rejects apiVersion %s with CONTRACT_VERSION_MISMATCH', (v) => {
+    it.each(['2.0', '1.3', '01.0'])('rejects apiVersion %s with CONTRACT_VERSION_MISMATCH', (v) => {
       const { runtime } = harness();
       expect(
         errorCode(runtime.dispatch({ apiVersion: v, method: 'catalog.list', input: {} })),
@@ -194,7 +195,7 @@ describe(`frozen contract behavior @ ${API_SHA}`, () => {
     it('rejects an own "__proto__" field and never pollutes Object.prototype', () => {
       const { runtime } = harness();
       const request = JSON.parse(
-        '{"apiVersion":"1.1","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}',
+        '{"apiVersion":"1.2","method":"environments.create","input":{"requestId":"acc-proto","name":"Env","catalogCombinationId":"combo-darwin-arm64","__proto__":{"polluted":true}}}',
       );
       expect(errorCode(runtime.dispatch(request))).toBe('INVALID_INPUT');
       expect(({} as { polluted?: boolean }).polluted).toBeUndefined();

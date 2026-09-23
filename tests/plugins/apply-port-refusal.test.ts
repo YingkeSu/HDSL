@@ -70,7 +70,7 @@ const harness = (manifestText: string) => {
   return { port, runCalls, resolution: built.value, generationDirectory: join(dataRoot, 'gen') };
 };
 
-const stage = (harnessed: ReturnType<typeof harness>) =>
+const stage = (harnessed: ReturnType<typeof harness>, planInputsDigest?: string) =>
   harnessed.port.stage(
     {
       environmentId: 'env-0000000000000001',
@@ -96,7 +96,7 @@ const stage = (harnessed: ReturnType<typeof harness>) =>
         retention: [],
         blockingReferences: [],
         executor: harnessed.resolution.executor,
-        planInputsDigest: harnessed.resolution.planInputsDigest,
+        planInputsDigest: planInputsDigest ?? harnessed.resolution.planInputsDigest,
       },
       targetProfile: TARGET_PROFILE,
       buildAuthorization: null,
@@ -120,6 +120,29 @@ describe('AC4 production apply-boundary refusal', () => {
     const outcome = await stage(harnessed);
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.code).toBe('BUILD_NOT_AUTHORIZED');
+    expect(harnessed.runCalls).toHaveLength(0);
+  });
+
+  it('rejects a pre-#141 plan (legacy transport binding) as PLAN_STALE before any executor call', async () => {
+    const harnessed = harness(JSON.stringify({ name: 'dsh-plugin-demo', version: '1.0.0', dsh: { bundle: { patch: 'cordis.patch.yml' } } }));
+    // Exact pre-#141 formula: the plan inputs had no transport binding, so an
+    // old stored plan must no longer match the re-resolved source.
+    const legacyDigest = createHash('sha256')
+      .update(
+        JSON.stringify({
+          commitSha: COMMIT,
+          manifestSha256: harnessed.resolution.sourceLock.manifestSha256,
+          closureLockSha256: harnessed.resolution.sourceLock.closureLockSha256,
+          scripts: harnessed.resolution.scripts,
+          executor: harnessed.resolution.executor,
+        }),
+        'utf8',
+      )
+      .digest('hex');
+    expect(legacyDigest).not.toBe(harnessed.resolution.planInputsDigest);
+    const outcome = await stage(harnessed, legacyDigest);
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.code).toBe('PLAN_STALE');
     expect(harnessed.runCalls).toHaveLength(0);
   });
 });

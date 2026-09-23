@@ -11,6 +11,8 @@ import {
   portOk,
   type ContractPort,
   type CreateEnvironmentCommand,
+  type EntryPatchCommand,
+  type EntryPatchResult,
   type EnvironmentCommand,
   type EnvironmentSummary,
   type GenerationSummary,
@@ -39,6 +41,7 @@ import type { EnvironmentService } from './creation-service.js';
 import type { PluginDiscoveryService } from './plugin-discovery-service.js';
 import type { VersionDiscoveryService } from './version-discovery-service.js';
 import type { ExpectedCompositionService } from './expected-composition-service.js';
+import type { EntryPatchService } from './entry-patch-service.js';
 import type { ChangePreviewService } from './plugin-preview.js';
 import type { ChangeApplyService } from './plugin-apply.js';
 
@@ -56,6 +59,8 @@ export interface EnvironmentContractPortOptions {
   readonly versionDiscovery?: VersionDiscoveryService;
   /** Environment-scoped read-only expected composition (`compositions.expected`, #118). */
   readonly expectedComposition?: ExpectedCompositionService;
+  /** Environment-scoped desired-config home patch edit (`entries.patch`, #135). */
+  readonly entryPatch?: EntryPatchService;
   /** Environment-scoped plugin change preview (ADR 0005 D6). */
   readonly changePreview?: ChangePreviewService;
   /** Environment-scoped plugin change apply (ADR 0005 D8). */
@@ -190,6 +195,12 @@ export const createEnvironmentContractPort = (
       return expectedComposition === undefined
         ? portFail('INTERNAL_ERROR', 'the expected-composition reader is not wired')
         : expectedComposition.describe(command.environmentId);
+    },
+
+    patchEntry(command: EntryPatchCommand): PortOutcome<EntryPatchResult> {
+      return options.entryPatch === undefined
+        ? portFail('INTERNAL_ERROR', 'the desired-config entry patch service is not wired')
+        : options.entryPatch.patchEntry(command);
     },
 
     exportDiagnostics(command: EnvironmentCommand) {

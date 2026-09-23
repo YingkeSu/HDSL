@@ -1,6 +1,6 @@
 # E1（#116）：运行期 entry 的 desired-config 管理边界
 
-状态：**设计 + 可验证的 desired-config 边界已实现；产品级“运行期生效确认”标 blocked**。
+状态：**设计 + 可验证的 desired-config 边界已实现并已接入产品（#135，契约 1.2）；产品级“运行期生效确认”标 blocked**。
 
 基线：`79a15359b5a806fedf467210ca8ad678c8cd11f2`（2026-09-23）。父/关联：[#112](https://github.com/YingkeSu/HDSL/issues/112)、[#111](https://github.com/YingkeSu/HDSL/issues/111)；接口研究前置见 [plugin-runtime-entry-validation.md](../../../docs/development/plugin-runtime-entry-validation.md)。
 
@@ -31,6 +31,8 @@
 - `runtime: 'pending'` + `runtimeVerification: 'unavailable'` —— 未观测运行期集合；
 - `activation` —— `restart-required` 或 `live-reload-unverified`，两者都不声称 ACTIVE；
 - `restartRequired` —— 明确重启 fallback（重启后按同一文件确定性加载）。
+
+**产品接线（#135，E1-T1）**：该方法作为 `entries.patch`（契约 1.2）接入 contracts/core/main/preload/renderer。写入目标固定为**环境共享 home 用户 patch**（`$DSH_HOME/cordis.patch.yml`），**不写**每代不可变的 profile 声明源。同一环境的读-改-写同步串行化；运行中允许编辑，`starting`/`stopping` → `ENVIRONMENT_BUSY`。UI 只显示“已保存 / 等待 DSH 应用（未确认 ACTIVE）”，并提供显式重启 fallback；运行期 ACTIVE 确认仍为 blocked（E1b no-go）。
 
 **重启 fallback 满足验收**：写入后明确“需重启（或 live 未确认）”，并在 ready 后覆盖预热窗口——HDSL 绝不会在预热期把写入当作已生效的静默成功。
 

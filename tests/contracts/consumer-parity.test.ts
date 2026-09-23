@@ -22,7 +22,7 @@ describe('renderer/main/preload consume the same contract', () => {
   it('shares the exact same API version', () => {
     expect(MAIN_CONTRACT_API_VERSION).toBe(API_VERSION);
     expect(RENDERER_CONTRACT_API_VERSION).toBe(API_VERSION);
-    expect(API_VERSION).toBe('1.1');
+    expect(API_VERSION).toBe('1.2');
   });
 
   it('exposes exactly the frozen method whitelist through preload', () => {
@@ -49,6 +49,8 @@ describe('renderer/main/preload consume the same contract', () => {
       'generations.restore',
       'versions.dsh',
       'compositions.expected',
+      // 1.2 addition (#135): desired-config home user patch edit.
+      'entries.patch',
     ]);
   });
 

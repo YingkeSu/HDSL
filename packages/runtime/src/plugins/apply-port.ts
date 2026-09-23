@@ -26,6 +26,7 @@ import { buildPreviewResolution, type GitProvider } from './preview-resolution.j
 import { composeAuthorizedWorkspace, decideBuildAuthorization, enumerateInstallScriptsFromInstalledTree } from './build-authorization.js';
 import { DEFAULT_INSTALL_ARGS, type PluginExecutorPort } from './executor.js';
 import { classifyManagedInstallFailure } from './pnpm-failure.js';
+import { pluginTransportSpec } from './source-spec.js';
 
 export interface RuntimeApplyStageCommand {
   readonly environmentId: string;
@@ -187,11 +188,13 @@ export const createPluginApplyPort = (options: PluginApplyPortOptions): RuntimeP
       if (command.buildAuthorization !== null) {
         return portFail('BUILD_NOT_AUTHORIZED', 'build authorization requires a plan-bound target profile lock');
       }
-      const gitSpec = `github:${source.owner}/${source.name}#${resolution.sourceLock.commitSha}`;
+      // The recorded SOURCE is a GitHub repository + commit; the pnpm TRANSPORT
+      // spec is that commit's official codeload tarball (#141).
+      const transportSpec = pluginTransportSpec(source, resolution.sourceLock.commitSha);
       const profilePackage = {
         name: `hdsl-profile-${command.generationId}`,
         private: true,
-        dependencies: { [resolution.sourceLock.packageName]: gitSpec },
+        dependencies: { [resolution.sourceLock.packageName]: transportSpec },
         dsh: { profile: { bundles: [resolution.sourceLock.packageName] } },
       };
       writeFileSync(join(profileDirectory, 'package.json'), `${JSON.stringify(profilePackage, null, 2)}\n`, 'utf8');

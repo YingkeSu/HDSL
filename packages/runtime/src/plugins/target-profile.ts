@@ -19,6 +19,7 @@ import { isPlainRecord, portFail, portOk, type PluginSourceSelector, type PortOu
 import type { GitProvider } from './preview-resolution.js';
 import type { PluginExecutorPort } from './executor.js';
 import { declaresBundle, reconcileProfileBundles, unresolvedBundleRisk } from './profile-bundles.js';
+import { pluginTransportSpec } from './source-spec.js';
 
 export interface TargetProfileInput {
   readonly source: PluginSourceSelector;
@@ -118,10 +119,12 @@ export const resolveTargetProfileLock = async (
   }
 
   // Build the target declaration: preserve everything, add only the exact
-  // GitHub commit dependency for the new plugin.
+  // GitHub commit dependency for the new plugin. The recorded SOURCE stays a
+  // GitHub repository + commit; the pnpm TRANSPORT spec is that commit's
+  // official codeload tarball (#141), built by the single shared constructor.
   const dependencies = isPlainRecord(declaration['dependencies']) ? { ...declaration['dependencies'] } : {};
-  const gitSpec = `github:${input.source.owner}/${input.source.name}#${input.commitSha}`;
-  dependencies[pluginName] = gitSpec;
+  const transportSpec = pluginTransportSpec(input.source, input.commitSha);
+  dependencies[pluginName] = transportSpec;
   const dsh = isPlainRecord(declaration['dsh']) ? { ...declaration['dsh'] } : {};
   const profile = isPlainRecord(dsh['profile']) ? { ...dsh['profile'] } : {};
   const currentBundles = Array.isArray(profile['bundles'])

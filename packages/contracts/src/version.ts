@@ -17,8 +17,13 @@
  * ADR 0005. The frozen `1.0` contract is retained as the tag
  * `contracts-v1.0.0`; this constant is the single authority for the wire
  * version and both sides ship from the same build.
+ *
+ * `1.2` adds `entries.patch` (desired-config entry patch, #135/E1-T1). It is
+ * additive: a saved home user patch is `saved: true` + `runtime: 'pending'`
+ * and is NEVER reported as the runtime ACTIVE set. The `1.1` contract is
+ * retained as the tag `contracts-v1.1.0`.
  */
-export const API_VERSION = '1.1' as const;
+export const API_VERSION = '1.2' as const;
 
 export type ApiVersion = typeof API_VERSION;
 

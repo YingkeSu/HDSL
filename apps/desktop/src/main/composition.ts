@@ -32,6 +32,7 @@ import {
   PluginDiscoveryService,
   VersionDiscoveryService,
   ExpectedCompositionService,
+  EntryPatchService,
   ChangePreviewService,
   ChangeApplyService,
   ChangePlanStore,
@@ -51,6 +52,7 @@ import {
   createGitHubPluginSource,
   createNpmDshVersionSource,
   createExpectedCompositionPort,
+  createEntryPatchPort,
   createPluginApplyPort,
   createManagedPnpmExecutor,
   createGenerationRuntimeVerifier,
@@ -426,6 +428,15 @@ export const createDesktopComposition = async (
     environments: new EnvironmentStore(service.layout),
     port: createExpectedCompositionPort(),
   });
+  // Desired-config entry patch (`entries.patch`, #135). It writes ONLY the
+  // environment-shared home user patch (`home/cordis.patch.yml`) and never a
+  // generation's immutable profile declaration source; a saved file is never
+  // reported as the runtime ACTIVE set.
+  const entryPatch = new EntryPatchService({
+    layout: service.layout,
+    environments: new EnvironmentStore(service.layout),
+    port: createEntryPatchPort(),
+  });
   // Environment-scoped change preview. The default adapter is the same GitHub
   // source; tests inject a controlled preview port instead.
   const executorIdentity = {
@@ -497,6 +508,7 @@ export const createDesktopComposition = async (
     pluginDiscovery,
     versionDiscovery,
     expectedComposition,
+    entryPatch,
     changePreview,
     changeApply,
     installedPlugins,
