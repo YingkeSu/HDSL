@@ -70,8 +70,11 @@ pnpm exec vitest run tests/integration/install tests/integration/process
 | 阶段 1 只读核查基线 | `3dcb99273c61cc7f7c526aefbbf447a84142e098` | `1029 passed \| 28 skipped` |
 | S1–S7 批（PR #109） | `3f51e066b5d196767dac8f0aee3b431b1c758c87` | `1030 passed \| 30 skipped`；`tests/e2e` 默认 `20 passed \| 21 skipped (41)` |
 | **本批（残余故障/重启 QA，PR 见正文）执行 head** | `fb5da940be2f1f5a043ff255a950255beb78517b` | 默认 `1116 passed \| 31 skipped (1147)`；`tests/e2e` 默认 `20 passed \| 22 skipped (42)` |
+| #100 原生收尾复核（本切片，PR 见正文） | `9cc275947323b5836f3c86648d559d577fae3349` | 默认 `1183 passed \| 32 skipped (1215)`；`tests/e2e` 默认 `20 passed \| 22 skipped (42)`；opt-in 真实/注入 lane 见 [desktop-validation.md](desktop-validation.md) 的「#100 原生收尾复核」节 |
 
 环境（同一台机）：macOS 26.3 arm64 / Node 24.21.0 / pnpm 11.7.0 / Electron 44.4.3。R 层结果只对**实际执行**的精确 SHA 成立：本批真实 lane 在 `fb5da94`（仅 `tests/e2e` 变更的代码提交）上执行；其上的纯文档提交不改变被测 blob，但引用时仍以该 SHA 为准。不得把任一批计数当作阶段 1 基线计数。
+
+#100 复核切片（head `9cc275947323b5836f3c86648d559d577fae3349`）在同一台机、同一门禁下复跑生产入口真实/注入 lane：`desktop.real` 9、`desktop.findings.real` 2、`desktop.injected.real` 3、`desktop.gui.real` 1、`desktop.quit.real` 3、`desktop.faults.real` 2、`desktop.browser.real`（注入 opener）1，以及 `HDSL_QA_REAL_DSH=1` 两环境隔离/重启采纳 1；全部通过。原生 NSOpenPanel/NSSavePanel 与真实 `shell.openExternal` 仍未测（人工/外部条件）。逐项映射与清理见 [desktop-validation.md](desktop-validation.md)。R 层结果只对该 SHA 成立。
 
 本批在 `fb5da94` 实际执行的 opt-in 结果：
 
