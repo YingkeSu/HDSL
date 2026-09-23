@@ -27,6 +27,7 @@
 | 范围 | 记录 |
 | --- | --- |
 | DSH 来源、版本与隔离边界 | [兼容性研究](research/dsh-compatibility.md)、[行为探针](research/dsh-behavior-probes.md) |
+| 运行期 entry 确认/ACK 与会话面（E1b #116） | [no-go 调查](research/e1b-runtime-confirmation-investigation.md)（静态接口 + 隔离实测；原子写修正“预热窗口”归因） |
 | 安装 | [集成验收](development/install-validation.md)、[真实安装记录](development/t004-install-evidence.md) |
 | 进程 | [集成验收](development/process-validation.md)、[真实启停记录](development/t005-process-evidence.md) |
 | 数据目录锁 | [跨进程验证](development/dataroot-lock-validation.md) |
