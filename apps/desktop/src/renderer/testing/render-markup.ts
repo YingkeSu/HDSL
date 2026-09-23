@@ -10,6 +10,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AppView, type AppViewProps } from '../App.js';
 import { CreateEnvironmentForm } from '../components/CreateEnvironmentForm.js';
+import { DshVersions } from '../components/DshVersions.js';
 import { PluginDiscovery } from '../components/PluginDiscovery.js';
 import { PluginInstall } from '../components/PluginInstall.js';
 import { PluginRemoval } from '../components/PluginRemoval.js';
@@ -22,6 +23,9 @@ export const renderCreateForm = (props: AppViewProps): string =>
 
 export const renderPluginDiscovery = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginDiscovery, props));
+
+export const renderDshVersions = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(DshVersions, props));
 
 export const renderPluginInstall = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginInstall, props));

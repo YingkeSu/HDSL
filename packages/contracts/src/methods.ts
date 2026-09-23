@@ -49,6 +49,8 @@ export const CONTRACT_METHODS = [
   // 1.1 read-only generation read (ADR 0005 D4).
   'generations.list',
   'generations.restore',
+  // 1.1 addition (#113, A1): read-only upstream DSH version discovery.
+  'versions.dsh',
 ] as const;
 
 export type ContractMethod = (typeof CONTRACT_METHODS)[number];
@@ -132,6 +134,9 @@ export const methodInputSchemas = {
     expectedRevision: revisionSchema,
     targetGenerationId: generationIdSchema,
   }),
+  'versions.dsh': sObject({
+    requestId: requestIdSchema,
+  }),
 } satisfies Record<ContractMethod, Schema<unknown>>;
 
 export type MethodInputs = {
@@ -179,6 +184,7 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'plugins.installed': define('plugins.installed', { readOnly: true, idempotent: false }),
   'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
   'generations.restore': define('generations.restore', { readOnly: false, idempotent: true }),
+  'versions.dsh': define('versions.dsh', { readOnly: false, idempotent: true }),
 };
 
 export const validateMethodInput = <M extends ContractMethod>(

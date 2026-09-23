@@ -55,6 +55,7 @@ const noopActions: RendererActions = {
     loadInstalledPlugins: () => undefined,
     selectInstalledPlugin: () => undefined,
     previewPluginRemoval: () => undefined,
+    loadDshVersions: () => undefined,
 };
 
 const flush = (): Promise<void> =>

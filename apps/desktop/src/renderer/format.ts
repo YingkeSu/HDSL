@@ -33,6 +33,7 @@ export const OPERATION_KIND_LABELS: Record<string, string> = {
   export: '导出诊断',
   search: '检索插件',
   inspect: '查看仓库详情',
+  versions: '读取 DSH 版本',
 };
 
 /** Display label for an operation kind; unknown kinds fall back to the raw value. */

@@ -43,6 +43,7 @@ import type { ContractPort, StoredOutcome } from './context.js';
 import {
   changePlanSchema,
   changeApplicationSchema,
+  dshVersionListingSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
   installedPluginsViewSchema,
@@ -159,6 +160,7 @@ const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> 
   preview: changePlanSchema,
   apply: changeApplicationSchema,
   restore: generationSummarySchema,
+  versions: dshVersionListingSchema,
 };
 
 /**
@@ -551,6 +553,20 @@ const execute = (
         return executedFailure(outcome);
       }
       const reference = validatePortValue(operationRefSchema, outcome.value, 'plugins.inspect');
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
+    }
+    case 'versions.dsh': {
+      // Global, environment-independent read-only discovery (like plugins.search):
+      // no resource guard can reject it and no environment `ENVIRONMENT_BUSY`
+      // applies. The terminal `DshVersionListing` is read from `output`.
+      const typed = input as MethodInputs['versions.dsh'];
+      markInProgress();
+      const outcome = runtime.port.listDshVersions({ requestId: typed.requestId });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(operationRefSchema, outcome.value, 'versions.dsh');
       publishIfKnown(runtime, reference.operationId);
       return { response: contractOk(API_VERSION, reference), executed: true };
     }

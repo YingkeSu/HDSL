@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import type { RendererController } from './controller.js';
 import { CreateEnvironmentForm } from './components/CreateEnvironmentForm.js';
+import { DshVersions } from './components/DshVersions.js';
 import { EnvironmentDetail } from './components/EnvironmentDetail.js';
 import { EnvironmentList } from './components/EnvironmentList.js';
 import { DemoBanner, Notices } from './components/Notices.js';
@@ -244,6 +245,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
                 </section>
               )}
             </div>
+            {page === 'home' && <DshVersions state={state} actions={actions} />}
           </>
         )}
         {page === 'discover' && (

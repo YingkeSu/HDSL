@@ -176,6 +176,10 @@ const PLUGIN_NOT_FOUND_SEED: ReferenceSeed = {
   ...FIXTURE_SEED,
   pluginInspection: { failure: 'SOURCE_NOT_FOUND' },
 };
+const DSH_VERSIONS_NETWORK_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  dshVersions: { failure: 'NETWORK_UNAVAILABLE' },
+};
 
 export interface FixtureRuntime {
   readonly port: ReferenceContractPort;
@@ -1245,6 +1249,33 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
       expectedRevision: 1,
     }),
     expected: 'INVALID_INPUT',
+  },
+
+  // versions.dsh (global, public npm registry read-only; #113)
+  {
+    id: 'versions-dsh-legal',
+    method: 'versions.dsh',
+    kind: 'legal',
+    description: 'starts a read-only upstream DSH version listing operation',
+    request: request('versions.dsh', { requestId: 'req-versions' }),
+    expected: 'ok',
+  },
+  {
+    id: 'versions-dsh-missing-request-id',
+    method: 'versions.dsh',
+    kind: 'illegal',
+    description: 'a version listing without a requestId is rejected',
+    request: request('versions.dsh', {}),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'versions-dsh-network-failure',
+    method: 'versions.dsh',
+    kind: 'legal',
+    description: 'a network failure still returns an operation reference for the terminal error',
+    request: request('versions.dsh', { requestId: 'req-versions-network' }),
+    expected: 'ok',
+    seed: DSH_VERSIONS_NETWORK_SEED,
   },
 
 ];

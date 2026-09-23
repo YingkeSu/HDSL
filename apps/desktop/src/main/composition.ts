@@ -29,6 +29,7 @@ import {
   EnvironmentService,
   OperationStore,
   PluginDiscoveryService,
+  VersionDiscoveryService,
   ChangePreviewService,
   ChangeApplyService,
   ChangePlanStore,
@@ -45,6 +46,7 @@ import {
 } from '@hdsl/core';
 import {
   createGitHubPluginSource,
+  createNpmDshVersionSource,
   createPluginApplyPort,
   createManagedPnpmExecutor,
   createGenerationRuntimeVerifier,
@@ -347,6 +349,14 @@ export const createDesktopComposition = async (
     layout: service.layout,
     source: options.pluginSource ?? defaultGitHubSource,
   });
+  // Read-only upstream DSH version discovery (`versions.dsh`, A1/#113). It reads
+  // public npm registry metadata only (one allowlisted host, no credential) and
+  // marks audited/unaudited versions from the same catalog. No request is made
+  // until the method is called.
+  const versionDiscovery = new VersionDiscoveryService({
+    layout: service.layout,
+    source: createNpmDshVersionSource({ fetch: globalThis.fetch, catalog }),
+  });
   // Environment-scoped change preview. The default adapter is the same GitHub
   // source; tests inject a controlled preview port instead.
   const executorIdentity = {
@@ -416,6 +426,7 @@ export const createDesktopComposition = async (
     ...(options.host === undefined ? {} : { host: options.host }),
     exportDiagnostics: exporter,
     pluginDiscovery,
+    versionDiscovery,
     changePreview,
     changeApply,
     installedPlugins,

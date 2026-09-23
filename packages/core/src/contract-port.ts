@@ -31,9 +31,11 @@ import type {
   PluginInspectCommand,
   PluginSearchCommand,
 } from '@hdsl/contracts';
+import type { DshVersionCommand } from '@hdsl/contracts';
 import type { DiagnosticsExporter, InstalledPluginsPort } from './ports.js';
 import type { EnvironmentService } from './creation-service.js';
 import type { PluginDiscoveryService } from './plugin-discovery-service.js';
+import type { VersionDiscoveryService } from './version-discovery-service.js';
 import type { ChangePreviewService } from './plugin-preview.js';
 import type { ChangeApplyService } from './plugin-apply.js';
 
@@ -47,6 +49,8 @@ export interface EnvironmentContractPortOptions {
    * tests keep a narrow surface; `main` always wires it.
    */
   readonly pluginDiscovery?: PluginDiscoveryService;
+  /** Global read-only upstream DSH version discovery (`versions.dsh`, A1/#113). */
+  readonly versionDiscovery?: VersionDiscoveryService;
   /** Environment-scoped plugin change preview (ADR 0005 D6). */
   readonly changePreview?: ChangePreviewService;
   /** Environment-scoped plugin change apply (ADR 0005 D8). */
@@ -63,6 +67,7 @@ export const createEnvironmentContractPort = (
   const { service } = options;
   const exporter = options.exportDiagnostics;
   const pluginDiscovery = options.pluginDiscovery;
+  const versionDiscovery = options.versionDiscovery;
   const changePreview = options.changePreview;
   const changeApply = options.changeApply;
 
@@ -113,6 +118,7 @@ export const createEnvironmentContractPort = (
       const plugin = pluginDiscovery?.findOperation(operationId);
       return (
         plugin ??
+        versionDiscovery?.findOperation(operationId) ??
         changePreview?.findOperation(operationId) ??
         changeApply?.findOperation(operationId) ??
         service.findOperation(operationId)
@@ -143,6 +149,7 @@ export const createEnvironmentContractPort = (
       const plugin = pluginDiscovery?.cancelOperation(command.operationId);
       return (
         plugin ??
+        versionDiscovery?.cancelOperation(command.operationId) ??
         changePreview?.cancelOperation(command.operationId) ??
         changeApply?.cancelOperation(command.operationId) ??
         service.cancelOperation(command.operationId)
@@ -159,6 +166,12 @@ export const createEnvironmentContractPort = (
       return pluginDiscovery === undefined
         ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
         : pluginDiscovery.inspect(command);
+    },
+
+    listDshVersions(_command: DshVersionCommand): PortOutcome<OperationRef> {
+      return versionDiscovery === undefined
+        ? portFail('INTERNAL_ERROR', NOT_IMPLEMENTED)
+        : versionDiscovery.listVersions();
     },
 
     exportDiagnostics(command: EnvironmentCommand) {

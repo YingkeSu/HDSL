@@ -95,6 +95,11 @@ export interface PluginInspectCommand {
   readonly source: PluginSourceSelector;
 }
 
+/** `versions.dsh`: a global, registry-only read that starts a discovery operation. */
+export interface DshVersionCommand {
+  readonly requestId: string;
+}
+
 /**
  * Terminal payload a plugin-source adapter returns for `plugins.search`.
  * `PluginSearchResult` is the wire DTO; re-exported name keeps the port seam
@@ -182,6 +187,13 @@ export interface ContractPort {
   searchPlugins(command: PluginSearchCommand): PortOutcome<OperationRef>;
   /** Starts a cancellable, global GitHub read-only repository inspection. */
   inspectPluginSource(command: PluginInspectCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable, global (`environmentId = null`) read-only listing of
+   * upstream DSH versions from the public npm registry. It uses no credential,
+   * never touches an environment composition and never runs plugin code.
+   */
+  listDshVersions(command: DshVersionCommand): PortOutcome<OperationRef>;
 
   /**
    * Starts a cancellable `changes.preview` for one environment. The terminal

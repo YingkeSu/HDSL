@@ -51,6 +51,7 @@ import {
   pluginInspectionSchema,
   changePlanSchema,
   changeApplicationSchema,
+  dshVersionListingSchema,
   generationSummaryListSchema,
   generationSummarySchema,
   installedPluginsViewSchema,
@@ -439,6 +440,30 @@ export class RendererController implements RendererActions {
       return;
     }
     await this.cancelTrackedOperation();
+  }
+
+  /**
+   * Starts the read-only `versions.dsh` upstream DSH version listing (A1/#113).
+   * Global and environment-independent; the terminal listing is re-validated in
+   * `#applyPluginOutput` before it can reach the UI.
+   */
+  async loadDshVersions(): Promise<void> {
+    await this.#runCommand(async () => {
+      this.#update({ actionError: null, notice: null, dshVersions: null });
+      const result = await this.#call(
+        'versions.dsh',
+        { requestId: this.#newRequestId() },
+        operationRefSchema,
+      );
+      if (this.#disposed) {
+        return;
+      }
+      if (!result.ok) {
+        this.#update({ actionError: result.error });
+        return;
+      }
+      await this.#trackOperation(result.value.operationId);
+    });
   }
 
   setInstallSource(field: 'owner' | 'name' | 'ref', value: string): void {
@@ -1033,6 +1058,16 @@ export class RendererController implements RendererActions {
         return;
       }
       this.#update({ pluginInspection: parsed });
+      return;
+    }
+    if (tracked.kind === 'versions') {
+      const issues: ValidationIssue[] = [];
+      const parsed = dshVersionListingSchema(tracked.output, 'output', issues);
+      if (parsed === undefined) {
+        this.#update({ dshVersions: null, actionError: contractErrorForCode('INTERNAL_ERROR') });
+        return;
+      }
+      this.#update({ dshVersions: parsed });
     }
   }
 
