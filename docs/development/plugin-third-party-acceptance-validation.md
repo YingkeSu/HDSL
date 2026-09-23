@@ -16,8 +16,10 @@
 | 基线 `origin/main` / 工作树 HEAD | `17556e74076bfe583028aee547291d7cfbe14296` |
 | 平台 | macOS 26.3（build 25D125）arm64 |
 | 受管组合 | Node `22.19.0` + DSH `0.1.5-rc.2`（`VERIFIED_COMBINATIONS`，catalog revision `t004-2026-09-20.1`） |
+| 目标组合选法 | 按 **Node `22.19.0` + DSH `0.1.5-rc.2` 两个轴**显式选取，不依赖 catalog 顺序；在后续 main 的 API `1.2` / catalog `a2-tier2-2026-09-24.1`（#138 / #140）上与新增的 A2 Tier 2 DSH `0.1.7-rc.1` 共存 |
 | 受管执行器 | pnpm `11.7.0`（`PNPM_EXECUTOR_SPEC`：sha256 `deafa7ec98a1218b6a047289b92fbe2395c1e22d3495bb711653013218ee15ee`） |
 | 测试入口 | `tests/integration/plugins/third-party-plugin.real.test.ts`（opt-in） |
+| 平台门 | 真实 lane 仅 `darwin`+`arm64` 运行；其他平台由默认套件负控断言生产 dispatcher 在**任何下载/安装副作用之前**以 `UNSUPPORTED_COMBINATION` 拒绝 |
 | 实测命令 | `HDSL_REAL_THIRD_PARTY_PLUGIN=1 HDSL_98_EVIDENCE_FILE=<path> pnpm exec vitest run tests/integration/plugins/third-party-plugin.real.test.ts` |
 | 实测结果 | **1 passed / 1 file（140.84s）** |
 
@@ -193,6 +195,8 @@ HDSL_REAL_THIRD_PARTY_PLUGIN=1 \
 
 真实 lane 需要网络（GitHub API/codeload + nodejs.org + registry.npmjs.org）；`HDSL_EVIDENCE_KEEP=1` 在失败时保留临时 dataRoot，`HDSL_98_EVIDENCE_FILE` 落盘机器可读证据。R 层结果只对实际执行的精确 SHA 有效，见[测试指南](testing.md)。
 
+平台门与默认套件负控：真实 lane 仅在 `process.platform === 'darwin' && process.arch === 'arm64'` 时运行（`describe.skipIf`），并把真实 host 透传给 `createRuntimePort` / `createManagedInstall`，`environments.create` 走冻结 dispatcher 的 `unsupportedCombinationReason`。默认套件（无网络、opt-in 关闭）另有一条负控：在真实的 `createManagedInstall` 上用 `linux/x64` host + `fetch` 探针 dispatch `environments.create`，断言返回 `UNSUPPORTED_COMBINATION`，且 **fetch 从未被调用、无 environment 行、无 operation 台账条目**——即拒绝发生在下载/安装副作用之前，而不是用跳过真实 lane 代替断言。
+
 ## 10. 引用
 
 - 来源与静态执行面：[#98](https://github.com/YingkeSu/HDSL/issues/98)、阶段 1 记录 `/tmp/qa98-phase1/PHASE1-RECORD.md`、独立复核 `/tmp/qa98-review-44/REVIEW-44.md`、只读执行路径审计 `/tmp/qa98-audit-asu/ASU-EXEC-PATH-AUDIT.md` 与 `CORDIS-LIFECYCLE-RESEARCH.md`。
@@ -202,4 +206,4 @@ HDSL_REAL_THIRD_PARTY_PLUGIN=1 \
 
 ## 11. 检查
 
-本记录随附的代码变更只新增 `tests/integration/plugins/third-party-plugin.real.test.ts`。本地门禁结果见 PR 正文；默认 `pnpm test` 跳过该 opt-in 用例。
+本记录随附的代码变更只涉及 `tests/integration/plugins/third-party-plugin.real.test.ts` 与本文档。测试除 opt-in 真实 lane 外还包含默认套件（无网络）的平台门断言：直接验证生产 `unsupportedCombinationReason`，并通过 `createContractRuntime(...).dispatch('environments.create')` 在 `linux/x64` 下断言 `UNSUPPORTED_COMBINATION` 且无下载/安装副作用。本地门禁结果见 PR 正文；默认 `pnpm test` 不运行 opt-in 真实链。

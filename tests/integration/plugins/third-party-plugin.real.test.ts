@@ -26,7 +26,8 @@
  * Set `HDSL_98_EVIDENCE_FILE=<path>` to write the machine-readable acceptance
  * evidence JSON (the same payload printed as `HDSL_98_THIRD_PARTY_EVIDENCE`).
  *
- * Evidence boundary (see docs/development/plugin-real-third-party-validation.md):
+ * Evidence boundary (see
+ * docs/development/plugin-third-party-acceptance-validation.md):
  * - the ASu bundle patch contains exactly one LOAD-TIME `!!js` expression. The
  *   launcher has no public runtime-phase surface (#129 no-go), so this test does
  *   NOT claim to have observed its evaluated value. It records the composed row
@@ -43,6 +44,14 @@ import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { describe, expect, it } from 'vitest';
 import {
+  API_VERSION,
+  createContractRuntime,
+  unsupportedCombinationReason,
+  type Arch,
+  type HostPlatform,
+  type Platform,
+} from '@hdsl/contracts';
+import {
   ChangeApplyService,
   ChangePlanStore,
   ChangePreviewService,
@@ -55,6 +64,7 @@ import {
   type ManagedProcessPort,
 } from '@hdsl/core';
 import {
+  DSH_VERSION,
   PNPM_EXECUTOR_SPEC,
   VERIFIED_COMBINATIONS,
   computeCompositionDigest,
@@ -72,6 +82,31 @@ import {
 
 const enabled = process.env['HDSL_REAL_THIRD_PARTY_PLUGIN'] === '1';
 const keep = process.env['HDSL_EVIDENCE_KEEP'] === '1';
+/**
+ * The verified catalog is macOS ARM64 only. The opt-in real chain is skipped
+ * unless the host matches it, and the real host is passed through to the
+ * production dispatcher so `environments.create` runs the frozen
+ * `unsupportedCombinationReason` platform gate on-path (a darwin-arm64
+ * combination is never installed on an unverified host).
+ */
+const supportedHost = process.platform === 'darwin' && process.arch === 'arm64';
+const HOST: HostPlatform = { platform: process.platform as Platform, arch: process.arch as Arch };
+
+/**
+ * The documented #98 acceptance target: baseline Node 22.19.0 + DSH
+ * `DSH_VERSION`. Pinning BOTH axes keeps the selection deterministic now that
+ * the catalog also carries the A2 Tier 2 DSH release (#131): a node-version-only
+ * lookup would silently follow catalog order.
+ */
+const baselineCombination = () => {
+  const combination = VERIFIED_COMBINATIONS.find(
+    (entry) => entry.node.version === '22.19.0' && entry.dsh.version === DSH_VERSION,
+  );
+  if (combination === undefined) {
+    throw new Error(`the verified catalog has no Node 22.19.0 + DSH ${DSH_VERSION} combination`);
+  }
+  return combination;
+};
 
 /** Fixed #98 candidate pin. Any drift is a hard failure, never a re-selection. */
 const CANDIDATE = {
@@ -166,7 +201,83 @@ const waitApplyOperation = async (
   }
 };
 
-describe.skipIf(!enabled)('real third-party DSH plugin acceptance (opt-in, #98)', () => {
+describe('pinned catalog host gate (default suite, no network)', () => {
+  it('rejects every unverified host for the darwin-arm64 combination with UNSUPPORTED_COMBINATION', () => {
+    const combination = baselineCombination();
+    // Non-vacuous: this is the exact gate `packages/contracts/src/dispatcher.ts`
+    // applies in `environments.create` before the port is ever called, and the
+    // verified host still passes it.
+    expect(unsupportedCombinationReason({ platform: 'darwin', arch: 'arm64' }, combination)).toBeUndefined();
+    expect(unsupportedCombinationReason({ platform: 'linux', arch: 'x64' }, combination)).toMatch(
+      /not verified for this build/,
+    );
+    expect(unsupportedCombinationReason({ platform: 'win32', arch: 'x64' }, combination)).toMatch(
+      /not verified for this build/,
+    );
+    expect(unsupportedCombinationReason({ platform: 'darwin', arch: 'x64' }, combination)).toMatch(
+      /not verified for this build/,
+    );
+  });
+
+  it('rejects an unverified host through the production dispatcher before any download or install effect', async () => {
+    const combination = baselineCombination();
+    const dataRoot = mkdtempSync(join(tmpdir(), 'hdsl-98-host-gate-'));
+    const downloads: string[] = [];
+    let managed: Awaited<ReturnType<typeof createManagedInstall>> | undefined;
+    try {
+      // Real production runtime port on the SAME unverified host, with a fetch
+      // spy: were the platform gate bypassed, the install would have to fetch
+      // the darwin-arm64 artifacts and the spy would record the attempt.
+      const runtimePort = createRuntimePort({
+        host: { platform: 'linux', arch: 'x64' },
+        fetch: (input) => {
+          downloads.push(input);
+          return Promise.reject(new Error('network access attempted before the platform gate'));
+        },
+      });
+      managed = await createManagedInstall({
+        dataRoot,
+        catalog: [combination],
+        runtime: runtimePort,
+        host: { platform: 'linux', arch: 'x64' },
+        operationTimeoutMs: 60_000,
+      });
+      expect(managed.available).toBe(true);
+      // The host the dispatcher reads really is the unverified one.
+      expect(managed.port.host).toEqual({ platform: 'linux', arch: 'x64' });
+
+      const contract = createContractRuntime({ port: managed.port });
+      const created = contract.dispatch({
+        apiVersion: API_VERSION,
+        method: 'environments.create',
+        input: {
+          requestId: 'req-98-host-gate',
+          name: 'host-gate',
+          catalogCombinationId: combination.id,
+        },
+      });
+      expect(created.ok, JSON.stringify(created)).toBe(false);
+      if (created.ok) {
+        return;
+      }
+      expect(created.error.code).toBe('UNSUPPORTED_COMBINATION');
+      // The rejection is before every side effect: no download was attempted,
+      // no environment row exists and no operation ledger entry was written.
+      expect(downloads).toEqual([]);
+      const listed = managed.service.listEnvironments();
+      expect(listed.ok, JSON.stringify(listed)).toBe(true);
+      if (listed.ok) {
+        expect(listed.value).toEqual([]);
+      }
+      expect(new OperationStore(resolveLayout(dataRoot)).list()).toEqual([]);
+    } finally {
+      await managed?.close().catch(() => undefined);
+      rmSync(dataRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe.skipIf(!enabled || !supportedHost)('real third-party DSH plugin acceptance (opt-in, #98)', () => {
   it(
     'previews, installs, boots, stops, removes and restarts the pinned ASu-skills candidate',
     async () => {
@@ -174,14 +285,13 @@ describe.skipIf(!enabled)('real third-party DSH plugin acceptance (opt-in, #98)'
       const notes: string[] = [];
       let managed: Awaited<ReturnType<typeof createManagedInstall>> | undefined;
       try {
-        const combination = VERIFIED_COMBINATIONS.find((entry) => entry.node.version === '22.19.0');
-        if (combination === undefined) {
-          throw new Error('the verified catalog has no Node 22.19.0 combination');
-        }
+        const combination = baselineCombination();
 
         // The managed runtime downloads the audited Node/DSH artifacts into its
         // own dataRoot cache; the host npm cache is deliberately not reused.
-        const runtimePort = createRuntimePort({ profileInit: true });
+        // The REAL host is passed through so the production dispatcher platform
+        // gate (`unsupportedCombinationReason`) is on-path.
+        const runtimePort = createRuntimePort({ host: HOST, profileInit: true });
         const credentials = {
           resolveLaunchEnvironment: async () => ({
             ok: true as const,
@@ -198,6 +308,7 @@ describe.skipIf(!enabled)('real third-party DSH plugin acceptance (opt-in, #98)'
           dataRoot,
           catalog: [combination],
           runtime: runtimePort,
+          host: HOST,
           process: processPort,
           operationTimeoutMs: 40 * 60_000,
         });
@@ -205,16 +316,25 @@ describe.skipIf(!enabled)('real third-party DSH plugin acceptance (opt-in, #98)'
         expect(managed.available).toBe(true);
 
         // ---- phase: create + managed install (baseline generation) ----
-        const created = managed.service.createEnvironment({
-          requestId: 'req-98-create',
-          name: 'third-party-plugin',
-          combination,
+        // Creation goes through the frozen production dispatcher, not the
+        // service method, so `unsupportedCombinationReason(host, combination)`
+        // runs before any install and rejects an unverified host.
+        const contract = createContractRuntime({ port: managed.port });
+        const created = contract.dispatch({
+          apiVersion: API_VERSION,
+          method: 'environments.create',
+          input: {
+            requestId: 'req-98-create',
+            name: 'third-party-plugin',
+            catalogCombinationId: combination.id,
+          },
         });
         expect(created.ok, JSON.stringify(created)).toBe(true);
         if (!created.ok) {
           return;
         }
-        const installed = await managed.waitForOperation(created.value.operationId, {
+        const createdOperationId = (created.value as { readonly operationId: string }).operationId;
+        const installed = await managed.waitForOperation(createdOperationId, {
           timeoutMs: 40 * 60_000,
         });
         expect(installed.status, JSON.stringify(installed)).toBe('succeeded');
