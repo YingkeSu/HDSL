@@ -60,6 +60,7 @@ export const REQUIRED_FILES = [
 /** Path-independent rules for content that must never reach the archive. */
 export const FORBIDDEN_RULES = [
   { id: 'qa-entry', test: (p) => p === 'resources/app/dist/main/qa-entry.js', why: 'the headless QA entry is a test entry and must never ship' },
+  { id: 'renderer-test-entry', test: (p) => p.startsWith('resources/app/dist/renderer/testing/'), why: 'stale renderer test entries are development artifacts and must never ship' },
   { id: 'source-map', test: (p) => p.startsWith('resources/app/dist/') && p.endsWith('.map'), why: 'build maps are not needed and are excluded from the package' },
   { id: 'app-sources', test: (p) => p.startsWith('resources/app/src/'), why: 'unbuilt TypeScript sources are not part of the package' },
   { id: 'workspace-manifests', test: (p) => p === 'resources/app/pnpm-lock.yaml' || p === 'resources/app/pnpm-workspace.yaml', why: 'workspace manifests are repository metadata, not application content' },
@@ -68,6 +69,10 @@ export const FORBIDDEN_RULES = [
   { id: 'diagnostics', test: (p) => p.split('/').some((part) => part.includes('hdsl-diagnostics') || part.includes('diagnostics-export')), why: 'diagnostic exports are per-user data' },
   { id: 'credentials', test: (p) => p.endsWith('.credentials.yaml') || p.includes('/.hdsl/'), why: 'credentials and local runtime state must never be packaged' },
   { id: 'dev-cache', test: (p) => p.split('/').some((part) => part === 'pnpm-cache' || part === '.cache' || part === '.scratch'), why: 'development caches are not distributable content' },
+  { id: 'dependency-sources', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/') && p.includes('/src/'), why: 'workspace dependency TypeScript sources are not runtime content' },
+  { id: 'dependency-source-map', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/') && p.endsWith('.map'), why: 'workspace dependency build maps are not runtime content' },
+  { id: 'test-only-api', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/contracts/dist/testing/'), why: 'the contracts testing subpath is a test-only API and must never ship' },
+  { id: 'test-evidence-fixture', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/runtime/catalog/service-verifications/'), why: 'service-verification evidence fixtures are review data, not runtime content' },
   { id: 'dev-dependency', test: (p) => DEV_DEPENDENCY_DIRS.some((name) => p.startsWith(`resources/app/node_modules/${name}/`)), why: 'development-only dependencies must not be packaged' },
 ];
 

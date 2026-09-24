@@ -10,7 +10,7 @@
     "build:renderer": "node scripts/build-renderer.mjs",
     "package:win": "electron-builder --win --x64 --dir",
     "package:win:nsis": "electron-builder --win nsis --x64",
-    "package:mac": "electron-builder --mac --arm64 --dir"
+    "package:mac": "electron-builder --mac --arm64"
   },
   "exports": {
     ".": {
@@ -40,7 +40,12 @@
     "files": [
       "dist/**/*",
       "!dist/main/qa-entry.*",
-      "!dist/**/*.map"
+      "!dist/renderer/testing/**",
+      "!dist/**/*.map",
+      "!node_modules/@hdsl/*/src/**",
+      "!node_modules/@hdsl/*/dist/**/*.map",
+      "!node_modules/@hdsl/contracts/dist/testing/**",
+      "!node_modules/@hdsl/runtime/catalog/service-verifications/**"
     ],
     "win": {
       "target": [
@@ -72,10 +77,20 @@
           "arch": [
             "arm64"
           ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "identity": null,
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "artifactName": "HDSL-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "sign": false
     },
     "extraResources": [
       {
