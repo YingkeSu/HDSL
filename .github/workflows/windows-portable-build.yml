@@ -55,7 +55,7 @@ jobs:
       - name: Build workspace and renderer
         run: pnpm run build:desktop
 
-      - name: Package win32-x64 unpacked directory (unsigned)
+      - name: Package win-x64 unpacked directory (unsigned)
         run: pnpm --filter @hdsl/desktop run package:win
 
       - name: Verify packaged tree (file check only, app is not executed)
@@ -72,8 +72,8 @@ jobs:
         run: |
           $version = node -p "require('./apps/desktop/package.json').version"
           $sha = $env:GITHUB_SHA.Substring(0, 7)
-          $name = "HDSL-$version-win32-x64-$sha-portable.zip"
-          $stage = "apps/desktop/release/stage/HDSL-$version-win32-x64"
+          $name = "HDSL-$version-win-x64-$sha-portable.zip"
+          $stage = "apps/desktop/release/stage/HDSL-$version-win-x64"
           $release = "apps/desktop/release"
           New-Item -ItemType Directory -Force -Path $stage | Out-Null
           Copy-Item -Path "$release/win-unpacked/*" -Destination $stage -Recurse -Force
@@ -82,8 +82,10 @@ jobs:
           Set-Content -Path "$release/SHA256SUMS.txt" -Encoding ascii -Value "$hash  $name"
           Set-Content -Path "$release/build-info.txt" -Encoding ascii -Value @(
             "artifact: $name",
+            "version: $version",
             "base-commit: $env:GITHUB_SHA",
             "base-ref: $env:GITHUB_REF",
+            "release-channel: windows-preview (unsigned, not a full MVP release)",
             "runner: $env:RUNNER_OS",
             "node: $(node --version)",
             "pnpm: $(pnpm --version)",
@@ -98,7 +100,7 @@ jobs:
       - name: Upload portable ZIP
         uses: actions/upload-artifact@v4
         with:
-          name: hdsl-win32-x64-portable-${{ github.sha }}
+          name: hdsl-win-x64-portable-${{ github.sha }}
           if-no-files-found: error
           retention-days: 14
           path: |

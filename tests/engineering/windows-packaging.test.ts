@@ -177,6 +177,15 @@ describe('Windows portable build workflow', () => {
     expect(workflow).toContain('build-info.txt');
   });
 
+  it('names the artifact with version, win-x64 and the exact build SHA', () => {
+    expect(workflow).toContain('HDSL-$version-win-x64-$sha-portable.zip');
+    expect(workflow).not.toContain('win32-x64');
+    expect(workflow).toContain('hdsl-win-x64-portable-${{ github.sha }}');
+    // The provenance file carries the full commit, not just the short form.
+    expect(workflow).toContain('base-commit: $env:GITHUB_SHA');
+    expect(workflow).toContain('release-channel: windows-preview');
+  });
+
   it('checks and archives repository-relative paths', () => {
     // The same command works locally and on the runner, so the recorded
     // evidence stays reproducible from the documented instructions.

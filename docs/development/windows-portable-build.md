@@ -4,7 +4,7 @@
 
 结论先行：**这是实验性桌面构建。启动未验证；DSH 环境创建/安装既未被平台契约正确拒绝，也未获得支持——它会在 win32 上沿未验证路径推进到产物阶段才失败（见下方“已发现的缺口”）。** 不要把它描述为“Windows 版本已可用”，也不要描述为“win32 已被契约拒绝”。
 
-本记录随构建候选一起合入；桌面入口未上报真实宿主的缺口由**单独变更**负责修复，修复合并后本记录的状态描述需要同步更正（见“已发现的缺口”）。当前 CI 归档只是**候选产物**（Artifact + SHA256），最终 Release 必须在修复合并后按精确 main 提交重建。
+本记录随构建候选一起合入；桌面入口未上报真实宿主的缺口由**单独变更**负责修复，修复合并后本记录的状态描述需要同步更正（见“已发现的缺口”）。当前 CI 归档只是**候选产物**（Artifact + SHA256），**最终 Release 的前置条件是：host 接线修复合并、根 README 更新合入，然后在精确 `main` 提交上重建并记录新摘要**；发布渠道为 `windows-preview`，不是完整 MVP 发布。
 
 ## 产物形态
 
@@ -12,21 +12,23 @@
 | --- | --- |
 | 目标 | `win32` / `x64` |
 | 形态 | 便携 ZIP（解包目录打包），**无安装器、无签名、无公证、无自动更新** |
-| 解包顶层目录 | `HDSL-<version>-win32-x64/` |
-| ZIP 名（CI 生成） | `HDSL-<version>-win32-x64-<sha7>-portable.zip`，`<sha7>` 为构建基线提交前 7 位 |
+| 解包顶层目录 | `HDSL-<version>-win-x64/` |
+| ZIP 名（CI 生成） | `HDSL-<version>-win-x64-<sha7>-portable.zip`，`<sha7>` 为构建基线提交前 7 位；artifact 名 `hdsl-win-x64-portable-<完整提交>` |
 | 组件 | Electron `44.4.3`（`apps/desktop` 的 `devDependencies`，由 electron-builder 从官方发行包下载） |
-| `<version>` 来源 | `apps/desktop/package.json` 的 `version`；当前为 `0.0.0`，版本号决策未在本轮做出 |
+| `<version>` 来源 | `apps/desktop/package.json` 的 `version`；当前为 `0.0.0`（沿用，不在本轮改版本号） |
+| 发布渠道 | `windows-preview`（未签名、未实机验证的预览归档，不等于完整 MVP 发布） |
+| 计划标签 | `v0.0.0-windows-preview.1`（发布时再核对冲突；不使用 contracts 或其他无关标签） |
 
 签名与公证不作为当前门槛（ADR 0007 决策 5）；本机 `security find-identity -v -p codesigning` 仍为 `0 valid identities`，仓库内不存在签名身份。ZIP 以工作流内 `Get-FileHash -Algorithm SHA256` 出摘要，与产物一起作为 Actions artifact 保存。
 
-### 候选归档（非 Release）
+### 候选归档（非 Release，旧命名）
 
-首个候选归档由 `windows-latest` 构建，仅用于评审与归档核对。**它不是最终 Release 产物**：host 接线缺口修复合并后必须按修复后的精确 main 提交重建。
+首个候选归档由 `windows-latest` 构建，仅用于评审与归档核对。**它不是最终 Release 产物**：host 接线缺口修复与根 README 合入后，必须按修复后的精确 `main` 提交重建（命名采用上表的 `win-x64` 形式；下表记录的是当时实际产出的旧命名）。
 
 | 项 | 值 |
 | --- | --- |
 | 基线提交 | `586214cb32c2aa2be05baeae79b02bbc8b33941f` |
-| ZIP | `HDSL-0.0.0-win32-x64-586214c-portable.zip` |
+| ZIP（旧命名） | `HDSL-0.0.0-win32-x64-586214c-portable.zip` |
 | SHA-256 | `05f9684bb81da1de6b63dd42daa524f908f5e7694bde1aa6d819cd2da8f8e0cf` |
 | 大小 | 165,248,959 字节 |
 | 归档核对 | PASS：19 个必需文件存在，无禁止内容（未执行 exe） |
@@ -46,7 +48,7 @@ pnpm install --frozen-lockfile
 pnpm run package:win        # = pnpm run build:desktop && pnpm --filter @hdsl/desktop run package:win
 ```
 
-桌面包内的实际打包指令是 `electron-builder --win --x64 --dir`，输出到 `apps/desktop/release/win-unpacked/`。CI 侧由 [windows-portable-build.yml](../../.github/workflows/windows-portable-build.yml) 在 `windows-latest` 上执行同一组命令，再把 `win-unpacked` 复制为 `HDSL-<version>-win32-x64` 目录并压缩为 ZIP。
+桌面包内的实际打包指令是 `electron-builder --win --x64 --dir`，输出到 `apps/desktop/release/win-unpacked/`。CI 侧由 [windows-portable-build.yml](../../.github/workflows/windows-portable-build.yml) 在 `windows-latest` 上执行同一组命令，再把 `win-unpacked` 复制为 `HDSL-<version>-win-x64` 目录并压缩为 ZIP；`build-info.txt` 记录 artifact 名、版本、**完整** `base-commit`、构建环境与未签名/无主机证据声明。
 
 该工作流是**受控、仅构建**的：`permissions: contents: read`，不含签名/发布凭据，不创建 Release，保留 14 天 artifact；触发为 `workflow_dispatch` 与打包相关路径的 `push`。它只输出候选归档：Windows 上不运行任何测试（单元/集成/实机均不运行），只做构建、归档完整性核对与摘要计算。
 
@@ -69,7 +71,7 @@ sha256sum -c SHA256SUMS.txt                  # bash / WSL
 Get-FileHash -Algorithm SHA256 .\HDSL-*.zip  # PowerShell，与文件内大写十六进制比对
 ```
 
-`SHA256SUMS.txt` 为 `sha256sum` 兼容格式（小写摘要 + 两个空格 + 文件名），`build-info.txt` 记录基线提交、平台、Node/pnpm/Electron 版本、打包命令与“未签名 / 无 Windows 主机证据”声明。
+`SHA256SUMS.txt` 为 `sha256sum` 兼容格式（小写摘要 + 两个空格 + 文件名），`build-info.txt` 记录 artifact 名、版本、完整基线提交、平台、Node/pnpm/Electron 版本、打包命令、发布渠道与“未签名 / 无 Windows 主机证据”声明。
 
 ## Windows 支持边界（准确版本）
 
