@@ -104,6 +104,14 @@ describe('fieldHintFromMessage / translateIssue', () => {
     ).toBe('环境名称：首尾不能有空白字符；检索关键词：包含未知字段');
   });
 
+  it('translates the pathless >20-issue summary without inventing a field (review 5300929208)', () => {
+    expect(
+      fieldHintFromMessage(
+        'invalid input (input.name: must not contain path separators; 3 more issue(s))',
+      ),
+    ).toBe('环境名称：不能包含路径分隔符（/ 或 \\）；还有 3 个问题未显示');
+  });
+
   it('falls back to the structural issue text for unknown wording', () => {
     expect(translateIssue('must be an opaque id')).toBe('必须为 an opaque id');
     expect(fieldHintFromMessage('not a structural message')).toBeNull();

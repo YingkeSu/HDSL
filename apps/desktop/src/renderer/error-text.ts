@@ -135,8 +135,14 @@ export const fieldHintFromMessage = (message: string): string | null => {
       continue;
     }
     const separator = part.indexOf(': ');
-    const path = separator === -1 ? part : part.slice(0, separator);
-    const issue = separator === -1 ? part : part.slice(separator + 2);
+    if (separator === -1) {
+      // The contract appends a pathless summary such as `3 more issue(s)`; it is
+      // not a field, so translate it without inventing a label.
+      rendered.push(translateIssue(part));
+      continue;
+    }
+    const path = part.slice(0, separator);
+    const issue = part.slice(separator + 2);
     const label = FIELD_LABELS[path] ?? (path.startsWith('input.') ? path.slice(6) : path);
     rendered.push(`${label}：${translateIssue(issue)}`);
   }
