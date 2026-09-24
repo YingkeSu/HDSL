@@ -231,7 +231,8 @@ describe('AppView state matrix', () => {
       actions: noopActions,
     });
     expect(html).toMatch(/role="alert"[\s\S]*START_TIMEOUT/);
-    expect(html).toContain('（可重试）');
+    expect(html).toContain('受管进程未在时限内就绪');
+    expect(html).toContain('该失败可重试。');
   });
 
   it('renders a poll failure and an explicit retry entry when tracking is paused', () => {
@@ -547,5 +548,26 @@ describe('S4 explicit build authorization UI (issue #78)', () => {
     });
     expect(html).toContain('无法完整枚举依赖闭包中的安装期脚本');
     expect(buttonNamed(html, '确认并授权安装')).toBeUndefined();
+  });
+});
+
+describe('#145 localized contract errors in the install panel', () => {
+  it('keeps the raw message out of the alert lead and inside the technical details', () => {
+    const raw = 'the managed package executor is missing or does not match';
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        actionError: { code: 'EXECUTOR_UNAVAILABLE', message: raw, retryable: false },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('技术详情');
+    expect(html).toContain(`EXECUTOR_UNAVAILABLE：${raw}`);
+    // Everything before the collapsible details is the localized copy.
+    const alert = html.slice(html.indexOf('role="alert"'));
+    const detailsIndex = alert.indexOf('技术详情');
+    expect(detailsIndex).toBeGreaterThan(0);
+    expect(alert.slice(0, detailsIndex)).not.toContain(raw);
   });
 });

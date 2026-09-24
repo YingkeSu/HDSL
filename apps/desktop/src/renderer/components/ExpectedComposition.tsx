@@ -12,6 +12,7 @@
 import type { ReactElement } from 'react';
 import type { ExpectedCompositionRow } from '@hdsl/contracts';
 import { formatTimestamp } from '../format.js';
+import { ErrorNotice } from './ErrorNotice.js';
 import {
   isOperationTerminal,
   selectedEnvironment,
@@ -86,7 +87,7 @@ export function ExpectedComposition({
       {reading && (
         <p role="status">正在读取期望组成…（{tracked?.phase ?? 'reading dump'}）</p>
       )}
-      {error !== null && <p role="alert">{error.code}：{error.message}</p>}
+      {error !== null && <ErrorNotice error={error} />}
       {view !== null && !reading && (
         <div>
           <div className="overview-meta">

@@ -381,6 +381,10 @@ describe('SwitchVersion markup', () => {
     });
     expect(html).toContain('该组合不是已支持组合');
     expect(html).toContain('UNSUPPORTED_COMBINATION');
+    // #145: the switch-specific Chinese hint stays primary; the raw message is
+    // only in the expandable technical details.
+    expect(html).toContain('技术详情');
+    expect(html).toContain('UNSUPPORTED_COMBINATION：raw port message must not lead');
   });
 
   it('does not mislabel an unrelated action error (for example the listing query) as a switch failure', () => {

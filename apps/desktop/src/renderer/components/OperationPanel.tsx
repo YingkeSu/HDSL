@@ -16,11 +16,11 @@
 import type { ReactElement } from 'react';
 import {
   clampProgress,
-  describeError,
   OPERATION_KIND_LABELS,
   OPERATION_STATUS_LABELS,
 } from '../format.js';
 import { isOperationTerminal, type RendererActions, type RendererState } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 export interface OperationPanelProps {
   readonly state: RendererState;
@@ -85,9 +85,7 @@ export function OperationPanel({ state, actions }: OperationPanelProps): ReactEl
             </p>
           )}
           {operation.error !== null && (
-            <p role="alert" className="notice notice-error">
-              操作失败：{describeError(operation.error)}
-            </p>
+            <ErrorNotice prefix="操作失败：" error={operation.error} />
           )}
         </>
       )}
@@ -97,9 +95,7 @@ export function OperationPanel({ state, actions }: OperationPanelProps): ReactEl
         </p>
       )}
       {state.trackingError !== null && (
-        <p role="alert" className="notice notice-error">
-          获取操作状态失败：{describeError(state.trackingError)}
-        </p>
+        <ErrorNotice prefix="获取操作状态失败：" error={state.trackingError} />
       )}
       {state.trackingPaused && <p>连续多次获取操作状态失败，已暂停自动刷新。</p>}
       {canRetryTracking && (
