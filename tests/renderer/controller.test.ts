@@ -10,15 +10,17 @@ import {
   API_VERSION,
   CONTRACT_METHODS,
   REQUEST_ID_PATTERN,
+  type ContractResponse,
   type EnvironmentSummary,
   type OperationSnapshot,
   type OperationUpdatedEvent,
 } from '@hdsl/contracts';
-import { FIXTURE_SEED } from '@hdsl/contracts/testing';
+import { FIXTURE_IDS, FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RendererController, type RendererEventSource } from '../../apps/desktop/src/renderer/controller.js';
 import type { RendererContractClient } from '../../apps/desktop/src/renderer/contract.js';
 import {
+  createDeferred,
   createStubRendererClient,
   createTestRendererClient,
   stubFail,
@@ -114,9 +116,135 @@ describe('RendererController create', () => {
     await controller.createEnvironment();
     // The frozen `environments.create` schema is the authority; the renderer just
     // shows the sanitized error and must not apply an effect.
-    expect(controller.getState().actionError?.code).toBe('INVALID_INPUT');
+    expect(controller.getState().createError?.code).toBe('INVALID_INPUT');
     expect(port.effects.length).toBe(effectsBefore);
     expect(calls.some((call) => call.method === 'environments.create')).toBe(true);
+    await controller.dispose();
+  });
+
+  it('keeps a create failure dialog-scoped and never clears an unrelated action error (#146)', async () => {
+    const { client } = createStubRendererClient((method) => {
+      if (method === 'catalog.list') return stubOk(FIXTURE_SEED.catalog);
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'environments.openWebUI') return stubFail('WEBUI_UNAVAILABLE', 'webui down');
+      if (method === 'environments.create') return stubFail('INVALID_INPUT', 'input is invalid');
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment('env-stopped');
+    // An unrelated flow fails first and owns the page-level error.
+    await controller.openWebUI();
+    expect(controller.getState().actionError?.code).toBe('WEBUI_UNAVAILABLE');
+
+    controller.setCreateName('../escape');
+    controller.setCreateCombinationId(FIXTURE_IDS.combination.verified);
+    await controller.createEnvironment();
+    // The create failure is dialog-scoped ...
+    expect(controller.getState().createError?.code).toBe('INVALID_INPUT');
+    // ... and never overwrites the unrelated page-level error.
+    expect(controller.getState().actionError?.code).toBe('WEBUI_UNAVAILABLE');
+
+    // Closing/reopening the dialog clears only the create error.
+    controller.clearCreateError();
+    expect(controller.getState().createError).toBeNull();
+    expect(controller.getState().actionError?.code).toBe('WEBUI_UNAVAILABLE');
+    await controller.dispose();
+  });
+
+  it('drops a create failure that arrives after the dialog was closed (#146)', async () => {
+    const deferred = createDeferred<ContractResponse<unknown>>();
+    const { client } = createStubRendererClient((method) => {
+      if (method === 'catalog.list') return stubOk(FIXTURE_SEED.catalog);
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'environments.create') return deferred.promise;
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.setCreateName('late');
+    controller.setCreateCombinationId(FIXTURE_IDS.combination.verified);
+    const pending = controller.createEnvironment();
+    // Closing (and reopening) invalidates the in-flight attempt before it settles.
+    controller.clearCreateError();
+    controller.clearCreateError();
+    deferred.resolve(
+      stubFail('INVALID_INPUT', 'invalid input (input.name: must not contain path separators)'),
+    );
+    await pending;
+    // The late failure must not backfill the freshly opened dialog.
+    expect(controller.getState().createError).toBeNull();
+    await controller.dispose();
+  });
+
+  it('drops a superseded failure but still surfaces the current attempt (#146)', async () => {
+    const first = createDeferred<ContractResponse<unknown>>();
+    const second = createDeferred<ContractResponse<unknown>>();
+    let createCalls = 0;
+    const { client } = createStubRendererClient((method) => {
+      if (method === 'catalog.list') return stubOk(FIXTURE_SEED.catalog);
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'environments.create') {
+        createCalls += 1;
+        return createCalls === 1 ? first.promise : second.promise;
+      }
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.setCreateName('first');
+    controller.setCreateCombinationId(FIXTURE_IDS.combination.verified);
+    const pendingFirst = controller.createEnvironment();
+    controller.clearCreateError();
+    controller.setCreateName('second');
+    const pendingSecond = controller.createEnvironment();
+
+    first.resolve(
+      stubFail('INVALID_INPUT', 'invalid input (input.name: must not contain path separators)'),
+    );
+    await pendingFirst;
+    expect(controller.getState().createError).toBeNull();
+
+    second.resolve(
+      stubFail('INVALID_INPUT', 'invalid input (input.name: must be 1-80 characters)'),
+    );
+    await pendingSecond;
+    expect(controller.getState().createError?.code).toBe('INVALID_INPUT');
+    expect(controller.getState().createError?.message).toContain('1-80 characters');
+    await controller.dispose();
+  });
+
+  it('still tracks a create that succeeds after the dialog was closed (#146)', async () => {
+    const deferred = createDeferred<ContractResponse<unknown>>();
+    const { client } = createStubRendererClient((method) => {
+      if (method === 'catalog.list') return stubOk(FIXTURE_SEED.catalog);
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'environments.create') return deferred.promise;
+      if (method === 'operations.get') {
+        return stubOk({
+          id: 'op-late',
+          environmentId: 'env-1',
+          kind: 'create',
+          phase: 'done',
+          status: 'succeeded',
+          sequence: 1,
+        });
+      }
+      if (method === 'operations.subscribe') return stubOk({ subscriptionId: 'sub-late' });
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.setCreateName('late-success');
+    controller.setCreateCombinationId(FIXTURE_IDS.combination.verified);
+    const pending = controller.createEnvironment();
+    // The dialog is abandoned, but the environment really is created: its
+    // success semantics (tracking + list refresh) must still run.
+    controller.clearCreateError();
+    deferred.resolve(stubOk({ operationId: 'op-late' }));
+    await pending;
+    expect(controller.getState().trackedOperation?.status).toBe('succeeded');
+    expect(controller.getState().createName).toBe('');
     await controller.dispose();
   });
 

@@ -24,6 +24,7 @@ const noopActions: RendererActions = {
   setCreateName: () => undefined,
   setCreateCombinationId: () => undefined,
   createEnvironment: () => undefined,
+  clearCreateError: () => undefined,
   selectEnvironment: () => undefined,
   startSelected: () => undefined,
   stopSelected: () => undefined,

@@ -188,7 +188,9 @@ describe(`renderer controller acceptance (independent QA @ ${SHA})`, () => {
 
     await controller.createEnvironment();
 
-    expect(controller.getState().actionError?.code).toBe('UNSUPPORTED_COMBINATION');
+    expect(controller.getState().createError?.code).toBe('UNSUPPORTED_COMBINATION');
+    // The create failure stays dialog-scoped; no page-level `actionError` is set.
+    expect(controller.getState().actionError).toBeNull();
     expect(controller.getState().createName).toBe('My env');
     expect(controller.getState().notice).toBeNull();
   });
