@@ -118,7 +118,7 @@ describe('version locking', () => {
       join(root, '.github/workflows/engineering-checks.yml'),
       'utf8',
     );
-    expect(workflow).toContain('pnpm/action-setup@v4');
+    expect(workflow).toContain('pnpm/action-setup@v6.1.0');
     expect(workflow).toContain(`version: ${rootManifest.packageManager?.split('@')[1]}`);
     expect(workflow).toContain('node-version-file: .nvmrc');
     expect(readFileSync(join(root, '.nvmrc'), 'utf8').trim()).toMatch(/^\d+\.\d+\.\d+$/);

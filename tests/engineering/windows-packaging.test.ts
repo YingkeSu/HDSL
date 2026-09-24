@@ -171,7 +171,7 @@ describe('Windows portable build workflow', () => {
   });
 
   it('uploads the ZIP with its SHA-256 and build provenance', () => {
-    expect(workflow).toContain('uses: actions/upload-artifact@v4');
+    expect(workflow).toContain('uses: actions/upload-artifact@v7.0.1');
     expect(workflow).toContain('Get-FileHash -Algorithm SHA256');
     expect(workflow).toContain('SHA256SUMS.txt');
     expect(workflow).toContain('build-info.txt');
