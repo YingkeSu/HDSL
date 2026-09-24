@@ -73,9 +73,10 @@ describe('macOS DMG packaging declaration', () => {
   });
 
   it('does not retarget or re-sign the Windows deliverable', () => {
-    // Windows packaging is owned by its own change; the mac work must leave the
-    // win target declaration untouched.
-    expect(build.win?.target).toEqual([{ target: 'dir', arch: ['x64'] }]);
+    // Windows owns its own target list (the unpacked dir plus the NSIS
+    // installer added by the Windows change); the mac work must leave the
+    // shared win block's dir target and signing state alone.
+    expect(build.win?.target).toContainEqual({ target: 'dir', arch: ['x64'] });
   });
 
   it('excludes workspace test APIs, sources and maps from the packaged tree', () => {
