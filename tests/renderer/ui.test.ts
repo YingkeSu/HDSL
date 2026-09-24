@@ -397,7 +397,13 @@ describe('#146 dialog-scoped create error', () => {
 
   it('does not promote the create error to the page-level notices', () => {
     const pageHtml = renderAppView({ state: state({ createError }), actions: noopActions });
+    // If the create failure were promoted to the page-level Notices, its
+    // message / code / old copy would appear here. Assert the actual page
+    // output instead of relying on the dialog being absent.
     expect(pageHtml).not.toContain('创建环境失败');
+    expect(pageHtml).not.toContain('创建参数无效');
+    expect(pageHtml).not.toContain('invalid input (input.name');
+    expect(pageHtml).not.toContain('INVALID_INPUT');
   });
 });
 

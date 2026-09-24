@@ -166,6 +166,12 @@ export class RendererController implements RendererActions {
   #disposed = false;
   /** Bumped whenever the tracked operation or disposal changes. */
   #trackingEpoch = 0;
+  /**
+   * Bumped whenever a create attempt is superseded: a newer attempt starts, or
+   * the dialog is closed/reopened (`clearCreateError`). A late failure from an
+   * invalidated attempt must not backfill the next dialog session.
+   */
+  #createEpoch = 0;
   #pollFailures = 0;
   #pendingCommands = 0;
 
@@ -262,9 +268,12 @@ export class RendererController implements RendererActions {
 
   /**
    * Clears ONLY the create-dialog error (#146). Other flows' errors live in
-   * `actionError`/`trackingError` and are never touched here.
+   * `actionError`/`trackingError` and are never touched here. It also
+   * invalidates any in-flight create attempt, so its late failure cannot
+   * repopulate a freshly opened dialog.
    */
   clearCreateError(): void {
+    this.#createEpoch += 1;
     this.#update({ createError: null });
   }
 
@@ -286,6 +295,10 @@ export class RendererController implements RendererActions {
       // `environments.create` schema in main; the renderer dispatches and shows
       // the contract's sanitized `INVALID_INPUT` instead of duplicating the rule.
       this.#update({ createError: null });
+      // Scope token for THIS attempt. A newer attempt, or closing/reopening the
+      // dialog, supersedes it. Only the failure write is scoped: a create that
+      // really succeeded still tracks and refreshes in the background.
+      const createEpoch = (this.#createEpoch += 1);
       const result = await this.#call(
         'environments.create',
         { requestId: this.#newRequestId(), name, catalogCombinationId: createCombinationId },
@@ -296,7 +309,11 @@ export class RendererController implements RendererActions {
       }
       if (!result.ok) {
         // A create failure stays inside the dialog lifecycle (#146) and is NOT
-        // the shared page-level `actionError`.
+        // the shared page-level `actionError`. A failure from a superseded
+        // attempt is dropped instead of backfilling the current dialog.
+        if (this.#createEpoch !== createEpoch) {
+          return;
+        }
         this.#update({ createError: result.error });
         return;
       }
