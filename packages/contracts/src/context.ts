@@ -190,7 +190,13 @@ export interface RestoreGenerationCommand {
 }
 
 export interface ContractPort {
-  readonly host: HostPlatform;
+  /**
+   * The real host the contract gate must evaluate. `undefined` means the
+   * caller did not supply a resolvable host; the platform guard then refuses
+   * create/switch instead of assuming a verified host (never a silent
+   * darwin/arm64 fallback).
+   */
+  readonly host: HostPlatform | undefined;
 
   listCatalog(): PortOutcome<readonly RuntimeCombination[]>;
   listEnvironments(): PortOutcome<readonly EnvironmentSummary[]>;

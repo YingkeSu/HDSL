@@ -135,6 +135,14 @@ const profileExecutor = async (
 };
 
 const roots: string[] = [];
+
+/**
+ * The synthetic catalog below is macOS ARM64. The dispatcher platform gate now
+ * reads an explicit host (no silent darwin fallback), so the harness declares
+ * the host it is simulating.
+ */
+const TEST_HOST = { platform: 'darwin', arch: 'arm64' } as const;
+
 const freshRoot = (prefix: string): string => {
   const root = mkdtempSync(join(tmpdir(), prefix));
   roots.push(root);
@@ -150,6 +158,7 @@ const buildHarness = async (options: HarnessOptions = {}): Promise<Harness> => {
   const runtime = createRuntimePort({
     closureInstall: false,
     precheck: 'none',
+    host: TEST_HOST,
     ...(options.profileInit === true
       ? { profileInit: true, executeCommand: profileExecutor as never }
       : {}),
@@ -161,6 +170,7 @@ const buildHarness = async (options: HarnessOptions = {}): Promise<Harness> => {
     dataRoot,
     catalog,
     runtime,
+    host: TEST_HOST,
     fixtures: { allowArtifactsOnly: true },
     ...(options.faults === undefined ? {} : { faults: options.faults }),
     ...(options.process === undefined ? {} : { process: options.process }),
