@@ -110,6 +110,9 @@ jobs:
           [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/crlf-control.txt", "$hash  $name`r`n", [System.Text.UTF8Encoding]::new($false))
           node apps/desktop/scripts/verify-checksum-file.mjs "$env:RUNNER_TEMP/crlf-control.txt" "$name"
           if ($LASTEXITCODE -ne 1) { throw "CRLF negative control was not rejected (exit $LASTEXITCODE)" }
+          # GitHub's pwsh wrapper exits with $LASTEXITCODE, so clear the
+          # intentional failure from the negative control before continuing.
+          $LASTEXITCODE = 0
           Write-Host 'PASS: SHA256SUMS.txt is LF-only and BOM-free; the CRLF control was rejected.'
           Get-Content "$release/SHA256SUMS.txt"
           Get-Content "$release/build-info.txt"
@@ -262,6 +265,9 @@ jobs:
           [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/crlf-control-installer.txt", "$hash  $name`r`n", [System.Text.UTF8Encoding]::new($false))
           node apps/desktop/scripts/verify-checksum-file.mjs "$env:RUNNER_TEMP/crlf-control-installer.txt" "$name"
           if ($LASTEXITCODE -ne 1) { throw "installer CRLF negative control was not rejected (exit $LASTEXITCODE)" }
+          # GitHub's pwsh wrapper exits with $LASTEXITCODE, so clear the
+          # intentional failure from the negative control before continuing.
+          $LASTEXITCODE = 0
           Write-Host 'PASS: SHA256SUMS-installer.txt is LF-only and BOM-free; the CRLF control was rejected.'
           Get-Content "$release/SHA256SUMS-installer.txt"
           Get-Content "$release/build-info-installer.txt"
