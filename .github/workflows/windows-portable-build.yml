@@ -66,6 +66,9 @@ jobs:
       - name: Verify packaged tree (file check only, app is not executed)
         run: node apps/desktop/scripts/verify-win-package.mjs apps/desktop/release/win-unpacked
 
+      - name: Audit packaged tree for test, fixture and credential content
+        run: node apps/desktop/scripts/verify-win-package.mjs --audit apps/desktop/release/win-unpacked
+
       - name: Record packaged contents
         shell: pwsh
         run: |
@@ -163,6 +166,7 @@ jobs:
           if ($proc.ExitCode -ne 0) { throw "installer exited with code $($proc.ExitCode)" }
           if (-not (Test-Path (Join-Path $target 'HDSL.exe'))) { throw 'HDSL.exe missing after silent install' }
           node apps/desktop/scripts/verify-win-package.mjs $target
+          node apps/desktop/scripts/verify-win-package.mjs --audit $target
           "HDSL_INSTALL_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
 
       - name: Seed user-data sentinels, then upgrade in place

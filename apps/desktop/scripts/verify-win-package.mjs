@@ -40,10 +40,21 @@ export const REQUIRED_FILES = [
   // so these JSON files live beside `dist` inside the package, not in it.
   'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.5-rc.2/closure.json',
   'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.7-rc.1/closure.json',
+  // `readDependencyClosure` reads `closure.json`, `package.json` and
+  // `package-lock.json` together and returns `undefined` if any is absent, so a
+  // missing lock file breaks environment creation with INTERNAL_ERROR.
+  // electron-builder's default `excludedNames` strips every `package-lock.json`
+  // from the app tree, so these two are restored through `extraResources`.
+  'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.5-rc.2/package-lock.json',
+  'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.7-rc.1/package-lock.json',
   // Declared production dependencies of the desktop package.
   'resources/app/node_modules/react/package.json',
   'resources/app/node_modules/react-dom/package.json',
   'resources/app/node_modules/yaml/package.json',
+  // `extraResources`: the license and third-party notices must travel with the
+  // installed application, not only with the repository.
+  'resources/LICENSE.hdsl.txt',
+  'resources/THIRD_PARTY_NOTICES.md',
 ];
 
 /** Path-independent rules for content that must never reach the archive. */
@@ -71,6 +82,97 @@ export const DEV_DEPENDENCY_DIRS = [
   'typescript',
   'vitest',
 ];
+
+/**
+ * High-signal content markers that must never appear in packaged runtime files.
+ *
+ * The path rules above catch test/QA artifacts by name; these catch the same
+ * content when it is inlined into a bundle or a stray file. They are
+ * deliberately narrow so a legitimate production bundle (which does contain
+ * words like `apiKey`, `secret` and `127.0.0.1`) cannot trip them. A violation
+ * reports only the rule id, the relative path and why — never the matched text.
+ */
+export const CONTENT_MARKERS = [
+  {
+    id: 'qa-opt-in-env',
+    pattern: /HDSL_(QA_REAL_INSTALL|REAL_PROCESS|KEYCHAIN_CANARY|E2E_MAIN_FLOW|REAL_WEBUI_BOOTSTRAP|QA_REAL_DSH)/,
+    why: 'test-only opt-in environment variable names must not ship',
+  },
+  { id: 'private-key', pattern: /-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----/, why: 'private key material must never ship' },
+  { id: 'aws-access-key', pattern: /AKIA[0-9A-Z]{16}/, why: 'AWS access key material must never ship' },
+  {
+    id: 'github-token',
+    pattern: /(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,})/,
+    why: 'GitHub token material must never ship',
+  },
+];
+
+/** Per-file content-scan cap; the renderer bundle and main entry are far smaller. */
+export const MAX_CONTENT_SCAN_BYTES = 4 * 1024 * 1024;
+
+/**
+ * Scans one packaged file for [CONTENT_MARKERS]. Binary files (NUL bytes) and
+ * oversized files are skipped, and the return value never contains the matched
+ * text.
+ *
+ * @param {string} filePath Absolute path of a file inside the packaged tree.
+ * @returns {Array<{ id: string, why: string }>} One entry per matched marker.
+ */
+export const scanFileContent = (filePath) => {
+  const violations = [];
+  let stat;
+  try {
+    stat = statSync(filePath);
+  } catch {
+    return violations;
+  }
+  if (!stat.isFile() || stat.size === 0) return violations;
+  const length = Math.min(stat.size, MAX_CONTENT_SCAN_BYTES);
+  const buffer = Buffer.alloc(length);
+  const fd = openSync(filePath, 'r');
+  let slice;
+  try {
+    const read = readSync(fd, buffer, 0, length, 0);
+    slice = buffer.subarray(0, read);
+  } finally {
+    closeSync(fd);
+  }
+  if (slice.includes(0)) return violations; // Binary asset; markers are textual.
+  const text = slice.toString('utf8');
+  for (const marker of CONTENT_MARKERS) {
+    if (marker.pattern.test(text)) violations.push({ id: marker.id, why: marker.why });
+  }
+  return violations;
+};
+
+/**
+ * Full audit of a packaged tree: [verifyPackagedTree] path rules plus the
+ * content scan above. Used against the actual installed payload, never instead
+ * of it.
+ *
+ * @param {string} appDir Installed application directory.
+ * @returns {{ errors: string[], files: number, markerFiles: number }} Sanitized result.
+ */
+export const auditPackagedTree = (appDir) => {
+  const errors = verifyPackagedTree(appDir);
+  let files = [];
+  try {
+    files = walk(appDir);
+  } catch {
+    return { errors, files: 0, markerFiles: 0 };
+  }
+  let markerFiles = 0;
+  for (const file of files) {
+    const violations = scanFileContent(join(appDir, file));
+    if (violations.length > 0) {
+      markerFiles += 1;
+      for (const violation of violations) {
+        errors.push(`forbidden content (${violation.id}): ${file} — ${violation.why}`);
+      }
+    }
+  }
+  return { errors, files: files.length, markerFiles };
+};
 
 /**
  * Format check for the `.exe` deliverable produced by the `nsis` target.
@@ -222,10 +324,27 @@ const main = () => {
     process.stdout.write('Scope: installer file format only; the installer was not executed.\n');
     return;
   }
-  if (mode === undefined || mode.trim() === '' || mode === '--installer') {
+  if (mode === '--audit' && target !== undefined && target.trim() !== '') {
+    const { errors, files, markerFiles } = auditPackagedTree(target);
+    process.stdout.write(`audit directory: ${target}\n`);
+    process.stdout.write(`files: ${String(files)}\n`);
+    process.stdout.write(`files with forbidden content markers: ${String(markerFiles)}\n`);
+    process.stdout.write(`violations: ${String(errors.length)}\n`);
+    process.stdout.write('Scope: path rules plus a bounded content scan; no matched value is printed.\n');
+    if (errors.length > 0) {
+      process.stderr.write(`${errors.join('\n')}\n`);
+      process.stderr.write(`FAIL: ${String(errors.length)} problem(s) in ${target}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(`PASS: audited ${String(files)} packaged files in ${target}\n`);
+    return;
+  }
+  if (mode === undefined || mode.trim() === '' || mode === '--installer' || mode === '--audit') {
     process.stderr.write(
       'usage: node scripts/verify-win-package.mjs <win-unpacked-directory>\n' +
-        '       node scripts/verify-win-package.mjs --installer <setup.exe>\n',
+        '       node scripts/verify-win-package.mjs --installer <setup.exe>\n' +
+        '       node scripts/verify-win-package.mjs --audit <installed-directory>\n',
     );
     process.exitCode = 2;
     return;

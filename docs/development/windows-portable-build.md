@@ -69,8 +69,9 @@ node apps/desktop/scripts/verify-win-package.mjs apps/desktop/release/win-unpack
 
 该脚本只遍历文件树，**不启动 `HDSL.exe`、不运行被测应用、不运行 Windows 测试**。档案必须同时满足“必须存在”和“必须不存在”两组规则：
 
-- 必须存在：`HDSL.exe`；`resources/app/package.json`；`dist/main/index.js`、`dist/preload/bridge.cjs`、`dist/renderer/{index.html,app.js,styles.css}`；生产 workspace 模块 `@hdsl/{contracts,core,runtime}` 的 `dist/index.js`；`@hdsl/runtime/dist/catalog/dependency-closure.js`；运行期静态 catalog `@hdsl/runtime/catalog/dsh-0.1.5-rc.2/closure.json` 与 `dsh-0.1.7-rc.1/closure.json`；声明的生产依赖 `react`、`react-dom`、`yaml`。
+- 必须存在：`HDSL.exe`；`resources/app/package.json`；`dist/main/index.js`、`dist/preload/bridge.cjs`、`dist/renderer/{index.html,app.js,styles.css}`；生产 workspace 模块 `@hdsl/{contracts,core,runtime}` 的 `dist/index.js`；`@hdsl/runtime/dist/catalog/dependency-closure.js`；运行期静态 catalog `@hdsl/runtime/catalog/dsh-0.1.5-rc.2/{closure.json,package.json,package-lock.json}` 与 `dsh-0.1.7-rc.1/{closure.json,package.json,package-lock.json}`；声明的生产依赖 `react`、`react-dom`、`yaml`；以及 `extraResources` 携带的 `resources/LICENSE.hdsl.txt` 与 `resources/THIRD_PARTY_NOTICES.md`。
 - 静态 catalog 必须随包：`dependency-closure.ts` 用 `import.meta.url` 解析 `../../catalog/dsh-<version>`，所以 JSON 位于 `@hdsl/runtime` 包根旁（`packages/runtime/package.json` 的 `files` 同时列出 `dist` 与 `catalog`），不在 `dist` 内。
+- **catalog 的 `package-lock.json` 必须用 `extraResources` 补回**：`readDependencyClosure` 同时读 `closure.json`、`package.json` 与 `package-lock.json`，任一缺失就返回 `undefined`，环境创建会以 `INTERNAL_ERROR`（“no audited dependency closure”）失败；而 electron-builder 的默认 `excludedNames` 会剔除 app 树里**所有** `package-lock.json`。因此 `build.extraResources` 从 `../../packages/runtime/catalog` 以 `filter: [dsh-*/package-lock.json]` 复制回 `app/node_modules/@hdsl/runtime/catalog`（不因此带回 `service-verifications` 审查数据）。已验证：本机 macOS ARM64 打包后 `readDependencyClosure('0.1.7-rc.1')` 在包内返回有效 closure。
 - 必须不存在：`dist/main/qa-entry.js`（QA 测试入口）、`dist/**/*.map`、`resources/app/src/**`（未构建源码）、工作区清单（`pnpm-lock.yaml`/`pnpm-workspace.yaml`）、`.git` 元数据、`*.log`、诊断导出、`.credentials.yaml` 或 `.hdsl/` 用户数据、`pnpm-cache`/`.cache`/`.scratch`、以及 `electron`/`electron-builder`/`typescript`/`vitest`/`esbuild`/`@types` 等开发依赖目录。
 
 安装器文件格式核对（只读，不执行安装器）：
@@ -80,6 +81,15 @@ node apps/desktop/scripts/verify-win-package.mjs --installer apps/desktop/releas
 ```
 
 该检查只读取文件头与签名块：要求文件达到 Electron NSIS 安装器的合理大小、具备 Windows PE 的 `MZ` 头与 `PE\0\0` 签名，并包含 NSIS 的 `NullsoftInst` 签名标记。最后一条正是「不是把 `win-unpacked/HDSL.exe` 改名」的可执行判据：便携 exe 也是 PE 文件，但没有 `NullsoftInst` 标记，会被拒绝。它**不执行安装器**。（可执行文件版本资源中的 `CompanyName` 与产品身份由 #149 / PR #153 负责，本检查不替代它。）
+
+`--audit` 模式在路径规则之外对有界内容做扫描（跳过二进制与超大文件，**只输出规则 id 与相对路径，不输出匹配到的明文**）：
+
+```bash
+node apps/desktop/scripts/verify-win-package.mjs --audit apps/desktop/release/win-unpacked   # 便携目录
+node apps/desktop/scripts/verify-win-package.mjs --audit <已安装目录>                          # NSIS 实际安装 payload
+```
+
+内容标记限于高信号、低误报的几类：测试专用环境变量名（如 `HDSL_QA_REAL_INSTALL`）、私钥块、AWS access key 前缀与 GitHub token 前缀；正常的 `apiKey`/`secret`/`127.0.0.1` 等生产字符串不会误报。`nsis-installer` job 在第 1 步静默安装后对**已安装目录**同时运行路径规则与 `--audit`，因此审计对象是 NSIS 安装器实际落盘的 payload，而不是 `win-unpacked` 配置推导。
 
 摘要校验（解压前）：
 

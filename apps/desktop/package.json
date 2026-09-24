@@ -85,6 +85,13 @@
       {
         "from": "../../THIRD_PARTY_NOTICES.md",
         "to": "THIRD_PARTY_NOTICES.md"
+      },
+      {
+        "from": "../../packages/runtime/catalog",
+        "to": "app/node_modules/@hdsl/runtime/catalog",
+        "filter": [
+          "dsh-*/package-lock.json"
+        ]
       }
     ]
   },

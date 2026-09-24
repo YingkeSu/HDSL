@@ -21,11 +21,14 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  CONTENT_MARKERS,
   DEV_DEPENDENCY_DIRS,
   FORBIDDEN_RULES,
   MIN_INSTALLER_BYTES,
   NSIS_MARKER,
   REQUIRED_FILES,
+  auditPackagedTree,
+  scanFileContent,
   verifyInstallerFile,
   verifyPackagedTree,
 } from '../../apps/desktop/scripts/verify-win-package.mjs';
@@ -59,6 +62,11 @@ interface DesktopManifest {
       readonly deleteAppDataOnUninstall?: boolean;
       readonly certificateFile?: string;
     };
+    readonly extraResources?: readonly {
+      readonly from?: string;
+      readonly to?: string;
+      readonly filter?: readonly string[];
+    }[];
   };
   readonly devDependencies?: Record<string, string>;
 }
@@ -152,6 +160,46 @@ describe('NSIS installer packaging declaration', () => {
   });
 });
 
+describe('extraResources that must reach the packaged app', () => {
+  const desktop = readJson('apps/desktop/package.json') as DesktopManifest;
+  const extraResources = desktop.build?.extraResources ?? [];
+
+  it('carries the license and third-party notices', () => {
+    expect(extraResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ to: 'LICENSE.hdsl.txt' }),
+        expect.objectContaining({ to: 'THIRD_PARTY_NOTICES.md' }),
+      ]),
+    );
+  });
+
+  it('restores the catalog lock files that electron-builder strips by default', () => {
+    // `readDependencyClosure` needs closure.json + package.json +
+    // package-lock.json; electron-builder's excludedNames removes every
+    // package-lock.json, so it must come back through extraResources.
+    expect(extraResources).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          from: '../../packages/runtime/catalog',
+          to: 'app/node_modules/@hdsl/runtime/catalog',
+          filter: ['dsh-*/package-lock.json'],
+        }),
+      ]),
+    );
+  });
+
+  it('requires the license, notices and catalog locks in the packaged tree', () => {
+    for (const required of [
+      'resources/LICENSE.hdsl.txt',
+      'resources/THIRD_PARTY_NOTICES.md',
+      'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.5-rc.2/package-lock.json',
+      'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.7-rc.1/package-lock.json',
+    ]) {
+      expect(REQUIRED_FILES).toContain(required);
+    }
+  });
+});
+
 describe('NSIS installer file check', () => {
   let directory: string;
   beforeEach(() => {
@@ -189,6 +237,56 @@ describe('NSIS installer file check', () => {
   });
 });
 
+describe('packaged payload content audit', () => {
+  let directory: string;
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'hdsl-audit-'));
+  });
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('accepts a normal production bundle', () => {
+    const file = join(directory, 'app.js');
+    writeFileSync(file, 'const apiKey = readSecret(); fetch("http://127.0.0.1:3000");\n');
+    expect(scanFileContent(file)).toEqual([]);
+  });
+
+  it.each([
+    ['HDSL_QA_REAL_INSTALL=1', 'qa-opt-in-env'],
+    ['-----BEGIN RSA PRIVATE KEY-----', 'private-key'],
+    ['AKIAIOSFODNN7EXAMPLE', 'aws-access-key'],
+    ['ghp_abcdefghijklmnopqrstuvwx1234567890', 'github-token'],
+  ])('flags %s as %s without leaking the matched value', (content, ruleId) => {
+    const file = join(directory, 'bundle.js');
+    writeFileSync(file, `const value = ${JSON.stringify(content)};\n`);
+    const violations = scanFileContent(file);
+    expect(violations.map((violation) => violation.id)).toContain(ruleId);
+    // Sanitized output: the violation carries the rule id and reason, never the value.
+    expect(JSON.stringify(violations)).not.toContain(content);
+  });
+
+  it('skips binary files', () => {
+    const file = join(directory, 'icon.png');
+    writeFileSync(file, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x00, 0x41, 0x4b, 0x49, 0x41]));
+    expect(scanFileContent(file)).toEqual([]);
+  });
+
+  it('audits a tree and reports file and marker counts', () => {
+    writeFileSync(join(directory, 'clean.js'), 'export const x = 1;\n');
+    const result = auditPackagedTree(directory);
+    expect(result.files).toBeGreaterThan(0);
+    expect(result.markerFiles).toBe(0);
+    expect(result.errors.some((error) => error.includes('missing required file'))).toBe(true);
+  });
+
+  it('documents every content marker', () => {
+    for (const marker of CONTENT_MARKERS) {
+      expect(marker.why.length).toBeGreaterThan(10);
+    }
+  });
+});
+
 describe('archive integrity checker', () => {
   it('accepts a complete tree', () => {
     expect(verifyPackagedTree(root, { listFiles: completeTree })).toEqual([]);
@@ -198,6 +296,8 @@ describe('archive integrity checker', () => {
     for (const required of [
       'resources/app/node_modules/@hdsl/runtime/dist/index.js',
       'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.5-rc.2/closure.json',
+      'resources/app/node_modules/@hdsl/runtime/catalog/dsh-0.1.7-rc.1/package-lock.json',
+      'resources/LICENSE.hdsl.txt',
       'resources/app/dist/renderer/app.js',
     ]) {
       const errors = verifyPackagedTree(root, {
@@ -292,6 +392,12 @@ describe('Windows portable build workflow', () => {
       'apps/desktop/scripts/verify-win-package.mjs apps/desktop/release/win-unpacked',
     );
   });
+
+  it('audits the packaged tree for test, fixture and credential content', () => {
+    expect(workflow).toContain(
+      'verify-win-package.mjs --audit apps/desktop/release/win-unpacked',
+    );
+  });
 });
 
 describe('Windows NSIS installer job', () => {
@@ -314,6 +420,10 @@ describe('Windows NSIS installer job', () => {
     expect(workflow).toContain('hdsl-installer-sentinel.txt');
     expect(workflow).toContain('deleteAppDataOnUninstall');
     expect(workflow).toContain('verify-win-package.mjs $target');
+  });
+
+  it('audits the actual installed payload for test and credential content', () => {
+    expect(workflow).toContain('verify-win-package.mjs --audit $target');
   });
 
   it('pins the installer to the exact artifactName instead of the newest .exe', () => {
