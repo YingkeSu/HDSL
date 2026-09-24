@@ -114,6 +114,8 @@ jobs:
             exit 1
           fi
           assets=("${zips[@]}" "${dmgs[@]}" "${installers[@]}")
-          gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS.txt build-info-*.txt \
+          # SHA256SUMS-installer.txt stays a separate asset so the portable
+          # job's SHA256SUMS.txt keeps its own name under merge-multiple.
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS.txt SHA256SUMS-installer.txt build-info-*.txt \
             --verify-tag --prerelease --title "HDSL $GITHUB_REF_NAME · 体验版" \
             --notes-file ../docs/releases/preview-notes.md

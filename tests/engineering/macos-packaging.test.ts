@@ -175,6 +175,12 @@ describe('macOS release workflow', () => {
     expect(workflow).not.toContain('gh release create "$GITHUB_REF_NAME" ./*.zip');
   });
 
+  it('uploads the installer checksum as its own asset', () => {
+    expect(workflow).toContain(
+      'SHA256SUMS.txt SHA256SUMS-installer.txt build-info-*.txt',
+    );
+  });
+
   it('fails before publishing when a platform artifact, checksum or provenance file is missing', () => {
     expect(workflow).toContain('for required in SHA256SUMS.txt SHA256SUMS-mac.txt SHA256SUMS-installer.txt');
     expect(workflow).toContain('missing or empty required release file');
