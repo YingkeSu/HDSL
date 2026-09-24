@@ -140,13 +140,14 @@ jobs:
       - name: Verify the .exe is an NSIS PE installer; name it with version and short SHA
         shell: pwsh
         run: |
-          $installer = Get-ChildItem apps/desktop/release -Filter *.exe |
-            Where-Object { $_.Name -notlike 'Uninstall*' } |
-            Sort-Object LastWriteTime -Descending | Select-Object -First 1
-          if (-not $installer) { throw 'electron-builder produced no .exe installer' }
+          $version = node -p "require('./apps/desktop/package.json').version"
+          # The expected name comes from nsis.artifactName; pin it so an unrelated
+          # .exe in release/ can never be picked up as the deliverable.
+          $expected = "HDSL-$version-win-x64-setup.exe"
+          $installer = Get-Item -Path "apps/desktop/release/$expected" -ErrorAction SilentlyContinue
+          if (-not $installer) { throw "electron-builder produced no $expected installer" }
           Write-Host "installer: $($installer.FullName) ($($installer.Length) bytes)"
           node apps/desktop/scripts/verify-win-package.mjs --installer $installer.FullName
-          $version = node -p "require('./apps/desktop/package.json').version"
           $sha = $env:GITHUB_SHA.Substring(0, 7)
           $name = "HDSL-$version-win-x64-$sha-setup.exe"
           Rename-Item -Path $installer.FullName -NewName $name
@@ -200,12 +201,19 @@ jobs:
           }
           Write-Host 'PASS: silent install, in-place upgrade and silent uninstall removed the app and kept user data.'
 
-      - name: Clean up the isolated install directory
+      - name: Clean up the isolated install directory and sentinels
         if: always()
         shell: pwsh
         run: |
           if ($env:HDSL_INSTALL_DIR -and (Test-Path $env:HDSL_INSTALL_DIR)) {
             Remove-Item -Recurse -Force $env:HDSL_INSTALL_DIR
+          }
+          foreach ($sentinel in @(
+            (Join-Path $env:APPDATA 'HDSL\hdsl-installer-sentinel.txt'),
+            (Join-Path $env:APPDATA '@hdsl\desktop\hdsl-installer-sentinel.txt'),
+            (Join-Path $env:LOCALAPPDATA 'HDSL\hdsl-installer-sentinel.txt')
+          )) {
+            if (Test-Path $sentinel) { Remove-Item -Force $sentinel }
           }
 
       - name: Hash the installer and record provenance

@@ -316,6 +316,12 @@ describe('Windows NSIS installer job', () => {
     expect(workflow).toContain('verify-win-package.mjs $target');
   });
 
+  it('pins the installer to the exact artifactName instead of the newest .exe', () => {
+    expect(workflow).toContain('$expected = "HDSL-$version-win-x64-setup.exe"');
+    expect(workflow).toContain('Get-Item -Path "apps/desktop/release/$expected"');
+    expect(workflow).not.toContain('Sort-Object LastWriteTime -Descending');
+  });
+
   it('uploads the .exe with its own checksum and provenance files', () => {
     expect(workflow).toContain('name: hdsl-win-x64-installer-${{ github.sha }}');
     expect(workflow).toContain('HDSL-$version-win-x64-$sha-setup.exe');
