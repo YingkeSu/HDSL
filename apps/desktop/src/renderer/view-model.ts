@@ -71,7 +71,12 @@ export interface RendererState {
   readonly selectedEnvironmentId: string | null;
   readonly createName: string;
   readonly createCombinationId: string | null;
-  readonly createError: string | null;
+  /**
+   * Dialog-scoped create error. It is deliberately separate from
+   * {@link RendererState.actionError} so closing the create dialog can clear
+   * this failure without wiping an unrelated operation error (#146).
+   */
+  readonly createError: ContractError | null;
   readonly loadError: ContractError | null;
   readonly actionError: ContractError | null;
   readonly trackedOperation: TrackedOperation | null;
@@ -163,6 +168,11 @@ export interface RendererActions {
   setCreateName(name: string): void;
   setCreateCombinationId(combinationId: string): void;
   createEnvironment(): void;
+  /**
+   * Clears ONLY the dialog-scoped create error when the create dialog is closed
+   * or reopened. It never touches `actionError` or any other flow's error.
+   */
+  clearCreateError(): void;
   selectEnvironment(environmentId: string): void;
   startSelected(): void;
   stopSelected(): void;

@@ -14,7 +14,7 @@ import {
   type OperationSnapshot,
   type OperationUpdatedEvent,
 } from '@hdsl/contracts';
-import { FIXTURE_SEED } from '@hdsl/contracts/testing';
+import { FIXTURE_IDS, FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { RendererController, type RendererEventSource } from '../../apps/desktop/src/renderer/controller.js';
 import type { RendererContractClient } from '../../apps/desktop/src/renderer/contract.js';
@@ -114,9 +114,39 @@ describe('RendererController create', () => {
     await controller.createEnvironment();
     // The frozen `environments.create` schema is the authority; the renderer just
     // shows the sanitized error and must not apply an effect.
-    expect(controller.getState().actionError?.code).toBe('INVALID_INPUT');
+    expect(controller.getState().createError?.code).toBe('INVALID_INPUT');
     expect(port.effects.length).toBe(effectsBefore);
     expect(calls.some((call) => call.method === 'environments.create')).toBe(true);
+    await controller.dispose();
+  });
+
+  it('keeps a create failure dialog-scoped and never clears an unrelated action error (#146)', async () => {
+    const { client } = createStubRendererClient((method) => {
+      if (method === 'catalog.list') return stubOk(FIXTURE_SEED.catalog);
+      if (method === 'environments.list') return stubOk(FIXTURE_SEED.environments);
+      if (method === 'environments.openWebUI') return stubFail('WEBUI_UNAVAILABLE', 'webui down');
+      if (method === 'environments.create') return stubFail('INVALID_INPUT', 'input is invalid');
+      return stubOk(null);
+    });
+    const controller = new RendererController({ client });
+    await controller.load();
+    controller.selectEnvironment('env-stopped');
+    // An unrelated flow fails first and owns the page-level error.
+    await controller.openWebUI();
+    expect(controller.getState().actionError?.code).toBe('WEBUI_UNAVAILABLE');
+
+    controller.setCreateName('../escape');
+    controller.setCreateCombinationId(FIXTURE_IDS.combination.verified);
+    await controller.createEnvironment();
+    // The create failure is dialog-scoped ...
+    expect(controller.getState().createError?.code).toBe('INVALID_INPUT');
+    // ... and never overwrites the unrelated page-level error.
+    expect(controller.getState().actionError?.code).toBe('WEBUI_UNAVAILABLE');
+
+    // Closing/reopening the dialog clears only the create error.
+    controller.clearCreateError();
+    expect(controller.getState().createError).toBeNull();
+    expect(controller.getState().actionError?.code).toBe('WEBUI_UNAVAILABLE');
     await controller.dispose();
   });
 

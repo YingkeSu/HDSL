@@ -10,7 +10,7 @@
 import type { ChangePlan, EnvironmentSummary } from '@hdsl/contracts';
 import { FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
-import { renderAppView, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
+import { renderAppView, renderCreateErrorNotice, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import {
   INITIAL_STATE,
   type RendererActions,
@@ -23,6 +23,7 @@ const noopActions: RendererActions = {
   setCreateName: () => undefined,
   setCreateCombinationId: () => undefined,
   createEnvironment: () => undefined,
+  clearCreateError: () => undefined,
   selectEnvironment: () => undefined,
   startSelected: () => undefined,
   stopSelected: () => undefined,
@@ -349,6 +350,29 @@ describe('#147 host-scoped create entry points', () => {
     const html = renderCreateForm({ state: state({ catalog: [] }), actions: noopActions });
     expect(buttonNamed(html, '创建环境')?.attrs).toContain('disabled');
     expect(html).toContain('当前平台没有可安装的受审运行时组合，已禁用创建');
+  });
+});
+
+describe('#146 dialog-scoped create error', () => {
+  const createError = {
+    code: 'INVALID_INPUT' as const,
+    message: 'invalid input (input.name: must not contain path separators)',
+    retryable: false,
+  };
+
+  it('renders the create error only inside the create dialog notice', () => {
+    const dialogHtml = renderCreateErrorNotice({
+      state: state({ createError }),
+      actions: noopActions,
+    });
+    expect(dialogHtml).toMatch(/role="alert"[\s\S]*创建环境失败[\s\S]*INVALID_INPUT/);
+    // Nothing to render before a failure / after the dialog is cleared.
+    expect(renderCreateErrorNotice({ state: state({ createError: null }), actions: noopActions })).toBe('');
+  });
+
+  it('does not promote the create error to the page-level notices', () => {
+    const pageHtml = renderAppView({ state: state({ createError }), actions: noopActions });
+    expect(pageHtml).not.toContain('创建环境失败');
   });
 });
 

@@ -38,6 +38,7 @@
  */
 import {
   API_VERSION,
+  contractError,
   contractErrorForCode,
   contractErrorSchema,
   DEFAULT_PLUGIN_QUERY,
@@ -259,23 +260,32 @@ export class RendererController implements RendererActions {
     this.#update({ createCombinationId: combinationId, createError: null });
   }
 
+  /**
+   * Clears ONLY the create-dialog error (#146). Other flows' errors live in
+   * `actionError`/`trackingError` and are never touched here.
+   */
+  clearCreateError(): void {
+    this.#update({ createError: null });
+  }
+
   async createEnvironment(): Promise<void> {
     await this.#runCommand(async () => {
       const { createName: name, createCombinationId } = this.#state;
       if (createCombinationId === null) {
-        this.#update({ createError: '请选择一个已核验的运行时组合', actionError: null });
+        // No installable combination was selected. This is a local, create-scoped
+        // guard; it must not be promoted to the page-level `actionError`.
+        this.#update({
+          createError: contractError(
+            'UNSUPPORTED_COMBINATION',
+            '请选择一个可安装的运行时组合',
+          ),
+        });
         return;
       }
       // Name validity (1-80 chars, no path separators) is enforced by the frozen
       // `environments.create` schema in main; the renderer dispatches and shows
       // the contract's sanitized `INVALID_INPUT` instead of duplicating the rule.
-      this.#update({
-        createError: null,
-        actionError: null,
-        notice: null,
-        exportResult: null,
-        webUIOrigin: null,
-      });
+      this.#update({ createError: null });
       const result = await this.#call(
         'environments.create',
         { requestId: this.#newRequestId(), name, catalogCombinationId: createCombinationId },
@@ -285,7 +295,9 @@ export class RendererController implements RendererActions {
         return;
       }
       if (!result.ok) {
-        this.#update({ actionError: result.error });
+        // A create failure stays inside the dialog lifecycle (#146) and is NOT
+        // the shared page-level `actionError`.
+        this.#update({ createError: result.error });
         return;
       }
       this.#update({ createName: '' });
