@@ -34,7 +34,7 @@ import { buildApplicationMenuTemplate } from './menu.js';
 import { aboutPanelContent, PRODUCT_NAME } from './product-identity.js';
 import { applyWindowSecurity, SECURE_WINDOW_DEFAULTS } from './security.js';
 import { createTrustedUrlPolicy } from './trusted-url.js';
-import { formatUserDataSignal, resolveUserDataDirectory } from './user-data.js';
+import { applyUserDataBootstrap, formatUserDataSignal, type UserDataNote } from './user-data.js';
 import { createVerifiedWebUiOpener } from './webui.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -449,6 +449,16 @@ const applyQuitSequence = (): void => {
     });
 };
 
+/** Fixed, path-free user-data note; a missing console must not abort startup. */
+const writeUserDataSignal = (note: UserDataNote): void => {
+  try {
+    process.stderr.write(formatUserDataSignal(note));
+  } catch {
+    // A closed pipe or an absent stderr must not prevent the migration result
+    // from being applied; the note is diagnostic only.
+  }
+};
+
 export const startDesktopApp = (options: DesktopAppOptions = {}): void => {
   // Product identity (issue #149) must be settled before anything derives a
   // path or shows a dialog from it:
@@ -457,21 +467,20 @@ export const startDesktopApp = (options: DesktopAppOptions = {}): void => {
   //   - the About dialog is given the full semantic version, because the
   //     Windows version resource's `ProductVersion` field cannot carry the
   //     prerelease (`0.1.0.0` vs `0.1.0-preview.1`);
-  //   - a populated directory left by the old scoped name is moved to the new
-  //     default `userData` path before the single-instance lock or any window
-  //     uses it, so no existing preview data is silently abandoned.
+  //   - the profile decision runs before the single-instance lock and before the
+  //     first `getPath('userData')` access. An explicit `--hdsl-data-root` run
+  //     redirects the profile under that root without ever creating, reading or
+  //     migrating the real default profile; a normal run migrates a populated
+  //     legacy directory and otherwise leaves it untouched, so no existing
+  //     preview data is silently abandoned.
   app.setName(PRODUCT_NAME);
   app.setAboutPanelOptions(aboutPanelContent(app.getVersion()));
-  const userData = resolveUserDataDirectory({
+  applyUserDataBootstrap(app, {
+    argv: process.argv,
+    env: process.env,
     appDataDirectory: app.getPath('appData'),
-    userDataDirectory: app.getPath('userData'),
+    onNote: writeUserDataSignal,
   });
-  if (userData.directory !== app.getPath('userData')) {
-    app.setPath('userData', userData.directory);
-  }
-  if (userData.note !== undefined) {
-    process.stderr.write(formatUserDataSignal(userData.note));
-  }
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;

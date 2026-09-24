@@ -103,15 +103,37 @@ describe('production bootstrap applies the product identity (issue #149)', () =>
   });
 
   it('settles the identity before the single-instance lock', () => {
-    // The lock is the first side effect that uses the (possibly migrated)
+    // The lock is the first side effect that uses the (possibly redirected)
     // userData directory and the first place a native dialog could appear.
     const identity = app.indexOf('app.setName(PRODUCT_NAME)');
     const about = app.indexOf('app.setAboutPanelOptions');
-    const userData = app.indexOf('resolveUserDataDirectory({');
+    const userData = app.indexOf('applyUserDataBootstrap(app, {');
     const lock = app.indexOf('app.requestSingleInstanceLock()');
     expect(identity).toBeGreaterThanOrEqual(0);
     expect(about).toBeGreaterThan(identity);
     expect(userData).toBeGreaterThan(about);
     expect(lock).toBeGreaterThan(userData);
+  });
+
+  it('does not read the userData path before the bootstrap configures it', () => {
+    // `app.getPath('userData')` creates the directory, so the bootstrap (which
+    // may `setPath` for an isolated run) must run first. Only `appData` may be
+    // read before it, because that path is not created by the call.
+    const start = app.indexOf('const startDesktopApp');
+    const lock = app.indexOf('app.requestSingleInstanceLock()');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(lock).toBeGreaterThan(start);
+    const block = app.slice(start, lock);
+    expect(block).toContain('applyUserDataBootstrap(app, {');
+    expect(block).toContain("app.getPath('appData')");
+    expect(block).not.toContain("app.getPath('userData')");
+  });
+
+  it('never lets a stderr failure abort the profile decision', () => {
+    const writer = app.indexOf('const writeUserDataSignal');
+    expect(writer).toBeGreaterThanOrEqual(0);
+    const body = app.slice(writer, writer + 300);
+    expect(body).toContain('process.stderr.write(formatUserDataSignal(note))');
+    expect(body).toContain('catch');
   });
 });

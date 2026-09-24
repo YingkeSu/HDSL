@@ -17,17 +17,35 @@ export interface ResolveDataRootInput {
   readonly userDataDirectory: string;
 }
 
-export const resolveDataRoot = (input: ResolveDataRootInput): string => {
+/** Input shared by the data-root override readers. */
+export interface DataRootOverrideInput {
+  readonly argv: readonly string[];
+  readonly env: Readonly<Record<string, string | undefined>>;
+}
+
+/**
+ * The explicit `--hdsl-data-root`/`HDSL_DATA_ROOT` value, or `undefined` when
+ * neither is present with a non-empty value. A flag without a following value
+ * and an empty environment variable are treated as "not provided", matching
+ * {@link resolveDataRoot}'s fallback so a malformed override never silently
+ * becomes an isolated run.
+ */
+export const explicitDataRoot = (input: DataRootOverrideInput): string | undefined => {
   const flagIndex = input.argv.indexOf(DATA_ROOT_FLAG);
   if (flagIndex >= 0) {
     const candidate = input.argv[flagIndex + 1];
     if (candidate !== undefined && candidate.trim() !== '') {
-      return resolve(candidate);
+      return candidate;
     }
   }
   const fromEnv = input.env[DATA_ROOT_ENV];
   if (fromEnv !== undefined && fromEnv.trim() !== '') {
-    return resolve(fromEnv);
+    return fromEnv;
   }
-  return resolve(input.userDataDirectory);
+  return undefined;
+};
+
+export const resolveDataRoot = (input: ResolveDataRootInput): string => {
+  const override = explicitDataRoot(input);
+  return override === undefined ? resolve(input.userDataDirectory) : resolve(override);
 };
