@@ -1,0 +1,107 @@
+name: Windows portable build
+
+# Build-only evidence for the unsigned Windows x64 portable ZIP
+# (issue #8 is the maintainer's real-hardware verification and is NOT closed by
+# this workflow). Deliberate scope limits:
+#
+#   - The workspace unit suite is absent on purpose: this job must not run
+#     Windows tests. The Linux `Engineering checks` job owns that suite.
+#   - The packaged app is never started. `HDSL.exe` is only inspected as a file
+#     tree by `apps/desktop/scripts/verify-win-package.mjs`, so "the archive is
+#     complete" is the only claim this job can make.
+#   - `permissions` is read-only: no signing identity, no release, no upload
+#     credential. Release creation happens later from a reviewed SHA.
+#
+# The resulting ZIP is unsigned, un-notarized and has no Windows host evidence;
+# see docs/development/windows-portable-build.md before distributing it.
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - 'apps/desktop/**'
+      - 'packages/**'
+      - 'package.json'
+      - 'pnpm-lock.yaml'
+      - 'pnpm-workspace.yaml'
+      - '.github/workflows/windows-portable-build.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-portable-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  portable-zip:
+    name: unsigned portable ZIP / archive integrity (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace and renderer
+        run: pnpm run build:desktop
+
+      - name: Package win32-x64 unpacked directory (unsigned)
+        run: pnpm --filter @hdsl/desktop run package:win
+
+      - name: Verify packaged tree (file check only, app is not executed)
+        run: node apps/desktop/scripts/verify-win-package.mjs apps/desktop/release/win-unpacked
+
+      - name: Record packaged contents
+        shell: pwsh
+        run: |
+          Get-ChildItem apps/desktop/release/win-unpacked | Select-Object Name, Length | Format-Table -AutoSize
+          Get-ChildItem apps/desktop/release/win-unpacked/resources/app | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Zip portable directory and hash it
+        shell: pwsh
+        run: |
+          $version = node -p "require('./apps/desktop/package.json').version"
+          $sha = $env:GITHUB_SHA.Substring(0, 7)
+          $name = "HDSL-$version-win32-x64-$sha-portable.zip"
+          $stage = "apps/desktop/release/stage/HDSL-$version-win32-x64"
+          $release = "apps/desktop/release"
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Copy-Item -Path "$release/win-unpacked/*" -Destination $stage -Recurse -Force
+          Compress-Archive -Path $stage -DestinationPath "$release/$name" -CompressionLevel Optimal
+          $hash = (Get-FileHash -Algorithm SHA256 -Path "$release/$name").Hash.ToLower()
+          Set-Content -Path "$release/SHA256SUMS.txt" -Encoding ascii -Value "$hash  $name"
+          Set-Content -Path "$release/build-info.txt" -Encoding ascii -Value @(
+            "artifact: $name",
+            "base-commit: $env:GITHUB_SHA",
+            "base-ref: $env:GITHUB_REF",
+            "runner: $env:RUNNER_OS",
+            "node: $(node --version)",
+            "pnpm: $(pnpm --version)",
+            "electron: $(node -p "require('./apps/desktop/package.json').devDependencies.electron")",
+            "package: pnpm --filter @hdsl/desktop run package:win (electron-builder --win --x64 --dir)",
+            "signing: unsigned, not notarized",
+            "windows-host-evidence: none (the packaged app was not executed)"
+          )
+          Get-Content "$release/SHA256SUMS.txt"
+          Get-Content "$release/build-info.txt"
+
+      - name: Upload portable ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: hdsl-win32-x64-portable-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            apps/desktop/release/*.zip
+            apps/desktop/release/SHA256SUMS.txt
+            apps/desktop/release/build-info.txt

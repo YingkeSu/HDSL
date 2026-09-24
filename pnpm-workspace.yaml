@@ -15,5 +15,10 @@ engineStrict: true
 # its optional platform package (@esbuild/<platform>), so the install script is
 # explicitly not run. Declaring it keeps `pnpm install --frozen-lockfile`
 # deterministic and non-interactive in CI.
+# electron-winstaller (transitive via electron-builder) only prepares Squirrel
+# Windows installer assets at install time. HDSL ships an unsigned portable
+# directory/ZIP (`win.target: dir`), never a Squirrel installer, so its install
+# script stays off for the same reason as esbuild's.
 allowBuilds:
+  electron-winstaller: false
   esbuild: false
