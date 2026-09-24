@@ -39,6 +39,7 @@
     "files": [
       "dist/**/*",
       "!dist/main/qa-entry.*",
+      "!dist/renderer/testing/**",
       "!dist/**/*.map",
       "!node_modules/@hdsl/*/src/**",
       "!node_modules/@hdsl/*/dist/**/*.map",

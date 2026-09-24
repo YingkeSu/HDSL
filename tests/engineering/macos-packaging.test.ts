@@ -83,6 +83,7 @@ describe('macOS DMG packaging declaration', () => {
     // only place to keep test-only content out of the app bundle is here.
     expect(build.files).toEqual(
       expect.arrayContaining([
+        '!dist/renderer/testing/**',
         '!node_modules/@hdsl/*/src/**',
         '!node_modules/@hdsl/*/dist/**/*.map',
         '!node_modules/@hdsl/contracts/dist/testing/**',
