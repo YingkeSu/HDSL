@@ -120,7 +120,30 @@ describe('AppView state matrix', () => {
       actions: noopActions,
     });
     expect(html).toMatch(/role="alert"[\s\S]*加载失败/);
+    expect(html).toContain('内部错误');
+    expect(html).toContain('技术详情');
     expect(html).toContain('INTERNAL_ERROR');
+    expect(html).toContain('该失败可重试。');
+  });
+
+  it('leads with Chinese copy and keeps the code in the technical details (#145)', () => {
+    const html = renderAppView({
+      state: state({
+        actionError: {
+          code: 'INVALID_INPUT',
+          message: 'invalid input (input.name: must not contain path separators)',
+          retryable: false,
+        },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('操作失败：输入不合法');
+    expect(html).toContain('环境名称：不能包含路径分隔符（/ 或 \\）');
+    expect(html).toContain('技术详情');
+    // The diagnostic code stays available, but only inside the details block.
+    expect(html).toContain(
+      'INVALID_INPUT：invalid input (input.name: must not contain path separators)',
+    );
   });
 
   it('replaces start with open and enables stop for a running environment', () => {
@@ -366,6 +389,8 @@ describe('#146 dialog-scoped create error', () => {
       actions: noopActions,
     });
     expect(dialogHtml).toMatch(/role="alert"[\s\S]*创建环境失败[\s\S]*INVALID_INPUT/);
+    expect(dialogHtml).toContain('输入不合法');
+    expect(dialogHtml).toContain('环境名称：不能包含路径分隔符');
     // Nothing to render before a failure / after the dialog is cleared.
     expect(renderCreateErrorNotice({ state: state({ createError: null }), actions: noopActions })).toBe('');
   });
