@@ -205,9 +205,12 @@ const sanitizeOperationSnapshot = (snapshot: OperationSnapshot): OperationSnapsh
 };
 
 export const unsupportedCombinationReason = (
-  host: HostPlatform,
+  host: HostPlatform | undefined,
   combination: RuntimeCombination,
 ): string | undefined => {
+  if (host === undefined) {
+    return 'the host platform could not be resolved for this build';
+  }
   if (!isHostPlatformSupported(host)) {
     return `host platform ${formatHostPlatform(host)} is not verified for this build`;
   }

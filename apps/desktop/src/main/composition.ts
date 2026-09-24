@@ -114,6 +114,12 @@ export interface DesktopCompositionOptions {
   readonly dataRoot: string;
   readonly appInfo: DiagnosticAppInfo;
   readonly catalog?: readonly RuntimeCombination[];
+  /**
+   * The real host this build runs on. Production MUST pass
+   * `resolveHostPlatform(process.platform, process.arch)`: when it is omitted
+   * (or unresolvable) the contract platform gate refuses every create/switch
+   * instead of silently assuming darwin/arm64. Tests inject a host explicitly.
+   */
   readonly host?: HostPlatform;
   readonly runtime?: ManagedRuntimePort;
   /** Test seam: replaces the real GitHub read adapter (no fixture hits the network). */
@@ -337,7 +343,15 @@ export const createDesktopComposition = async (
   options: DesktopCompositionOptions,
 ): Promise<DesktopComposition> => {
   const catalog = options.catalog ?? VERIFIED_COMBINATIONS;
-  const runtime = options.runtime ?? createRuntimePort(PRODUCTION_RUNTIME_OPTIONS);
+  // The runtime port receives the same real host as core so its own `host`
+  // getter can never fall back to a hardcoded darwin/arm64 on an
+  // unverified/unknown platform.
+  const runtime =
+    options.runtime ??
+    createRuntimePort({
+      ...PRODUCTION_RUNTIME_OPTIONS,
+      ...(options.host === undefined ? {} : { host: options.host }),
+    });
   const exported: { current: DiagnosticsExporter | undefined } = { current: undefined };
   const service = new EnvironmentService({
     dataRoot: options.dataRoot,

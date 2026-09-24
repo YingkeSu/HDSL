@@ -51,6 +51,9 @@ const combination = syntheticCombination({
   dshTarball,
 });
 
+/** The synthetic combination is macOS ARM64; the harness declares its host. */
+const QA_HOST = { platform: 'darwin', arch: 'arm64' } as const;
+
 export interface QaProcessOptions {
   readonly closeOk?: boolean;
   readonly startOk?: boolean;
@@ -116,6 +119,7 @@ export const createGatedRuntime = (
   const real = createRuntimePort({
     closureInstall: false,
     precheck: 'none',
+    host: QA_HOST,
     localArtifactDirectory: artifacts,
   });
   let resolveStarted: (() => void) | undefined;
@@ -240,6 +244,7 @@ export const buildLockHarness = async (
     runtime = createRuntimePort({
       closureInstall: false,
       precheck: 'none',
+      host: QA_HOST,
       localArtifactDirectory: artifacts,
     });
   }
@@ -249,6 +254,7 @@ export const buildLockHarness = async (
     dataRoot,
     catalog: [combination] as readonly RuntimeCombination[],
     runtime,
+    host: QA_HOST,
     processFactory: () => process,
     fixtures: { allowArtifactsOnly: true },
     lockWaitTimeoutMs: 200,

@@ -12,7 +12,7 @@
 import { join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell } from 'electron';
-import { API_VERSION, contractErrorForCode, contractFail, isPlainRecord } from '@hdsl/contracts';
+import { API_VERSION, contractErrorForCode, contractFail, isPlainRecord, resolveHostPlatform } from '@hdsl/contracts';
 import {
   createDesktopComposition,
   isBlockedByRecovery,
@@ -291,6 +291,21 @@ const registerIpc = (options: DesktopAppOptions): void => {
 };
 
 const bootstrap = async (options: DesktopAppOptions): Promise<void> => {
+  // Resolve the REAL host before any data-root/composition side effect. An
+  // unknown platform (a value outside the frozen host vocabulary) is refused
+  // here instead of being coerced to a verified host, so the contract gate can
+  // never install artifacts for the wrong platform. A known-but-unverified host
+  // (e.g. win32/x64) is passed through and refused cleanly by
+  // `unsupportedCombinationReason` before any download/install.
+  const host = resolveHostPlatform(process.platform, process.arch);
+  if (host === undefined) {
+    dialog.showErrorBox(
+      '不支持的平台',
+      `HDSL 无法识别当前平台 ${process.platform}/${process.arch}，已停止启动以避免下载不匹配的受管运行时产物。`,
+    );
+    app.quit();
+    return;
+  }
   const dataRoot = resolveDataRoot({
     argv: process.argv,
     env: process.env,
@@ -298,6 +313,7 @@ const bootstrap = async (options: DesktopAppOptions): Promise<void> => {
   });
   const created = await createDesktopComposition({
     dataRoot,
+    host,
     appInfo: {
       name: app.getName(),
       version: app.getVersion(),

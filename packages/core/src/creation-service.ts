@@ -278,7 +278,7 @@ export class EnvironmentService {
   readonly #layout: AppDataLayout;
   readonly #catalog: readonly RuntimeCombination[];
   readonly #runtime: ManagedRuntimePort;
-  readonly #host: HostPlatform;
+  readonly #host: HostPlatform | undefined;
   readonly #clock: () => Date;
   readonly #faults: CreationFaults;
   #process: ManagedProcessPort | undefined;
@@ -304,7 +304,7 @@ export class EnvironmentService {
     this.#layout = resolveLayout(options.dataRoot);
     this.#catalog = [...options.catalog];
     this.#runtime = options.runtime;
-    this.#host = options.host ?? { platform: 'darwin', arch: 'arm64' };
+    this.#host = options.host;
     this.#clock = options.clock ?? (() => new Date());
     this.#faults = options.faults ?? {};
     this.#process = options.process;
@@ -357,7 +357,7 @@ export class EnvironmentService {
     return this.#layout;
   }
 
-  get host(): HostPlatform {
+  get host(): HostPlatform | undefined {
     return this.#host;
   }
 
