@@ -1,8 +1,12 @@
 {
   "name": "@hdsl/desktop",
+  "productName": "HDSL",
   "version": "0.1.0-preview.1",
   "private": true,
   "description": "Electron and React desktop app for managing local DeepSeek Harness environments.",
+  "author": {
+    "name": "HDSL"
+  },
   "license": "SEE LICENSE IN ../../LICENSE",
   "type": "module",
   "main": "./dist/main/index.js",
@@ -32,6 +36,7 @@
   "build": {
     "appId": "dev.hdsl.launcher",
     "productName": "HDSL",
+    "copyright": "Copyright © 2026 HDSL",
     "asar": false,
     "directories": {
       "output": "release"
