@@ -7,7 +7,8 @@
   "type": "module",
   "main": "./dist/main/index.js",
   "scripts": {
-    "build:renderer": "node scripts/build-renderer.mjs"
+    "build:renderer": "node scripts/build-renderer.mjs",
+    "package:win": "electron-builder --win --x64 --dir"
   },
   "exports": {
     ".": {
@@ -27,6 +28,29 @@
     "dist",
     "!dist/main/qa-entry.*"
   ],
+  "build": {
+    "appId": "dev.hdsl.launcher",
+    "productName": "HDSL",
+    "asar": false,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "!dist/main/qa-entry.*",
+      "!dist/**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "x64"
+          ]
+        }
+      ]
+    }
+  },
   "dependencies": {
     "@hdsl/contracts": "workspace:*",
     "@hdsl/core": "workspace:*",
@@ -38,6 +62,7 @@
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "electron": "44.4.3",
+    "electron-builder": "26.15.3",
     "esbuild": "0.28.2"
   }
 }

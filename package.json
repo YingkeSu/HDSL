@@ -14,6 +14,7 @@
     "build": "tsc -b tsconfig.build.json",
     "build:renderer": "pnpm --filter @hdsl/desktop run build:renderer",
     "build:desktop": "pnpm run build && pnpm run build:renderer",
+    "package:win": "pnpm run build:desktop && pnpm --filter @hdsl/desktop run package:win",
     "clean": "tsc -b tsconfig.build.json --clean",
     "test": "vitest run",
     "test:watch": "vitest",
