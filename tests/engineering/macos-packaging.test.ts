@@ -98,6 +98,7 @@ describe('packaged-tree test-content rules', () => {
     ['resources/app/node_modules/@hdsl/contracts/dist/index.js.map', 'dependency-source-map'],
     ['resources/app/node_modules/@hdsl/core/src/credential-store.ts', 'dependency-sources'],
     ['resources/app/node_modules/@hdsl/runtime/catalog/service-verifications/x.json', 'test-evidence-fixture'],
+    ['resources/app/dist/renderer/testing/render-markup.js', 'renderer-test-entry'],
   ])('rejects %s as %s', (extra, ruleId) => {
     const errors = verifyPackagedTree(root, {
       listFiles: () => [...REQUIRED_FILES, extra],

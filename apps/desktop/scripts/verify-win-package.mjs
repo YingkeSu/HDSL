@@ -49,6 +49,7 @@ export const REQUIRED_FILES = [
 /** Path-independent rules for content that must never reach the archive. */
 export const FORBIDDEN_RULES = [
   { id: 'qa-entry', test: (p) => p === 'resources/app/dist/main/qa-entry.js', why: 'the headless QA entry is a test entry and must never ship' },
+  { id: 'renderer-test-entry', test: (p) => p.startsWith('resources/app/dist/renderer/testing/'), why: 'stale renderer test entries are development artifacts and must never ship' },
   { id: 'source-map', test: (p) => p.startsWith('resources/app/dist/') && p.endsWith('.map'), why: 'build maps are not needed and are excluded from the package' },
   { id: 'app-sources', test: (p) => p.startsWith('resources/app/src/'), why: 'unbuilt TypeScript sources are not part of the package' },
   { id: 'workspace-manifests', test: (p) => p === 'resources/app/pnpm-lock.yaml' || p === 'resources/app/pnpm-workspace.yaml', why: 'workspace manifests are repository metadata, not application content' },
