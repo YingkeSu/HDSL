@@ -107,7 +107,7 @@ describe('production bootstrap applies the product identity (issue #149)', () =>
     // userData directory and the first place a native dialog could appear.
     const identity = app.indexOf('app.setName(PRODUCT_NAME)');
     const about = app.indexOf('app.setAboutPanelOptions');
-    const userData = app.indexOf('applyUserDataBootstrap(app, {');
+    const userData = app.indexOf('configureUserData(app, {');
     const lock = app.indexOf('app.requestSingleInstanceLock()');
     expect(identity).toBeGreaterThanOrEqual(0);
     expect(about).toBeGreaterThan(identity);
@@ -124,16 +124,41 @@ describe('production bootstrap applies the product identity (issue #149)', () =>
     expect(start).toBeGreaterThanOrEqual(0);
     expect(lock).toBeGreaterThan(start);
     const block = app.slice(start, lock);
-    expect(block).toContain('applyUserDataBootstrap(app, {');
+    expect(block).toContain('configureUserData(app, {');
     expect(block).toContain("app.getPath('appData')");
     expect(block).not.toContain("app.getPath('userData')");
   });
 
   it('never lets a stderr failure abort the profile decision', () => {
-    const writer = app.indexOf('const writeUserDataSignal');
+    const writer = app.indexOf('const writeSignal');
     expect(writer).toBeGreaterThanOrEqual(0);
     const body = app.slice(writer, writer + 300);
-    expect(body).toContain('process.stderr.write(formatUserDataSignal(note))');
+    expect(body).toContain('process.stderr.write(line)');
     expect(body).toContain('catch');
+  });
+
+  it('refuses a malformed isolation argument before any profile access', () => {
+    // A dangling/blank `--hdsl-data-root` or `--user-data-dir` must fail loud
+    // before the bootstrap can read or migrate the default profile.
+    const start = app.indexOf('const startDesktopApp');
+    const configure = app.indexOf('configureUserData(app, {');
+    const lock = app.indexOf('app.requestSingleInstanceLock()');
+    expect(start).toBeGreaterThanOrEqual(0);
+    expect(configure).toBeGreaterThan(start);
+    expect(lock).toBeGreaterThan(configure);
+    const refusal = app.slice(configure, lock);
+    expect(refusal).toContain("setup.kind === 'invalid'");
+    expect(refusal).toContain('app.exit(2)');
+    expect(refusal).not.toContain("getPath('userData')");
+  });
+
+  it('validates the isolation arguments before applying the profile decision', () => {
+    const source = readText('apps/desktop/src/main/user-data.ts');
+    const configure = source.indexOf('export const configureUserData');
+    const validation = source.indexOf('launchArgumentProblem({', configure);
+    const apply = source.indexOf('applyUserDataBootstrap(host, input)', configure);
+    expect(configure).toBeGreaterThanOrEqual(0);
+    expect(validation).toBeGreaterThan(configure);
+    expect(apply).toBeGreaterThan(validation);
   });
 });

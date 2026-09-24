@@ -34,7 +34,7 @@ import { buildApplicationMenuTemplate } from './menu.js';
 import { aboutPanelContent, PRODUCT_NAME } from './product-identity.js';
 import { applyWindowSecurity, SECURE_WINDOW_DEFAULTS } from './security.js';
 import { createTrustedUrlPolicy } from './trusted-url.js';
-import { applyUserDataBootstrap, formatUserDataSignal, type UserDataNote } from './user-data.js';
+import { configureUserData, formatLaunchArgumentSignal, formatUserDataSignal, type UserDataNote } from './user-data.js';
 import { createVerifiedWebUiOpener } from './webui.js';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
@@ -449,14 +449,18 @@ const applyQuitSequence = (): void => {
     });
 };
 
-/** Fixed, path-free user-data note; a missing console must not abort startup. */
-const writeUserDataSignal = (note: UserDataNote): void => {
+/** Fixed stderr line; a missing console must not abort startup. */
+const writeSignal = (line: string): void => {
   try {
-    process.stderr.write(formatUserDataSignal(note));
+    process.stderr.write(line);
   } catch {
-    // A closed pipe or an absent stderr must not prevent the migration result
-    // from being applied; the note is diagnostic only.
+    // A closed pipe or an absent stderr must not prevent the launch decision
+    // from being applied; signals are diagnostic only.
   }
+};
+
+const writeUserDataSignal = (note: UserDataNote): void => {
+  writeSignal(formatUserDataSignal(note));
 };
 
 export const startDesktopApp = (options: DesktopAppOptions = {}): void => {
@@ -475,12 +479,25 @@ export const startDesktopApp = (options: DesktopAppOptions = {}): void => {
   //     preview data is silently abandoned.
   app.setName(PRODUCT_NAME);
   app.setAboutPanelOptions(aboutPanelContent(app.getVersion()));
-  applyUserDataBootstrap(app, {
+  // A malformed explicit isolation argument must never fall back to the real
+  // default profile: refuse the launch before any `userData` access. `appData`
+  // is a computed path, not the profile, so reading it is side-effect free.
+  const setup = configureUserData(app, {
     argv: process.argv,
     env: process.env,
     appDataDirectory: app.getPath('appData'),
     onNote: writeUserDataSignal,
   });
+  if (setup.kind === 'invalid') {
+    writeSignal(formatLaunchArgumentSignal(setup.problem));
+    dialog.showErrorBox(
+      '启动参数无效',
+      '显式隔离参数（--hdsl-data-root / HDSL_DATA_ROOT / --user-data-dir）缺少有效值。\n' +
+        '为避免读写真实默认配置，启动已停止；请修正参数后重试。',
+    );
+    app.exit(2);
+    return;
+  }
   if (!app.requestSingleInstanceLock()) {
     app.quit();
     return;

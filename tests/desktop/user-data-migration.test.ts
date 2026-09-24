@@ -28,23 +28,32 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import {
   applyUserDataBootstrap,
+  configureUserData,
   defaultUserDataDirectory,
+  formatLaunchArgumentSignal,
   formatUserDataSignal,
   isolatedUserDataDirectory,
   isLiveLockOwner,
   ISOLATED_PROFILE_DIRECTORY,
+  LAUNCH_ARGUMENT_SIGNAL,
+  launchArgumentProblem,
   legacyScopeDirectory,
   legacyUserDataDirectory,
   MIGRATION_LOCK_FILE,
   resolveUserDataDirectory,
   spaceSeparatedUserDataDirectory,
   USER_DATA_DIR_SWITCH,
+  userDataDirProblem,
   chromiumUserDataDirectory,
   type DirectoryState,
   type UserDataFileSystem,
   type UserDataNote,
 } from '../../apps/desktop/src/main/user-data.js';
-import { explicitDataRoot, resolveDataRoot } from '../../apps/desktop/src/main/data-root.js';
+import {
+  dataRootOverrideProblem,
+  explicitDataRoot,
+  resolveDataRoot,
+} from '../../apps/desktop/src/main/data-root.js';
 
 const HOST = 'test-host';
 const APP_DATA = '/tmp/appdata';
@@ -101,6 +110,37 @@ const fakeFileSystem = (initial: FakeInitial = {}) => {
   return { fileSystem, calls, dirs, lockFiles };
 };
 
+/**
+ * Records every `getPath('userData')` (which is what creates the directory) so a
+ * negative control can prove a rejected launch never touched the profile.
+ */
+const recordingHost = (appData: string, defaultPath: string) => {
+  const userDataAccesses: string[] = [];
+  const setPaths: string[] = [];
+  let current: string | undefined;
+  return {
+    userDataAccesses,
+    setPaths,
+    host: {
+      getPath(name: string): string {
+        if (name === 'appData') {
+          return appData;
+        }
+        if (name === 'userData') {
+          const path = current ?? defaultPath;
+          userDataAccesses.push(path);
+          return path;
+        }
+        throw new Error(`unexpected getPath: ${name}`);
+      },
+      setPath(name: string, path: string): void {
+        setPaths.push(`${name}=${path}`);
+        current = path;
+      },
+    },
+  };
+};
+
 describe('userData directory naming (issue #149)', () => {
   it('derives the default target from the product name', () => {
     expect(defaultUserDataDirectory(APP_DATA)).toBe(`${APP_DATA}/HDSL`);
@@ -125,8 +165,7 @@ describe('explicit data-root detection (issue #149)', () => {
     );
   });
 
-  it('resolves duplicates deterministically and refuses malformed overrides', () => {
-    // First space form wins, then first equals form, then the environment.
+  it('resolves valid duplicates with positional first-wins', () => {
     expect(
       explicitDataRoot({ argv: ['--hdsl-data-root', '/first', '--hdsl-data-root', '/second'], env: {} }),
     ).toBe('/first');
@@ -136,10 +175,41 @@ describe('explicit data-root detection (issue #149)', () => {
     expect(
       explicitDataRoot({ argv: ['--hdsl-data-root=/flag'], env: { HDSL_DATA_ROOT: '/env' } }),
     ).toBe('/flag');
-    expect(explicitDataRoot({ argv: ['electron', '--hdsl-data-root'], env: {} })).toBeUndefined();
-    expect(explicitDataRoot({ argv: ['electron', '--hdsl-data-root='], env: {} })).toBeUndefined();
-    expect(explicitDataRoot({ argv: ['electron'], env: { HDSL_DATA_ROOT: '' } })).toBeUndefined();
-    expect(explicitDataRoot({ argv: ['electron'], env: { HDSL_DATA_ROOT: '  ' } })).toBeUndefined();
+  });
+
+  it('reports every present-but-invalid override instead of falling back', () => {
+    const invalid: ReadonlyArray<[string[], Record<string, string | undefined>, string]> = [
+      [['electron', '--hdsl-data-root'], {}, 'missing-value'],
+      [['electron', '--hdsl-data-root='], {}, 'empty-value'],
+      [['electron', '--hdsl-data-root', ''], {}, 'missing-value'],
+      [['electron', '--hdsl-data-root', '--enable-logging'], {}, 'switch-value'],
+      [['electron'], { HDSL_DATA_ROOT: '' }, 'empty-value'],
+      [['electron'], { HDSL_DATA_ROOT: '   ' }, 'empty-value'],
+    ];
+    for (const [argv, env, reason] of invalid) {
+      expect(dataRootOverrideProblem({ argv, env })).toBe(reason);
+      // An invalid override never yields a value, so nothing falls back silently.
+      expect(explicitDataRoot({ argv, env })).toBeUndefined();
+    }
+  });
+
+  it('does not let a later valid value rescue an earlier invalid one', () => {
+    expect(
+      dataRootOverrideProblem({
+        argv: ['--hdsl-data-root', '--enable-logging', '--hdsl-data-root', '/valid'],
+        env: {},
+      }),
+    ).toBe('switch-value');
+    expect(
+      dataRootOverrideProblem({
+        argv: ['--hdsl-data-root=', '--hdsl-data-root', '/valid'],
+        env: {},
+      }),
+    ).toBe('empty-value');
+  });
+
+  it('treats an absent override as a normal launch', () => {
+    expect(dataRootOverrideProblem({ argv: ['electron'], env: {} })).toBeUndefined();
     expect(explicitDataRoot({ argv: ['electron'], env: {} })).toBeUndefined();
   });
 
@@ -208,7 +278,7 @@ describe('isolated profile bootstrap (issue #149)', () => {
     ).toBe(`${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`);
   });
 
-  it('treats a flag without a value and a blank env as a normal launch', () => {
+  it('treats a flag without a value and a blank env as unusable rather than isolated', () => {
     expect(
       isolatedUserDataDirectory({ argv: ['electron', '--hdsl-data-root'], env: {} }),
     ).toBeUndefined();
@@ -270,6 +340,106 @@ describe('isolated profile bootstrap (issue #149)', () => {
     expect(setPaths).toEqual([`userData=${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`]);
     expect(fake.calls).toEqual([]);
     expect(fake.dirs.get(legacy)).toBe('populated');
+  });
+});
+
+describe('malformed isolation arguments fail loud (issue #149)', () => {
+  const dataRoot = '/tmp/hdsl-root';
+  const target = defaultUserDataDirectory(APP_DATA);
+
+  // Every malformed spelling from the review matrix, plus the conflict case.
+  const cases: ReadonlyArray<
+    readonly [string, readonly string[], Readonly<Record<string, string | undefined>>, string, string]
+  > = [
+    ['dangling data-root flag', ['electron', '--hdsl-data-root'], {}, 'data-root', 'missing-value'],
+    ['empty equals data-root', ['electron', '--hdsl-data-root='], {}, 'data-root', 'empty-value'],
+    ['empty string data-root', ['electron', '--hdsl-data-root', ''], {}, 'data-root', 'missing-value'],
+    [
+      'switch used as data-root',
+      ['electron', '--hdsl-data-root', '--enable-logging'],
+      {},
+      'data-root',
+      'switch-value',
+    ],
+    ['empty data-root env', ['electron'], { HDSL_DATA_ROOT: '' }, 'data-root', 'empty-value'],
+    ['blank data-root env', ['electron'], { HDSL_DATA_ROOT: '   ' }, 'data-root', 'empty-value'],
+    ['empty equals user-data-dir', ['electron', '--user-data-dir='], {}, 'user-data-dir', 'empty-value'],
+    ['dangling user-data-dir', ['electron', '--user-data-dir'], {}, 'user-data-dir', 'missing-value'],
+    [
+      'empty string user-data-dir',
+      ['electron', '--user-data-dir', ''],
+      {},
+      'user-data-dir',
+      'missing-value',
+    ],
+    [
+      'switch used as user-data-dir',
+      ['electron', '--user-data-dir', '--hdsl-data-root', dataRoot],
+      {},
+      'user-data-dir',
+      'switch-value',
+    ],
+    [
+      'valid data root plus empty user-data-dir',
+      ['electron', `--hdsl-data-root=${dataRoot}`, '--user-data-dir='],
+      {},
+      'user-data-dir',
+      'empty-value',
+    ],
+  ];
+
+  it.each(cases)('%s is rejected before any userData access', (_label, argv, env, kind, reason) => {
+    expect(launchArgumentProblem({ argv, env })).toEqual({ kind, problem: reason });
+    const fake = fakeFileSystem({ dirs: [[legacyUserDataDirectory(APP_DATA), 'populated']] });
+    const record = recordingHost(APP_DATA, target);
+    const setup = configureUserData(record.host, {
+      argv,
+      env,
+      appDataDirectory: APP_DATA,
+      fileSystem: fake.fileSystem,
+      hostname: HOST,
+      onNote: () => {
+        throw new Error('a rejected launch must not emit a migration note');
+      },
+    });
+    expect(setup).toEqual({ kind: 'invalid', problem: { kind, problem: reason } });
+    // The guard runs before `getPath('userData')`, so the default profile is
+    // never created, read or migrated.
+    expect(record.userDataAccesses).toEqual([]);
+    expect(record.setPaths).toEqual([]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('allows an absent override and documented first-wins duplicates', () => {
+    expect(launchArgumentProblem({ argv: ['electron'], env: {} })).toBeUndefined();
+    expect(
+      launchArgumentProblem({
+        argv: ['electron', '--hdsl-data-root', '/a', '--hdsl-data-root', '/b'],
+        env: {},
+      }),
+    ).toBeUndefined();
+  });
+
+  it('formats a fixed, path-free rejection signal', () => {
+    expect(formatLaunchArgumentSignal({ kind: 'data-root', problem: 'missing-value' })).toBe(
+      `${LAUNCH_ARGUMENT_SIGNAL} kind=data-root reason=missing-value\n`,
+    );
+    expect(formatLaunchArgumentSignal({ kind: 'user-data-dir', problem: 'empty-value' })).toBe(
+      `${LAUNCH_ARGUMENT_SIGNAL} kind=user-data-dir reason=empty-value\n`,
+    );
+  });
+});
+
+describe('user-data-dir validation (issue #149)', () => {
+  it('reports empty, dangling and switch values for both spellings', () => {
+    expect(userDataDirProblem([`${USER_DATA_DIR_SWITCH}=`])).toBe('empty-value');
+    expect(userDataDirProblem([`${USER_DATA_DIR_SWITCH}=   `])).toBe('empty-value');
+    expect(userDataDirProblem([USER_DATA_DIR_SWITCH])).toBe('missing-value');
+    expect(userDataDirProblem([USER_DATA_DIR_SWITCH, ''])).toBe('missing-value');
+    expect(userDataDirProblem([USER_DATA_DIR_SWITCH, '--hdsl-data-root'])).toBe('switch-value');
+    expect(userDataDirProblem([`${USER_DATA_DIR_SWITCH}=/tmp/p`])).toBeUndefined();
+    expect(userDataDirProblem([USER_DATA_DIR_SWITCH, '/tmp/p'])).toBeUndefined();
+    expect(userDataDirProblem([])).toBeUndefined();
   });
 });
 

@@ -50,7 +50,12 @@ import {
 } from 'node:fs';
 import { hostname } from 'node:os';
 import { join, resolve } from 'node:path';
-import { explicitDataRoot } from './data-root.js';
+import {
+  explicitDataRoot,
+  dataRootOverrideProblem,
+  type DataRootOverrideInput,
+  type DataRootOverrideProblem,
+} from './data-root.js';
 import { LEGACY_PRODUCT_NAME, PRODUCT_NAME } from './product-identity.js';
 
 /**
@@ -95,6 +100,39 @@ export const ISOLATED_PROFILE_DIRECTORY = 'electron-profile';
 
 /** Chromium command-line switch that pins the profile directory. */
 export const USER_DATA_DIR_SWITCH = '--user-data-dir';
+
+/** Why an explicitly provided `--user-data-dir` cannot be used. */
+export type UserDataDirProblem = 'missing-value' | 'empty-value' | 'switch-value';
+
+/**
+ * Reports a present-but-invalid `--user-data-dir` in either spelling. Chromium
+ * ignores the space form, so the entry validates both before deciding anything:
+ * a dangling switch, an explicit empty value or another switch used as the value
+ * must be refused rather than silently falling back to the default profile.
+ */
+export const userDataDirProblem = (argv: readonly string[]): UserDataDirProblem | undefined => {
+  const equalsPrefix = `${USER_DATA_DIR_SWITCH}=`;
+  let problem: UserDataDirProblem | undefined;
+  for (let index = 0; index < argv.length; index += 1) {
+    const argument = argv[index];
+    if (argument === undefined) {
+      continue;
+    }
+    if (argument === USER_DATA_DIR_SWITCH) {
+      const next = argv[index + 1];
+      if (next === undefined || next.trim() === '') {
+        problem ??= 'missing-value';
+      } else if (next.startsWith('-')) {
+        problem ??= 'switch-value';
+      }
+      continue;
+    }
+    if (argument.startsWith(equalsPrefix) && argument.slice(equalsPrefix.length).trim() === '') {
+      problem ??= 'empty-value';
+    }
+  }
+  return problem;
+};
 
 /** Lock file that serializes the one-time legacy migration. */
 export const MIGRATION_LOCK_FILE = '.hdsl-userdata-migration.lock';
@@ -427,6 +465,36 @@ export interface IsolatedUserDataInput {
   readonly env: Readonly<Record<string, string | undefined>>;
 }
 
+/** A present-but-invalid explicit isolation argument. */
+export type LaunchArgumentProblem =
+  | { readonly kind: 'data-root'; readonly problem: DataRootOverrideProblem }
+  | { readonly kind: 'user-data-dir'; readonly problem: UserDataDirProblem };
+
+/**
+ * Validates every explicit isolation argument before any profile access. The
+ * production entry refuses to start when this returns a problem, so a malformed
+ * override can never fall back to the real default profile.
+ */
+export const launchArgumentProblem = (
+  input: DataRootOverrideInput,
+): LaunchArgumentProblem | undefined => {
+  const dataRoot = dataRootOverrideProblem(input);
+  if (dataRoot !== undefined) {
+    return { kind: 'data-root', problem: dataRoot };
+  }
+  const userDataDir = userDataDirProblem(input.argv);
+  if (userDataDir !== undefined) {
+    return { kind: 'user-data-dir', problem: userDataDir };
+  }
+  return undefined;
+};
+
+export const LAUNCH_ARGUMENT_SIGNAL = '[hdsl] launch args invalid';
+
+/** One fixed, path-free stderr line so a rejected launch is attributable. */
+export const formatLaunchArgumentSignal = (problem: LaunchArgumentProblem): string =>
+  `${LAUNCH_ARGUMENT_SIGNAL} kind=${problem.kind} reason=${problem.problem}\n`;
+
 /**
  * Profile directory for an explicitly isolated run, or `undefined` for a normal
  * launch. When the operator already pinned `--user-data-dir`, that choice wins
@@ -517,4 +585,33 @@ export const applyUserDataBootstrap = (
     migrated: resolution.migrated,
     note: resolution.note,
   };
+};
+
+/** Result of validating and applying the profile decision. */
+export type UserDataSetup =
+  | {
+      readonly kind: 'ready';
+      readonly directory: string;
+      readonly isolated: boolean;
+      readonly migrated: boolean;
+      readonly note?: UserDataNote | undefined;
+    }
+  | { readonly kind: 'invalid'; readonly problem: LaunchArgumentProblem };
+
+/**
+ * The single entry the production bootstrap calls: validates every explicit
+ * isolation argument *before* any profile access, then applies
+ * {@link applyUserDataBootstrap}. A malformed override therefore never reaches
+ * `getPath('userData')`, so it cannot create, read or migrate the default
+ * profile.
+ */
+export const configureUserData = (
+  host: UserDataPathHost,
+  input: UserDataBootstrapInput,
+): UserDataSetup => {
+  const problem = launchArgumentProblem({ argv: input.argv, env: input.env });
+  if (problem !== undefined) {
+    return { kind: 'invalid', problem };
+  }
+  return { kind: 'ready', ...applyUserDataBootstrap(host, input) };
 };
