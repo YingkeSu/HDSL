@@ -10,6 +10,7 @@ name: Engineering checks
 # the first `require('electron')`. CI only type-checks and builds (types come
 # from the pinned package), so no Electron binary is fetched here.
 on:
+  workflow_dispatch:
   push:
   pull_request:
 
@@ -33,7 +34,7 @@ jobs:
         run: pnpm install --frozen-lockfile
       - name: Typecheck
         run: pnpm run typecheck
-      - name: Build
-        run: pnpm run build
+      - name: Build desktop (main, preload and renderer)
+        run: pnpm run build:desktop
       - name: Unit tests
         run: pnpm run test
