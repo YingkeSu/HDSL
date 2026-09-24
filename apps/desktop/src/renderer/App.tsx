@@ -80,7 +80,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     // A create failure from a previous dialog session must not leak into a new
     // one. This clears ONLY the create-scoped error.
-    actions.clearCreateError();
+    actions.clearCreateError?.();
     if (combinationId !== undefined) actions.setCreateCombinationId(combinationId);
     setSubmitted(false);
     setCreating(true);
@@ -90,7 +90,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
     setCreating(false);
     // Closing/abandoning the create dialog clears the create-scoped error; an
     // unrelated `actionError` from another flow stays visible (#146).
-    actions.clearCreateError();
+    actions.clearCreateError?.();
     returnFocus.current?.focus();
   };
 

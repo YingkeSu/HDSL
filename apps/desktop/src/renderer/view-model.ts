@@ -171,8 +171,12 @@ export interface RendererActions {
   /**
    * Clears ONLY the dialog-scoped create error when the create dialog is closed
    * or reopened. It never touches `actionError` or any other flow's error.
+   *
+   * Optional, like `retryTracking`: it is a cleanup entry a minimal test double
+   * added before this method existed may omit, while the production controller
+   * always implements it. Callers use optional call syntax.
    */
-  clearCreateError(): void;
+  clearCreateError?(): void;
   selectEnvironment(environmentId: string): void;
   startSelected(): void;
   stopSelected(): void;
