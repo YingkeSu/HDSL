@@ -21,6 +21,7 @@
 import type { ReactElement } from 'react';
 import type { ContractError } from '@hdsl/contracts';
 import { selectedEnvironment, selectedInstalledPlugin, type RendererActions, type RendererState } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 const blockerLabel = (): string => '移除会破坏其它 bundle 或配置解析。';
 
@@ -191,7 +192,7 @@ export function PluginRemoval({ state, actions }: { state: RendererState; action
       )}
 
       {state.actionError !== null && (
-        <p role="alert">{removalErrorHint(state.actionError)}（{state.actionError.code}）</p>
+        <ErrorNotice error={state.actionError} title={removalErrorHint(state.actionError)} />
       )}
 
       {tracked?.kind === 'preview' && tracked.status === 'failed' && (

@@ -412,6 +412,10 @@ describe('EntryPatch markup', () => {
     });
     expect(html).toContain('INVALID_INPUT');
     expect(html).toContain('top-level YAML array');
+    // #145: the raw message stays in the technical details; the primary copy is
+    // the Chinese explanation.
+    expect(html).toContain('输入不合法');
+    expect(html).toContain('技术详情');
     expect(html).toContain('已保存');
   });
 

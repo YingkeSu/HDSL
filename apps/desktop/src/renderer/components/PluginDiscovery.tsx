@@ -15,6 +15,7 @@ import {
   type PluginSearchHit,
 } from '@hdsl/contracts';
 import { Icon } from './Icon.js';
+import { ErrorDetail } from './ErrorNotice.js';
 import { formatOperationKind, formatTimestamp } from '../format.js';
 import { selectedPluginHit, type RendererActions, type RendererState } from '../view-model.js';
 
@@ -220,16 +221,16 @@ export function PluginDiscovery({
 
       {state.actionError !== null && (
         <div className="panel plugin-error" role="alert">
-          <strong>检索未开始：{state.actionError.message}</strong>
+          <ErrorDetail error={state.actionError} prefix="检索未开始：" />
         </div>
       )}
 
       {trackedIsPlugin && tracked.error !== null && (
         <div className="panel plugin-error" role="alert">
-          <strong>
-            {tracked.status === 'cancelled' ? '检索已取消' : '检索失败'}（{tracked.error.code}）：
-            {tracked.error.message}
-          </strong>
+          <ErrorDetail
+            error={tracked.error}
+            prefix={tracked.status === 'cancelled' ? '检索已取消：' : '检索失败：'}
+          />
           <p>{tracked.status === 'cancelled' ? '取消为终态，未产生任何副作用。' : errorHint(tracked.error)}</p>
         </div>
       )}

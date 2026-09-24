@@ -13,7 +13,7 @@
  */
 import type { ReactElement } from 'react';
 import type { ContractError } from '@hdsl/contracts';
-import { describeError, ENVIRONMENT_STATE_LABELS } from '../format.js';
+import { ENVIRONMENT_STATE_LABELS } from '../format.js';
 import {
   canSwitchVersion,
   isOperationTerminal,
@@ -22,6 +22,7 @@ import {
   type RendererActions,
   type RendererState,
 } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 /** Source-neutral hints; the raw core message is never the primary copy. */
 const SWITCH_ERROR_HINT: Readonly<Record<string, string>> = {
@@ -141,12 +142,8 @@ export function SwitchVersion({ state, actions }: SwitchVersionProps): ReactElem
           </button>
         </p>
       )}
-      {switchError !== null && (
-        <p role="alert">
-          {switchHint(switchError)}（{switchError.code}）
-        </p>
-      )}
-      {otherError !== null && <p role="alert">{describeError(otherError)}</p>}
+      {switchError !== null && <ErrorNotice error={switchError} title={switchHint(switchError)} />}
+      {otherError !== null && <ErrorNotice error={otherError} />}
     </section>
   );
 }
