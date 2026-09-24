@@ -1,145 +1,63 @@
 <div align="center">
 
 # HDSL
-### Hello DSH Launcher
 
-**把版本、环境与插件放在一起，让 DSH 的启动更简单。**
+**你的 DSH，从这里开始。**
 
-面向 DeepSeek Harness 的桌面启动器与版本管理器。
+为 DeepSeek Harness 管理环境、版本与插件的桌面启动器。
 
-[下载与发布](https://github.com/YingkeSu/HDSL/releases) · [快速开始](#快速开始) · [文档](docs/README.md) · [反馈问题](https://github.com/YingkeSu/HDSL/issues)
+[下载体验版](https://github.com/YingkeSu/HDSL/releases) · [使用指南](docs/user-guide.md) · [反馈问题](https://github.com/YingkeSu/HDSL/issues)
 
 </div>
 
 ---
 
-## 一个入口，管理你的 DSH
+## 把准备工作交给 HDSL
 
-HDSL 负责选择版本、准备环境、管理插件组成，以及启动和停止 DSH。DSH 负责插件的实际加载、动态生命周期与运行行为。
+想试一个新插件，又不想打乱正在使用的配置？想为不同项目保留各自的工作环境？HDSL 把这些准备工作放进一个桌面窗口，让你更方便地开始使用 DSH。
 
-我们希望它是一个好用的启动器，而不是另一套插件运行时。
+- **各自独立的环境** — 为不同工作创建环境，分别保存配置与运行数据，随时切换。
+- **自动准备运行环境** — 选择已支持的版本，下载与安装由 HDSL 完成，无需手动配置运行工具。
+- **启动、停止，一眼看清** — 查看运行状态与操作进度，启动后在浏览器中进入 DSH。
+- **按需管理插件** — 查找插件，预览安装内容，安装或移除扩展；需要重启时会提示你。
+- **尝试新版本，保留旧组成** — 切换已支持的 DSH 版本，也能恢复此前的版本与插件组成。
+- **遇到问题有迹可循** — 查看错误与恢复状态，导出经过脱敏的诊断信息，方便反馈。
 
-### 选择版本，而不是反复配置工具链
+## 下载与安装
 
-查看上游 DSH 版本与发布渠道，区分已支持和尚未支持的组合；为环境安装指定的 Node.js 与 DSH，并在需要时切换版本。下载来源、版本和摘要都有明确记录。
+前往 **[GitHub Releases](https://github.com/YingkeSu/HDSL/releases)**，展开对应版本的 **Assets**，选择适合你的压缩包。无需下载源码。
 
-> “已支持”表示 HDSL 已具备相应的安装与验证能力，不表示对上游版本作出安全担保。
+| 你的电脑 | 下载文件 | 使用范围 |
+| --- | --- | --- |
+| Mac，Apple 芯片（M 系列） | `HDSL-…-mac-arm64.zip` | 当前主要体验平台 |
+| Windows，64 位 Intel / AMD | `HDSL-…-win-x64-…-portable.zip` | 界面预览；暂不能创建、安装或运行 DSH 环境 |
+| Intel Mac、Windows ARM、Linux | 暂无 | 尚未支持 |
 
-### 为不同工作保留独立环境
+**这是早期体验版。** Mac 包未经过 Apple Developer ID 签名与公证，Windows 包也未签名；系统可能提示无法验证开发者。Windows 尚未经过实机使用验收。每次发布的具体情况以 Release 说明为准。
 
-创建多个环境，分别保存配置与运行数据；查看进度和状态，启动、停止或重启受管进程，在系统浏览器中打开 DSH 工作界面。
+Mac：解压后将 `HDSL.app` 拖到「应用程序」。Windows：完整解压文件夹后打开 `HDSL.exe`，保留旁边的文件。
 
-环境之间采用目录与进程管理层面的隔离，**不是操作系统沙箱**。
+## 第一次使用
 
-### 让插件管理回到 DSH 的机制上
+1. 打开 HDSL，创建一个环境，为它起个容易辨认的名字。
+2. 选择已支持的版本，等待自动下载与安装；首次使用需要网络。
+3. 按[使用指南](docs/user-guide.md)配置 API 密钥。目前这一步仍需通过 macOS 钥匙串完成。
+4. 启动环境，打开浏览器中的 DSH 工作界面，开始使用。
 
-发现、预览、安装和移除插件，管理包依赖与组成记录。包依赖或 bundles 变更需要重启；支持的 entry 配置操作则写入用户 patch，交给 DSH 处理。
+之后，你可以为另一项工作创建新环境，或在现有环境中管理插件、切换版本。
 
-保存配置不等于确认运行期已经生效。界面会明确显示 **“已保存 / 等待 DSH 应用（未确认 ACTIVE）”**，并提供显式重启入口。
+## 试用前了解这些
 
-插件加载、卸载后带来的运行影响由 DSH 处理。HDSL 不承诺任意插件的无损卸载，也不把未知服务依赖本身作为禁止卸载的理由。
+- 当前 Mac 环境支持 DSH `0.1.5-rc.2` 与 `0.1.7-rc.1`。列表中能看到的其他上游版本，未必可以安装。
+- 恢复旧版本与插件组成**不会撤销文件或会话数据的变化**，重要数据请另行备份。
+- 环境分开存放，但插件仍可能访问环境外的文件，请只安装你信任的插件。
+- 保存插件配置后，可能需要重启才能生效；HDSL 不能保证所有第三方插件都可正常使用。
+- 整合包分享尚未提供。
 
-### 出错时，保留清楚的边界
+## 帮助与反馈
 
-HDSL 提供代际组成记录、恢复入口、操作状态与脱敏诊断。安装期构建脚本默认拒绝执行，需要时显式授权。
+遇到问题，请在 [Issues](https://github.com/YingkeSu/HDSL/issues) 描述你的系统、操作步骤和看到的提示。附图前请遮住密钥和私人信息。
 
-**恢复组成不等于回滚数据。** 不同 DSH 版本可能改变共享 home 或会话数据；降级提示不是数据兼容性保证。
+想参与开发？从[贡献指南](CONTRIBUTING.md)和[开发文档](docs/README.md)开始。
 
-## 平台与发布状态
-
-HDSL 仍处于早期开发阶段。请用独立环境试用，并备份重要数据。
-
-| 平台 | 当前状态 |
-| --- | --- |
-| macOS Apple Silicon（ARM64） | 已有受管安装、启停、版本切换和插件验收记录；具体覆盖范围见验证文档 |
-| Windows x64 | 不提供 Windows 运行时支持；此构建未经实机验证，勿用于创建/安装 DSH 环境 |
-| Linux / 其他架构 | 未提供完整支持声明 |
-
-当前受管目录包含 DSH `0.1.5-rc.2`、`0.1.7-rc.1`，分别搭配 Node.js `22.19.0` 或 `24.21.0`，**这些已支持组合目前均为 macOS ARM64**。版本发现列表中的其他版本不等于可直接安装。
-
-Windows 产物若发布，其可用功能、已知限制和下载方式以对应 Release 说明为准。**有构建产物，不等于通过平台验收。**
-
-## 快速开始
-
-### 从源码运行
-
-准备 [`.nvmrc`](.nvmrc) 指定的 Node.js，以及 pnpm `11.7.0`：
-
-```bash
-git clone https://github.com/YingkeSu/HDSL.git
-cd HDSL
-
-npm install --global pnpm@11.7.0
-pnpm install --frozen-lockfile
-pnpm run build:desktop
-pnpm --filter @hdsl/desktop exec electron .
-```
-
-首次安装 Electron、创建 DSH 环境时需要网络。应用数据默认存放在 Electron 的 `userData` 目录。
-
-在 macOS 上开发或试用时，可指定独立的数据目录：
-
-```bash
-pnpm --filter @hdsl/desktop exec electron . --hdsl-data-root "$HOME/.hdsl-dev"
-```
-
-### 第一次使用
-
-1. 创建环境，选择当前平台已支持的运行时组合。
-2. 等待安装完成，按[凭据配置指南](docs/development/desktop-integration.md#凭据引用配置主进程原生菜单adr-0004)准备并导入凭据引用。
-3. 启动环境，在系统浏览器中打开 DSH。
-4. 按需管理版本与插件；需要重启的变更会明确提示。
-
-当前凭据接入以 macOS 系统钥匙串路径为基础。不要将个人 API key 写入仓库、普通日志或待分发文件。
-
-## 文档导航
-
-| 我想了解…… | 从这里开始 |
-| --- | --- |
-| 如何开发和检查项目 | [贡献指南](CONTRIBUTING.md) · [测试指南](docs/development/testing.md) |
-| 当前验证了什么、没有验证什么 | [macOS 验证记录](docs/development/validation-001.md) |
-| 桌面接线与凭据配置 | [桌面集成指南](docs/development/desktop-integration.md) |
-| 插件配置为什么不直接显示“已生效” | [运行期 entry 验证](docs/development/plugin-runtime-entry-validation.md) |
-| 为什么采用这些设计 | [架构决策](docs/adr/README.md) · [项目上下文](CONTEXT.md) |
-| 接下来要做什么 | [路线图](docs/development/roadmap.md) · [GitHub Issues](https://github.com/YingkeSu/HDSL/issues) |
-
-完整目录见 [docs/README.md](docs/README.md)。
-
-## 参与开发
-
-技术栈：**Electron · React · TypeScript · pnpm**
-
-```text
-apps/desktop/       桌面主进程、preload 与界面
-packages/contracts/ 共享类型、输入校验与本地接口
-packages/core/      环境状态、存储与事务协调
-packages/runtime/   运行时安装、进程、插件与凭据适配
-tests/              单元、集成和 opt-in 实机验收
-specs/              规格、计划与契约
-docs/               架构、开发指南与验证记录
-```
-
-提交前执行：
-
-```bash
-pnpm run typecheck
-pnpm run build:desktop
-pnpm test
-python3 scripts/check_repository.py
-```
-
-文档检查需要 Python 3.9 或更新版本。真实 DSH 与 Electron 验收为单独启用的测试，不应把默认测试全绿当作所有平台已验证。
-
-欢迎通过 Issues 报告问题。请附上 HDSL / DSH / Node.js 版本、操作系统、复现步骤和脱敏日志；**不要提交密钥或私人配置**。
-
-## 许可
-
-使用与分发条件以仓库 [LICENSE](LICENSE) 为准；第三方组件遵循各自许可证，见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。本项目不以“开源”措辞替代实际许可条款。
-
----
-
-<div align="center">
-
-**HDSL 管理启动与组成，DSH 负责运行与加载。**
-
-</div>
+使用与分发条件见 [LICENSE](LICENSE)，第三方组件说明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

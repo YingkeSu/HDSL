@@ -16,6 +16,7 @@ name: Windows portable build
 # see docs/development/windows-portable-build.md before distributing it.
 
 on:
+  workflow_call:
   workflow_dispatch:
   push:
     paths:

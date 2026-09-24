@@ -1,0 +1,87 @@
+name: Release preview
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Require a version tag matching the application
+        run: node -e 'if (process.env.GITHUB_REF_TYPE !== "tag" || process.env.GITHUB_REF_NAME !== "v" + JSON.parse(require("fs").readFileSync("apps/desktop/package.json")).version) process.exit(1)'
+
+  windows:
+    needs: version
+    uses: ./.github/workflows/windows-portable-build.yml
+
+  mac:
+    needs: version
+    runs-on: macos-latest
+    env:
+      CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.7.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm run build:desktop
+      - run: pnpm --filter @hdsl/desktop run package:mac
+      - name: Verify application contents
+        run: node apps/desktop/scripts/verify-mac-package.mjs apps/desktop/release/mac-arm64/HDSL.app
+      - name: Archive app and record provenance
+        run: |
+          version=$(node -p "require('./apps/desktop/package.json').version")
+          name="HDSL-$version-mac-arm64.zip"
+          cd apps/desktop/release
+          ditto -c -k --sequesterRsrc --keepParent mac-arm64/HDSL.app "$name"
+          shasum -a 256 "$name" > SHA256SUMS-mac.txt
+          printf 'version: %s\ncommit: %s\nplatform: mac-arm64\nsigning: no Developer ID or notarization\n' "$version" "$GITHUB_SHA" > build-info-mac.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hdsl-mac-arm64-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            apps/desktop/release/*.zip
+            apps/desktop/release/SHA256SUMS-mac.txt
+            apps/desktop/release/build-info-mac.txt
+
+  publish:
+    needs: [windows, mac]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: hdsl-*
+          path: release-assets
+          merge-multiple: true
+      - name: Verify archives and publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cd release-assets
+          sha256sum -c SHA256SUMS.txt
+          sha256sum -c SHA256SUMS-mac.txt
+          mv build-info.txt build-info-windows.txt
+          cat SHA256SUMS-mac.txt >> SHA256SUMS.txt
+          rm SHA256SUMS-mac.txt
+          gh release create "$GITHUB_REF_NAME" ./*.zip SHA256SUMS.txt build-info-*.txt \
+            --verify-tag --prerelease --title "HDSL $GITHUB_REF_NAME · 体验版" \
+            --notes-file ../docs/releases/preview-notes.md

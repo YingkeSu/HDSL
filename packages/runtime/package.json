@@ -1,6 +1,6 @@
 {
   "name": "@hdsl/runtime",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.1",
   "private": true,
   "description": "Managed artifact install, composition, real DSH process lifecycle and upstream adaptation. Must not depend on Electron.",
   "license": "SEE LICENSE IN ../../LICENSE",

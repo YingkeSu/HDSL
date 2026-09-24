@@ -1,6 +1,6 @@
 {
   "name": "@hdsl/desktop",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.1",
   "private": true,
   "description": "Electron and React desktop app for managing local DeepSeek Harness environments.",
   "license": "SEE LICENSE IN ../../LICENSE",
@@ -8,7 +8,8 @@
   "main": "./dist/main/index.js",
   "scripts": {
     "build:renderer": "node scripts/build-renderer.mjs",
-    "package:win": "electron-builder --win --x64 --dir"
+    "package:win": "electron-builder --win --x64 --dir",
+    "package:mac": "electron-builder --mac --arm64 --dir"
   },
   "exports": {
     ".": {
@@ -49,7 +50,29 @@
           ]
         }
       ]
-    }
+    },
+    "mac": {
+      "target": [
+        {
+          "target": "dir",
+          "arch": [
+            "arm64"
+          ]
+        }
+      ],
+      "identity": null,
+      "category": "public.app-category.developer-tools"
+    },
+    "extraResources": [
+      {
+        "from": "../../LICENSE",
+        "to": "LICENSE.hdsl.txt"
+      },
+      {
+        "from": "../../THIRD_PARTY_NOTICES.md",
+        "to": "THIRD_PARTY_NOTICES.md"
+      }
+    ]
   },
   "dependencies": {
     "@hdsl/contracts": "workspace:*",

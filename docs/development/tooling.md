@@ -8,6 +8,8 @@
 
 ```bash
 # 已使用 nvm 时，先执行 nvm install && nvm use
+git clone https://github.com/YingkeSu/HDSL.git
+cd HDSL
 npm install --global pnpm@11.7.0
 pnpm install --frozen-lockfile
 ```

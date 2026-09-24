@@ -1,6 +1,6 @@
 {
   "name": "hdsl",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.1",
   "private": true,
   "description": "HDSL — Hello DSH Launcher. Managed local environments for DeepSeek Harness.",
   "license": "SEE LICENSE IN LICENSE",

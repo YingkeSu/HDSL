@@ -80,7 +80,7 @@ describe('workspace layout', () => {
     expect([...manifests.keys()].sort()).toEqual([...workspaceNames].sort());
     for (const manifest of manifests.values()) {
       expect(manifest.private).toBe(true);
-      expect(manifest.version).toBe('0.0.0');
+      expect(manifest.version).toBe(rootManifest.version);
     }
   });
 

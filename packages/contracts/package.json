@@ -1,6 +1,6 @@
 {
   "name": "@hdsl/contracts",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.1",
   "private": true,
   "description": "Shared DTOs, API version envelope and runtime input validation for the preload bridge boundary.",
   "license": "SEE LICENSE IN ../../LICENSE",

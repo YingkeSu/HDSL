@@ -1,6 +1,6 @@
 {
   "name": "@hdsl/core",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.1",
   "private": true,
   "description": "Environment model, revision/state semantics and storage ports. Must not depend on Electron.",
   "license": "SEE LICENSE IN ../../LICENSE",

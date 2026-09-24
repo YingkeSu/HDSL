@@ -1,11 +1,12 @@
 # HDSL 文档
 
-从源码启动请先读[项目 README](../README.md)，参与开发请读[贡献指南](../CONTRIBUTING.md)。产品文档描述目标范围；验证记录只对各自注明的版本、平台与测试条件有效。
+使用应用请读[使用指南](user-guide.md)，从源码启动请读[工具链](development/tooling.md)，参与开发请读[贡献指南](../CONTRIBUTING.md)。产品文档描述目标范围；验证记录只对各自注明的版本、平台与测试条件有效。
 
 ## 开发指南
 
 | 主题 | 文档 |
 | --- | --- |
+| 打包与 GitHub Release | [发布流程](development/releases.md) |
 | 工具安装与构建 | [工具链](development/tooling.md) |
 | 桌面入口、数据目录与凭据导入 | [桌面集成](development/desktop-integration.md) |
 | 测试命令与覆盖范围 | [测试指南](development/testing.md) |
