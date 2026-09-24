@@ -13,9 +13,13 @@
  * - it looks only at those two fixed directories and never reads file contents,
  *   so no user data leaves the profile and nothing is merged;
  * - it runs only while `userData` is still the default `appData/<product name>`
- *   path. A `--user-data-dir` / `app.setPath` override is an explicit operator
- *   choice, so a temporary profile never reads a real user's legacy directory;
- * - an explicit `--hdsl-data-root` / `HDSL_DATA_ROOT` run is isolated by intent:
+ *   path. A `--user-data-dir=<path>` / `app.setPath` override is an explicit
+ *   operator choice, so a temporary profile never reads a real user's legacy
+ *   directory. Chromium ignores the space-separated `--user-data-dir <path>`
+ *   form, so main applies that form itself rather than believing the profile is
+ *   pinned while Electron still uses the default;
+ * - an explicit `--hdsl-data-root` / `HDSL_DATA_ROOT` run (both the space and
+ *   `=` forms) is isolated by intent:
  *   `applyUserDataBootstrap` redirects the Electron profile under that root
  *   *before the first* `getPath('userData')` access, so the real default profile
  *   is never created, read or migrated (`getPath('userData')` is what creates
@@ -379,26 +383,43 @@ export interface UserDataPathHost {
   setPath(name: string, path: string): void;
 }
 
-/** Chromium's `--user-data-dir=<path>` value, or `undefined` when not pinned. */
+/**
+ * Chromium's authoritative `--user-data-dir=<path>` value, or `undefined`.
+ *
+ * Only the `=` form is recognized because Chromium parses command-line switches
+ * as `--switch=value`; a separate value token is a positional argument it
+ * ignores. Detecting the space form here would make HDSL believe the profile is
+ * pinned while Electron still used the default. The space form is normalized by
+ * {@link applyUserDataBootstrap} instead. Duplicate switches follow Chromium's
+ * last-wins rule; an empty value clears the pin.
+ */
 export const chromiumUserDataDirectory = (argv: readonly string[]): string | undefined => {
   const prefix = `${USER_DATA_DIR_SWITCH}=`;
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    if (argument === undefined) {
-      continue;
-    }
+  let found: string | undefined;
+  for (const argument of argv) {
     if (argument.startsWith(prefix)) {
       const value = argument.slice(prefix.length);
-      return value === '' ? undefined : value;
-    }
-    if (argument === USER_DATA_DIR_SWITCH) {
-      const value = argv[index + 1];
-      return value !== undefined && value.trim() !== '' && !value.startsWith('--')
-        ? value
-        : undefined;
+      found = value === '' ? undefined : value;
     }
   }
-  return undefined;
+  return found;
+};
+
+/**
+ * The space-separated `--user-data-dir <path>` value, or `undefined`. Chromium
+ * ignores this form, so main applies it explicitly rather than silently falling
+ * back to the real default profile. A following token that is another switch or
+ * empty is not a value.
+ */
+export const spaceSeparatedUserDataDirectory = (argv: readonly string[]): string | undefined => {
+  const index = argv.indexOf(USER_DATA_DIR_SWITCH);
+  if (index < 0) {
+    return undefined;
+  }
+  const value = argv[index + 1];
+  return value !== undefined && value.trim() !== '' && !value.startsWith('--')
+    ? value
+    : undefined;
 };
 
 export interface IsolatedUserDataInput {
@@ -453,6 +474,23 @@ export const applyUserDataBootstrap = (
   host: UserDataPathHost,
   input: UserDataBootstrapInput,
 ): UserDataBootstrapOutcome => {
+  // An explicit `--user-data-dir=<path>` is applied by Chromium before this
+  // script. Setting it again is a no-op that also covers a switch Chromium did
+  // not honor, and it guarantees the default profile is never touched.
+  const pinned = chromiumUserDataDirectory(input.argv);
+  if (pinned !== undefined) {
+    const directory = resolve(pinned);
+    host.setPath('userData', directory);
+    return { directory, isolated: true, migrated: false };
+  }
+  // Chromium ignores the space form (it is a positional argument), so apply it
+  // explicitly instead of silently falling back to the real default profile.
+  const spaceSeparated = spaceSeparatedUserDataDirectory(input.argv);
+  if (spaceSeparated !== undefined) {
+    const directory = resolve(spaceSeparated);
+    host.setPath('userData', directory);
+    return { directory, isolated: true, migrated: false };
+  }
   const isolated = isolatedUserDataDirectory(input);
   if (isolated !== undefined) {
     host.setPath('userData', isolated);

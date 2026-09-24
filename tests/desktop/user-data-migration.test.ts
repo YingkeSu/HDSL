@@ -37,13 +37,14 @@ import {
   legacyUserDataDirectory,
   MIGRATION_LOCK_FILE,
   resolveUserDataDirectory,
+  spaceSeparatedUserDataDirectory,
   USER_DATA_DIR_SWITCH,
   chromiumUserDataDirectory,
   type DirectoryState,
   type UserDataFileSystem,
   type UserDataNote,
 } from '../../apps/desktop/src/main/user-data.js';
-import { explicitDataRoot } from '../../apps/desktop/src/main/data-root.js';
+import { explicitDataRoot, resolveDataRoot } from '../../apps/desktop/src/main/data-root.js';
 
 const HOST = 'test-host';
 const APP_DATA = '/tmp/appdata';
@@ -112,31 +113,77 @@ describe('userData directory naming (issue #149)', () => {
 });
 
 describe('explicit data-root detection (issue #149)', () => {
-  it('detects the flag and the environment value', () => {
+  it('detects the space form, the equals form and the environment value', () => {
     expect(explicitDataRoot({ argv: ['electron', '--hdsl-data-root', '/tmp/root'], env: {} })).toBe(
       '/tmp/root',
+    );
+    expect(explicitDataRoot({ argv: ['electron', '--hdsl-data-root=/tmp/equals'], env: {} })).toBe(
+      '/tmp/equals',
     );
     expect(explicitDataRoot({ argv: ['electron'], env: { HDSL_DATA_ROOT: '/tmp/env' } })).toBe(
       '/tmp/env',
     );
   });
 
-  it('refuses a malformed override so it is not treated as isolation', () => {
+  it('resolves duplicates deterministically and refuses malformed overrides', () => {
+    // First space form wins, then first equals form, then the environment.
+    expect(
+      explicitDataRoot({ argv: ['--hdsl-data-root', '/first', '--hdsl-data-root', '/second'], env: {} }),
+    ).toBe('/first');
+    expect(
+      explicitDataRoot({ argv: ['--hdsl-data-root=/one', '--hdsl-data-root=/two'], env: {} }),
+    ).toBe('/one');
+    expect(
+      explicitDataRoot({ argv: ['--hdsl-data-root=/flag'], env: { HDSL_DATA_ROOT: '/env' } }),
+    ).toBe('/flag');
     expect(explicitDataRoot({ argv: ['electron', '--hdsl-data-root'], env: {} })).toBeUndefined();
+    expect(explicitDataRoot({ argv: ['electron', '--hdsl-data-root='], env: {} })).toBeUndefined();
     expect(explicitDataRoot({ argv: ['electron'], env: { HDSL_DATA_ROOT: '' } })).toBeUndefined();
     expect(explicitDataRoot({ argv: ['electron'], env: { HDSL_DATA_ROOT: '  ' } })).toBeUndefined();
     expect(explicitDataRoot({ argv: ['electron'], env: {} })).toBeUndefined();
   });
+
+  it('feeds resolveDataRoot so both forms select the same data root', () => {
+    expect(
+      resolveDataRoot({
+        argv: ['electron', '--hdsl-data-root=/tmp/equals'],
+        env: {},
+        userDataDirectory: '/tmp/user-data',
+      }),
+    ).toBe('/tmp/equals');
+    expect(
+      resolveDataRoot({
+        argv: ['electron'],
+        env: {},
+        userDataDirectory: '/tmp/user-data',
+      }),
+    ).toBe('/tmp/user-data');
+  });
 });
 
 describe('Chromium --user-data-dir parsing (issue #149)', () => {
-  it('reads both switch spellings and ignores empty or valueless forms', () => {
+  it('recognizes only the Chromium --switch=value form', () => {
     expect(chromiumUserDataDirectory([`${USER_DATA_DIR_SWITCH}=/tmp/profile`])).toBe('/tmp/profile');
-    expect(chromiumUserDataDirectory([USER_DATA_DIR_SWITCH, '/tmp/profile'])).toBe('/tmp/profile');
     expect(chromiumUserDataDirectory([`${USER_DATA_DIR_SWITCH}=`])).toBeUndefined();
+    expect(chromiumUserDataDirectory([USER_DATA_DIR_SWITCH, '/tmp/profile'])).toBeUndefined();
     expect(chromiumUserDataDirectory([USER_DATA_DIR_SWITCH])).toBeUndefined();
-    expect(chromiumUserDataDirectory([USER_DATA_DIR_SWITCH, '--hdsl-data-root'])).toBeUndefined();
     expect(chromiumUserDataDirectory([])).toBeUndefined();
+  });
+
+  it('follows Chromium last-wins for a duplicate equals switch', () => {
+    expect(
+      chromiumUserDataDirectory([`${USER_DATA_DIR_SWITCH}=/first`, `${USER_DATA_DIR_SWITCH}=/second`]),
+    ).toBe('/second');
+  });
+
+  it('reads the space form separately so it can be normalized instead of trusted', () => {
+    expect(spaceSeparatedUserDataDirectory([USER_DATA_DIR_SWITCH, '/tmp/profile'])).toBe(
+      '/tmp/profile',
+    );
+    expect(spaceSeparatedUserDataDirectory([`${USER_DATA_DIR_SWITCH}=`])).toBeUndefined();
+    expect(spaceSeparatedUserDataDirectory([USER_DATA_DIR_SWITCH])).toBeUndefined();
+    expect(spaceSeparatedUserDataDirectory([USER_DATA_DIR_SWITCH, '--hdsl-data-root'])).toBeUndefined();
+    expect(spaceSeparatedUserDataDirectory([])).toBeUndefined();
   });
 });
 
@@ -146,6 +193,12 @@ describe('isolated profile bootstrap (issue #149)', () => {
   it('redirects the profile under an explicit --hdsl-data-root', () => {
     expect(
       isolatedUserDataDirectory({ argv: ['electron', '--hdsl-data-root', dataRoot], env: {} }),
+    ).toBe(`${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`);
+  });
+
+  it('redirects the profile under the equals form --hdsl-data-root=<path>', () => {
+    expect(
+      isolatedUserDataDirectory({ argv: ['electron', `--hdsl-data-root=${dataRoot}`], env: {} }),
     ).toBe(`${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`);
   });
 
@@ -515,20 +568,95 @@ describe('applyUserDataBootstrap on the default path (issue #149)', () => {
     expect(setPaths).toEqual([]);
   });
 
-  it('uses an explicit --user-data-dir without creating or migrating the default', () => {
+  it('round-trips an explicit --user-data-dir without creating or migrating the default', () => {
     const explicit = '/tmp/hdsl-explicit-profile';
     const fake = fakeFileSystem({ dirs: [[legacy, 'populated']] });
-    const { host, created, setPaths } = hostWith(explicit);
-    applyUserDataBootstrap(host, {
+    const { host, created, setPaths } = hostWith();
+    const outcome = applyUserDataBootstrap(host, {
       argv: [`--hdsl-data-root=/tmp/root`, `${USER_DATA_DIR_SWITCH}=${explicit}`],
       env: {},
       appDataDirectory: APP_DATA,
       fileSystem: fake.fileSystem,
       hostname: HOST,
     });
-    expect(created).toEqual([explicit]);
-    expect(created).not.toContain(target);
-    expect(setPaths).toEqual([]);
+    expect(outcome).toEqual({ directory: explicit, isolated: true, migrated: false });
+    // `getPath('userData')` is what creates the directory, so it is never called.
+    expect(created).toEqual([]);
+    expect(setPaths).toEqual([`userData=${explicit}`]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('applies a space-separated --user-data-dir that Chromium would ignore', () => {
+    // Chromium treats the space form as a positional argument; without this
+    // normalization the run would fall back to the real default profile.
+    const explicit = '/tmp/hdsl-space-profile';
+    const fake = fakeFileSystem({ dirs: [[legacy, 'populated']] });
+    const { host, created, setPaths } = hostWith();
+    const outcome = applyUserDataBootstrap(host, {
+      argv: ['--hdsl-data-root', '/tmp/root', USER_DATA_DIR_SWITCH, explicit],
+      env: {},
+      appDataDirectory: APP_DATA,
+      fileSystem: fake.fileSystem,
+      hostname: HOST,
+    });
+    expect(outcome).toEqual({ directory: explicit, isolated: true, migrated: false });
+    expect(created).toEqual([]);
+    expect(setPaths).toEqual([`userData=${explicit}`]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('prefers the equals form when both switch spellings are present', () => {
+    const fake = fakeFileSystem({ dirs: [[legacy, 'populated']] });
+    const { host, setPaths } = hostWith();
+    const outcome = applyUserDataBootstrap(host, {
+      argv: [`${USER_DATA_DIR_SWITCH}=/tmp/equals`, USER_DATA_DIR_SWITCH, '/tmp/space'],
+      env: {},
+      appDataDirectory: APP_DATA,
+      fileSystem: fake.fileSystem,
+      hostname: HOST,
+    });
+    expect(outcome.directory).toBe('/tmp/equals');
+    expect(setPaths).toEqual(['userData=/tmp/equals']);
+  });
+
+  it('isolates an equals-form --hdsl-data-root without creating the default', () => {
+    const dataRoot = '/tmp/hdsl-equals-root';
+    const fake = fakeFileSystem({ dirs: [[legacy, 'populated']] });
+    const { host, created, setPaths } = hostWith();
+    const outcome = applyUserDataBootstrap(host, {
+      argv: ['electron', `--hdsl-data-root=${dataRoot}`],
+      env: {},
+      appDataDirectory: APP_DATA,
+      fileSystem: fake.fileSystem,
+      hostname: HOST,
+    });
+    expect(outcome).toEqual({
+      directory: `${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`,
+      isolated: true,
+      migrated: false,
+    });
+    expect(created).toEqual([]);
+    expect(setPaths).toEqual([`userData=${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it('prefers an explicit data-root flag over the environment', () => {
+    const dataRoot = '/tmp/flag-wins-root';
+    const fake = fakeFileSystem({ dirs: [[legacy, 'populated']] });
+    const { host, created } = hostWith();
+    const outcome = applyUserDataBootstrap(host, {
+      argv: ['electron', '--hdsl-data-root', dataRoot],
+      env: { HDSL_DATA_ROOT: '/tmp/env-root' },
+      appDataDirectory: APP_DATA,
+      fileSystem: fake.fileSystem,
+      hostname: HOST,
+    });
+    expect(outcome).toEqual({
+      directory: `${dataRoot}/${ISOLATED_PROFILE_DIRECTORY}`,
+      isolated: true,
+      migrated: false,
+    });
+    expect(created).toEqual([]);
     expect(fake.calls).toEqual([]);
   });
 });

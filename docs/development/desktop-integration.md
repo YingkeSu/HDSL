@@ -49,8 +49,8 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 
 ## dataRoot 与单实例/独占
 
-- 解析优先级：`--hdsl-data-root <path>` > `HDSL_DATA_ROOT` > Electron `userData`。
-- 该 flag 只接受**空格分隔**写法（`resolveDataRoot` 按 `argv.indexOf` + 下一参数取值）；`--hdsl-data-root=<path>` 等号写法**不生效**，会静默回退到 `userData`（表现为“尚无环境”）。
+- 解析优先级：`--hdsl-data-root <path>` / `--hdsl-data-root=<path>` > `HDSL_DATA_ROOT` > Electron `userData`。
+- 该 flag 同时接受**空格分隔**与**等号**两种写法（`explicitDataRoot` 依次识别）；`--hdsl-data-root=<path>` 不再静默回退到 `userData`。显式 dataRoot 或 `--user-data-dir` 的启动都会在首次 `getPath('userData')` 之前重定向 profile，不创建/迁移真实默认 profile；Chromium 忽略的 `--user-data-dir <path>` 空格写法由主进程显式 setPath 补齐。
 - 双重门禁：`app.requestSingleInstanceLock()`（同 userData 的第二进程直接退出）**与**
   core 跨进程 dataRoot 独占租约（`service.open()`，等待 1500 ms）。
 - 拿不到租约：原生错误框 + 退出，不提供可变更 UI；变更类调用返回 `ENVIRONMENT_BUSY`。
