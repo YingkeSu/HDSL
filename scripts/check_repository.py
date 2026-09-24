@@ -68,15 +68,72 @@ for base in (ROOT / 'specs', ROOT / 'packages/runtime/catalog'):
         except (ValueError, OSError) as exc:
             errors.append(f'{path.relative_to(ROOT)}: {exc}')
 
-spec = (ROOT / 'specs/001-environment-lifecycle/spec.md').read_text()
-tasks = (ROOT / 'specs/001-environment-lifecycle/tasks.md').read_text()
-for prefix, content in [('FR', spec), ('T', tasks)]:
-    for number in range(1, 9):
-        marker = f'{prefix}-{number:03}' if prefix == 'FR' else f'T{number:03}'
-        if marker not in content:
-            errors.append(f'Missing requirement/task: {marker}')
+# Requirement / task id integrity (issue #15 residual).
+#
+# The previous revision hardcoded a fixed `range(1, 9)`: once the 001 slice
+# added FR-009+/T009+ the check silently stopped verifying them, i.e. it went
+# stale rather than failing. This revision derives the declared ids from the
+# documents (spec-driven range) and verifies them against the frozen baseline
+# contract below. Adding new contiguous ids needs no edit here; dropping,
+# renumbering or duplicating a frozen id fails.
+FROZEN_FR_IDS = tuple(range(1, 9))  # FR-001..FR-008, frozen by T003 (see #15)
+FROZEN_TASK_IDS = tuple(range(1, 9))  # T001..T008; T008a/T008b are sub-slices
+
+FR_DEFINITION = re.compile(r'^\s*-\s*\*\*(FR-\d{3})\*\*:', re.M)
+TASK_DEFINITION = re.compile(r'^\s*-\s*\[[ xX]\]\s*(T\d{3}(?:\.\d+)?[a-z]?)', re.M)
+
+
+def _marker(prefix, number):
+    return f'{prefix}-{number:03d}' if prefix == 'FR' else f'T{number:03d}'
+
+
+def _id_number(token):
+    if token.startswith('FR-'):
+        return int(token[3:])
+    match = re.match(r'T(\d{3})', token)
+    return int(match.group(1)) if match else None
+
+
+def _collect_definitions(pattern, text, label):
+    tokens = pattern.findall(text)
+    if not tokens:
+        errors.append(f'Missing {label}: the document defines no {label} ids')
+    for token in sorted(set(tokens)):
+        if tokens.count(token) > 1:
+            errors.append(f'Duplicate {label} definition: {token}')
+    return tokens
+
+
+def _verify_id_contract(label, prefix, tokens, frozen):
+    numbers = {number for number in (_id_number(token) for token in tokens) if number is not None}
+    # Spec-driven range: numbering must stay contiguous from FR-001/T001 so an
+    # accidental renumber that leaves a gap is reported.
+    for number in range(1, (max(numbers) + 1) if numbers else 1):
+        if number not in numbers:
+            errors.append(f'Missing {label}: {_marker(prefix, number)}')
+    # Explicit frozen contract: an id that existed at the T003 freeze must not
+    # disappear even when the numbering above is compressed without a gap.
+    for number in frozen:
+        if number not in numbers:
+            errors.append(f'Missing {label}: {_marker(prefix, number)}')
+
+
+spec_path = ROOT / 'specs/001-environment-lifecycle/spec.md'
+tasks_path = ROOT / 'specs/001-environment-lifecycle/tasks.md'
+if spec_path.is_file() and tasks_path.is_file():
+    fr_tokens = _collect_definitions(FR_DEFINITION, spec_path.read_text(), 'requirement')
+    task_tokens = _collect_definitions(TASK_DEFINITION, tasks_path.read_text(), 'task')
+    _verify_id_contract('requirement', 'FR', fr_tokens, FROZEN_FR_IDS)
+    _verify_id_contract('task', 'T', task_tokens, FROZEN_TASK_IDS)
+    requirement_count = len({_id_number(token) for token in fr_tokens})
+    task_count = len({_id_number(token) for token in task_tokens})
+else:
+    requirement_count = 0
+    task_count = 0
+    errors.append('Cannot verify requirement/task ids: spec.md or tasks.md is missing')
+
 if errors:
     print('\n'.join(errors))
     raise SystemExit(1)
-print(f'PASS: {len(REQUIRED)} required files, {len(authored)} authored docs, {links} local links, {json_count} JSON files, 8 requirements and 8 tasks.')
+print(f'PASS: {len(REQUIRED)} required files, {len(authored)} authored docs, {links} local links, {json_count} JSON files, {requirement_count} requirements and {task_count} tasks.')
 print('Scope: repository integrity only; no DSH runtime or desktop acceptance tests.')
