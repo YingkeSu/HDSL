@@ -79,8 +79,15 @@ export function DshVersions({ state, actions }: DshVersionsProps): ReactElement 
               : listing.distTags.map((entry) => `${entry.tag}=${entry.version}`).join('，')}
           </p>
           {listing.versions.map((entry) => {
+            // The installable set is only known once `catalog.list` is ready. While
+            // it is still loading (or failed) the catalog is empty, and an empty
+            // catalog must not be read as "another platform" (review 5300872760).
+            const catalogReady = state.phase === 'ready';
             const installableHere =
-              entry.supported && isVersionInstallableOnHost(state, entry.catalogCombinationIds);
+              entry.supported &&
+              catalogReady &&
+              isVersionInstallableOnHost(state, entry.catalogCombinationIds);
+            const unavailableHere = entry.supported && catalogReady && !installableHere;
             return (
               <div className="runtime-row" key={entry.version}>
                 <div>
@@ -90,14 +97,16 @@ export function DshVersions({ state, actions }: DshVersionsProps): ReactElement 
                       ? '未支持：不在受审组合白名单内'
                       : installableHere
                         ? '已受审：可经既有受管安装新建环境'
-                        : '已受审：当前平台没有可安装的受审组合'}
+                        : unavailableHere
+                          ? '已受审：当前平台没有可安装的受审组合'
+                          : '已受审：运行时组合尚未加载'}
                     {entry.publishedAt === null
                       ? ''
                       : ` · 发布 ${formatTimestamp(entry.publishedAt)}`}
                   </small>
                   {entry.catalogCombinationIds.length > 0 && (
                     <small>
-                      {installableHere ? '受审组合：' : '受审组合（其他平台）：'}
+                      {unavailableHere ? '受审组合（其他平台）：' : '受审组合：'}
                       {entry.catalogCombinationIds.join('，')}
                     </small>
                   )}
