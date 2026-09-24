@@ -37,7 +37,12 @@ import {
   type ContractMethod,
   type MethodInputs,
 } from './methods.js';
-import { formatHostPlatform, isHostPlatformSupported, type HostPlatform } from './platform.js';
+import {
+  combinationsForHost,
+  formatHostPlatform,
+  isHostPlatformSupported,
+  type HostPlatform,
+} from './platform.js';
 import { API_VERSION, isWellFormedApiVersion } from './version.js';
 import type { ContractPort, StoredOutcome } from './context.js';
 import {
@@ -272,7 +277,15 @@ const execute = (
       const verified = combinations.filter(
         (combination) => combination.compatibility.status === 'verified',
       );
-      return { response: contractOk(API_VERSION, verified), executed: true };
+      // `catalog.list` is the INSTALLABLE surface for this build: a combination
+      // that targets another host would make the UI offer an action that the
+      // platform gate below must refuse, and a host without host evidence gets
+      // an empty list instead of a false support claim. The full port catalog is
+      // unchanged, so a foreign-host combination is still resolvable and is
+      // refused on create/switch with a specific UNSUPPORTED_COMBINATION rather
+      // than a generic NOT_FOUND.
+      const installable = combinationsForHost(runtime.port.host, verified);
+      return { response: contractOk(API_VERSION, installable), executed: true };
     }
     case 'environments.list': {
       const outcome = runtime.port.listEnvironments();
