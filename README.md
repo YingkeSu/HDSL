@@ -40,10 +40,10 @@
 | 你的电脑 | 下载文件 | 使用范围 |
 | --- | --- | --- |
 | Mac，Apple 芯片（M 系列） | `HDSL-…-mac-arm64.dmg` | 当前主要体验平台 |
-| Windows，64 位 Intel / AMD | `HDSL-…-win-x64-…-setup.exe`（安装器）或 `HDSL-…-win-x64-…-portable.zip`（便携） | 界面预览；暂不能创建、安装或运行 DSH 环境 |
+| Windows，64 位 Intel / AMD | `HDSL-…-win-x64-…-setup.exe`（安装器，随 Windows 安装器打包提供）或 `HDSL-…-win-x64-…-portable.zip`（便携） | 界面预览；暂不能创建、安装或运行 DSH 环境 |
 | Intel Mac、Windows ARM、Linux | 暂无 | 尚未支持 |
 
-**这是早期体验版。** Mac 包未经过 Apple Developer ID 签名与公证，Windows 包也未签名；系统可能提示无法验证开发者。Windows 尚未经过实机使用验收。每次发布的具体情况以 Release 说明为准。
+**这是早期体验版。** Mac 包未经过 Apple Developer ID 签名与公证，Windows 包也未签名；系统可能提示无法验证开发者。Windows 尚未经过实机使用验收。每次发布的具体情况以 Release 说明为准。本次新增的 macOS `.dmg` 与 Windows 安装器 `.exe` 资产从包含对应打包变更的下一次发布起提供；此前的 Release 尚无这些资产。
 
 Mac：打开下载的 `.dmg`，把 `HDSL.app` 拖到「应用程序」，再推出磁盘映像（同版本的 `.zip` 为备用解包产物）。Windows：双击 `…-setup.exe` 安装器安装（未签名，SmartScreen 可能提示），或完整解压便携 ZIP 后打开 `HDSL.exe`，保留旁边的文件。
 

@@ -84,24 +84,18 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd release-assets
-          # Each platform job is a hard `needs:` dependency, so its checksums and
-          # provenance must exist whenever publish runs; a missing file is a
-          # failure, not a silent partial release.
-          for required in SHA256SUMS.txt SHA256SUMS-mac.txt build-info.txt build-info-mac.txt; do
-            if [ ! -f "$required" ]; then
-              printf 'FAIL: missing required release file %s\n' "$required" >&2
+          # Every artifact and provenance file below is produced by a hard
+          # `needs:` dependency. A missing or empty one is release-blocking:
+          # never fall through to a partial (mac-only) checksum file.
+          for required in SHA256SUMS.txt SHA256SUMS-mac.txt SHA256SUMS-installer.txt \
+                          build-info.txt build-info-mac.txt build-info-installer.txt; do
+            if [ ! -s "$required" ]; then
+              printf 'FAIL: missing or empty required release file %s\n' "$required" >&2
               exit 1
             fi
           done
-          # Verify every checksum file that this run produced. The Windows
-          # installer job may not exist yet on this commit; a missing file is
-          # reported, not silently ignored.
           for sums in SHA256SUMS.txt SHA256SUMS-mac.txt SHA256SUMS-installer.txt; do
-            if [ -f "$sums" ]; then
-              sha256sum -c "$sums"
-            else
-              printf 'note: %s absent; that artifact was not built in this run\n' "$sums"
-            fi
+            sha256sum -c "$sums"
           done
           mv build-info.txt build-info-windows.txt
           cat SHA256SUMS-mac.txt >> SHA256SUMS.txt
@@ -109,18 +103,15 @@ jobs:
           shopt -s nullglob
           # Exact artifact shapes only: this must never pick up an un-packaged
           # win-unpacked/HDSL.exe or an unrelated file from the workspace.
+          # The Windows installer name is the contract agreed with the Windows
+          # packaging change; a release without it fails instead of shipping
+          # silently without the NSIS installer.
           zips=(./*.zip)
           dmgs=(./HDSL-*-mac-arm64.dmg)
-          installers=(./HDSL-*-setup.exe)
-          if [ ${#zips[@]} -eq 0 ] || [ ${#dmgs[@]} -eq 0 ]; then
-            printf 'FAIL: expected at least one *.zip and one HDSL-*-mac-arm64.dmg asset\n' >&2
+          installers=(./HDSL-*-win-x64-*-setup.exe)
+          if [ ${#zips[@]} -eq 0 ] || [ ${#dmgs[@]} -eq 0 ] || [ ${#installers[@]} -eq 0 ]; then
+            printf 'FAIL: expected at least one *.zip, one HDSL-*-mac-arm64.dmg and one HDSL-*-win-x64-*-setup.exe asset\n' >&2
             exit 1
-          fi
-          if [ ${#installers[@]} -gt 0 ]; then
-            if [ ! -f SHA256SUMS-installer.txt ] || [ ! -f build-info-installer.txt ]; then
-              printf 'FAIL: setup.exe present but its checksum/provenance file is missing\n' >&2
-              exit 1
-            fi
           fi
           assets=("${zips[@]}" "${dmgs[@]}" "${installers[@]}")
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS.txt build-info-*.txt \

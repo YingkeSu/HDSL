@@ -94,6 +94,7 @@ const main = () => {
   }
   const mountPoint = mkdtempSync(join(tmpdir(), 'hdsl-dmg-'));
   let attached = false;
+  let detachFailed = false;
   let errors = [];
   try {
     execFileSync('hdiutil', attachArguments(dmg, mountPoint), { stdio: 'inherit' });
@@ -103,9 +104,16 @@ const main = () => {
     if (attached) {
       const detached = detach(mountPoint);
       if (detached) rmSync(mountPoint, { recursive: true, force: true });
+      else detachFailed = true;
     } else {
       rmSync(mountPoint, { recursive: true, force: true });
     }
+  }
+  if (detachFailed) {
+    // A leaked mount is a failed check, not a warning.
+    process.stderr.write(`FAIL: image stayed mounted at ${mountPoint}\n`);
+    process.exitCode = 1;
+    return;
   }
   if (errors.length) {
     process.stderr.write(`${errors.join('\n')}\n`);

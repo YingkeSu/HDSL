@@ -14,8 +14,7 @@
  * - the release workflow builds, hashes and uploads the DMG, and the publish
  *   job accepts `.dmg` (and the Windows `.exe`) assets.
  */
-import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -94,17 +93,56 @@ describe('macOS app and DMG content checkers', () => {
     expect(args.slice(-2)).toEqual(['-mountpoint', '/tmp/hdsl-mnt']);
   });
 
-  it('fails closed when the mounted image lacks the app or the Applications link', () => {
+  // Layout is a structural check: the link is judged on itself, so it holds on
+  // every host. Whether a real image actually mounts is covered only by the
+  // macOS workflow run and the local `verify-mac-dmg.mjs` evidence, never by
+  // this simulation.
+  it('fails closed when the mounted image lacks the app and the Applications link', () => {
     const mountPoint = mkdtempSync(join(tmpdir(), 'hdsl-dmg-test-'));
     try {
       expect(inspectMountedImage(mountPoint)).toEqual([
         `missing HDSL.app in mounted image: ${join(mountPoint, 'HDSL.app')}`,
         `missing drag-install link in mounted image: ${join(mountPoint, 'Applications')}`,
       ]);
+    } finally {
+      rmSync(mountPoint, { recursive: true, force: true });
+    }
+  });
+
+  it('accepts a correct Applications link, whether or not its target exists here', () => {
+    // The target is '/Applications' by contract. On a Linux runner that path
+    // does not exist, so this is simultaneously the dangling-but-correct case;
+    // lstat must not follow the link to judge presence.
+    const mountPoint = mkdtempSync(join(tmpdir(), 'hdsl-dmg-test-'));
+    try {
       symlinkSync('/Applications', join(mountPoint, 'Applications'));
       expect(inspectMountedImage(mountPoint)).toEqual([
         `missing HDSL.app in mounted image: ${join(mountPoint, 'HDSL.app')}`,
       ]);
+    } finally {
+      rmSync(mountPoint, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a link that points somewhere else', () => {
+    const mountPoint = mkdtempSync(join(tmpdir(), 'hdsl-dmg-test-'));
+    try {
+      symlinkSync('/tmp/somewhere-else', join(mountPoint, 'Applications'));
+      expect(inspectMountedImage(mountPoint)).toContain(
+        `drag-install link does not point at /Applications: ${join(mountPoint, 'Applications')}`,
+      );
+    } finally {
+      rmSync(mountPoint, { recursive: true, force: true });
+    }
+  });
+
+  it('rejects a regular file named Applications', () => {
+    const mountPoint = mkdtempSync(join(tmpdir(), 'hdsl-dmg-test-'));
+    try {
+      writeFileSync(join(mountPoint, 'Applications'), '');
+      expect(inspectMountedImage(mountPoint)).toContain(
+        `drag-install link is not a symlink: ${join(mountPoint, 'Applications')}`,
+      );
     } finally {
       rmSync(mountPoint, { recursive: true, force: true });
     }
@@ -132,14 +170,20 @@ describe('macOS release workflow', () => {
   it('publishes dmg and exe assets, not only zips', () => {
     expect(workflow).toContain('zips=(./*.zip)');
     expect(workflow).toContain('dmgs=(./HDSL-*-mac-arm64.dmg)');
-    expect(workflow).toContain('installers=(./HDSL-*-setup.exe)');
+    expect(workflow).toContain('installers=(./HDSL-*-win-x64-*-setup.exe)');
     expect(workflow).toContain('assets=("${zips[@]}" "${dmgs[@]}" "${installers[@]}")');
     expect(workflow).not.toContain('gh release create "$GITHUB_REF_NAME" ./*.zip');
   });
 
-  it('fails when an expected asset, checksum or provenance file is missing', () => {
-    expect(workflow).toContain('FAIL: missing required release file');
-    expect(workflow).toContain('expected at least one *.zip and one HDSL-*-mac-arm64.dmg asset');
-    expect(workflow).toContain('setup.exe present but its checksum/provenance file is missing');
+  it('fails before publishing when a platform artifact, checksum or provenance file is missing', () => {
+    expect(workflow).toContain('for required in SHA256SUMS.txt SHA256SUMS-mac.txt SHA256SUMS-installer.txt');
+    expect(workflow).toContain('missing or empty required release file');
+    expect(workflow).toContain('expected at least one *.zip, one HDSL-*-mac-arm64.dmg and one HDSL-*-win-x64-*-setup.exe');
+    expect(workflow).toContain('sha256sum -c "$sums"');
+  });
+
+  it('does not accept a merely conditional installer check', () => {
+    expect(workflow).not.toContain('setup.exe present but');
+    expect(workflow).not.toContain('may not exist yet');
   });
 });
