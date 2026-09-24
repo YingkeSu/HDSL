@@ -44,6 +44,7 @@ import {
   spaceSeparatedUserDataDirectory,
   USER_DATA_DIR_SWITCH,
   userDataDirProblem,
+  WINDOWS_PROFILE_LOCK_FILE,
   chromiumUserDataDirectory,
   type DirectoryState,
   type UserDataFileSystem,
@@ -66,6 +67,10 @@ interface FakeInitial {
   readonly symlinks?: readonly string[];
   readonly singletonLocks?: readonly OwnerPair[];
   readonly lockFiles?: readonly OwnerPair[];
+  /** Paths for which `filePresence` reports `present` (e.g. a Windows lockfile). */
+  readonly presentFiles?: readonly string[];
+  /** Paths for which `filePresence` reports `unknown` (unreadable). */
+  readonly unknownFiles?: readonly string[];
 }
 
 const fakeFileSystem = (initial: FakeInitial = {}) => {
@@ -73,10 +78,14 @@ const fakeFileSystem = (initial: FakeInitial = {}) => {
   const symlinks = new Set<string>(initial.symlinks ?? []);
   const singletonLocks = new Map<string, string>(initial.singletonLocks ?? []);
   const lockFiles = new Map<string, string>(initial.lockFiles ?? []);
+  const presentFiles = new Set<string>(initial.presentFiles ?? []);
+  const unknownFiles = new Set<string>(initial.unknownFiles ?? []);
   const calls: string[] = [];
   const fileSystem: UserDataFileSystem = {
     stateOf: (directory) => dirs.get(directory) ?? 'absent',
     isSymbolicLink: (path) => symlinks.has(path),
+    filePresence: (path) =>
+      unknownFiles.has(path) ? 'unknown' : presentFiles.has(path) ? 'present' : 'absent',
     singletonLockTarget: (directory) => singletonLocks.get(directory),
     createLockFile: (path, owner) => {
       calls.push(`lock:${path}`);
@@ -451,6 +460,7 @@ describe('userData migration plan (issue #149)', () => {
   const resolve = (
     fake: ReturnType<typeof fakeFileSystem>,
     isProcessAlive: (pid: number) => boolean = () => false,
+    platform: NodeJS.Platform = 'darwin',
   ): ReturnType<typeof resolveUserDataDirectory> =>
     resolveUserDataDirectory({
       appDataDirectory: APP_DATA,
@@ -459,6 +469,7 @@ describe('userData migration plan (issue #149)', () => {
       hostname: HOST,
       isProcessAlive,
       pid: 4242,
+      platform,
     });
 
   it('leaves an explicit --user-data-dir override untouched', () => {
@@ -508,7 +519,7 @@ describe('userData migration plan (issue #149)', () => {
     expect(fake.calls).toEqual([]);
   });
 
-  it('never renames a profile a live process still owns', () => {
+  it('keeps a profile a live process still owns', () => {
     const fake = fakeFileSystem({
       dirs: [[legacy, 'populated']],
       singletonLocks: [[legacy, `${HOST}-999`]],
@@ -519,6 +530,40 @@ describe('userData migration plan (issue #149)', () => {
       note: 'legacy-in-use',
     });
     expect(fake.calls).toEqual([]);
+  });
+
+  it('on Windows keeps the legacy profile while the Chromium lockfile exists', () => {
+    const fake = fakeFileSystem({
+      dirs: [[legacy, 'populated']],
+      presentFiles: [join(legacy, WINDOWS_PROFILE_LOCK_FILE)],
+    });
+    expect(resolve(fake, () => false, 'win32')).toEqual({
+      directory: legacy,
+      migrated: false,
+      note: 'legacy-in-use',
+    });
+    // A live owner must never reach the rename at all.
+    expect(fake.calls).toEqual([]);
+    expect(fake.calls.some((call) => call.startsWith('rename:'))).toBe(false);
+  });
+
+  it('on Windows preserves the legacy profile when lockfile presence is unknown', () => {
+    const fake = fakeFileSystem({
+      dirs: [[legacy, 'populated']],
+      unknownFiles: [join(legacy, WINDOWS_PROFILE_LOCK_FILE)],
+    });
+    expect(resolve(fake, () => false, 'win32')).toEqual({
+      directory: legacy,
+      migrated: false,
+      note: 'legacy-in-use',
+    });
+    expect(fake.calls.some((call) => call.startsWith('rename:'))).toBe(false);
+  });
+
+  it('on Windows migrates when no Chromium lockfile is present', () => {
+    const fake = fakeFileSystem({ dirs: [[legacy, 'populated']] });
+    expect(resolve(fake, () => false, 'win32')).toEqual({ directory: target, migrated: true });
+    expect(fake.calls).toContain(`rename:${legacy}->${target}`);
   });
 
   it('reclaims a profile whose lock owner is dead', () => {
@@ -920,6 +965,26 @@ describe('userData migration effect (real filesystem, issue #149)', () => {
 
     expect(resolution).toEqual({ directory: target, migrated: false, note: 'legacy-retained' });
     expect(readFileSync(join(legacy, 'environment.json'), 'utf8')).toBe('{"id":"env-1"}\n');
+  });
+
+  it('on Windows preserves a legacy profile whose Chromium lockfile exists', () => {
+    const base = appData();
+    const legacy = legacyUserDataDirectory(base);
+    const target = defaultUserDataDirectory(base);
+    mkdirSync(legacy, { recursive: true });
+    writeFileSync(join(legacy, 'environment.json'), '{"id":"env-1"}\n');
+    writeFileSync(join(legacy, WINDOWS_PROFILE_LOCK_FILE), '');
+
+    const resolution = resolveUserDataDirectory({
+      appDataDirectory: base,
+      userDataDirectory: target,
+      platform: 'win32',
+    });
+
+    expect(resolution).toEqual({ directory: legacy, migrated: false, note: 'legacy-in-use' });
+    // The data was neither moved nor attempted, and the target was not created.
+    expect(readFileSync(join(legacy, 'environment.json'), 'utf8')).toBe('{"id":"env-1"}\n');
+    expect(() => readFileSync(join(target, 'environment.json'), 'utf8')).toThrow();
   });
 
   it.skipIf(process.platform === 'win32')('never moves a symlinked legacy directory', () => {

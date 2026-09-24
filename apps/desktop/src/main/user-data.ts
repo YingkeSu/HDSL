@@ -29,10 +29,14 @@
  * - a symlinked legacy/target directory is never moved or replaced, so a
  *   migration cannot escape `appData` or follow an unexpected link;
  * - the decision is taken under an atomically-created lock file with a live
- *   owner probe, and a profile that a running process still owns is never
- *   renamed. When the lock is held or the profile is in use, the legacy
- *   directory is preserved and the outcome is reported instead of risking a
- *   rename;
+ *   owner probe, and a profile that another process owns is preserved rather
+ *   than renamed. The ownership probe is platform-specific: POSIX reads the
+ *   Chromium `SingletonLock` symlink and checks process liveness, Windows only
+ *   treats `<legacy>/lockfile` as "in use or unknown" (Chromium holds it with
+ *   `FILE_FLAG_DELETE_ON_CLOSE`, and a permission/read failure is preserved too,
+ *   never treated as free). When the lock is held or the profile is in use, the
+ *   legacy directory is preserved and the outcome is reported instead of
+ *   risking a rename;
  * - when both directories hold data it keeps the target and reports the
  *   retained legacy directory instead of merging two profiles;
  * - when the move fails it falls back to the legacy directory and reports the
@@ -66,11 +70,16 @@ import { LEGACY_PRODUCT_NAME, PRODUCT_NAME } from './product-identity.js';
  */
 export type DirectoryState = 'absent' | 'empty' | 'populated' | 'unreadable';
 
+/** Presence of a single path; `unknown` means it could not be inspected. */
+export type FilePresence = 'absent' | 'present' | 'unknown';
+
 /** Narrow filesystem seam so the migration plan is testable without real dirs. */
 export interface UserDataFileSystem {
   stateOf(directory: string): DirectoryState;
   /** True when the path itself is a symbolic link (never followed). */
   isSymbolicLink(path: string): boolean;
+  /** Whether a single path exists; non-`ENOENT` failures are `unknown`. */
+  filePresence(path: string): FilePresence;
   /** Chromium `SingletonLock` link target, or `undefined` when absent/unreadable. */
   singletonLockTarget(directory: string): string | undefined;
   /** Atomic exclusive create; returns false when the lock already exists. */
@@ -97,6 +106,13 @@ export const defaultUserDataDirectory = (appDataDirectory: string): string =>
 
 /** Profile directory used under an explicit `--hdsl-data-root`/`HDSL_DATA_ROOT`. */
 export const ISOLATED_PROFILE_DIRECTORY = 'electron-profile';
+
+/**
+ * Chromium's Windows `ProcessSingleton` lock, held with
+ * `FILE_FLAG_DELETE_ON_CLOSE`, so its presence means a live instance owns the
+ * profile. It is a regular file (unlike the POSIX `SingletonLock` symlink).
+ */
+export const WINDOWS_PROFILE_LOCK_FILE = 'lockfile';
 
 /** Chromium command-line switch that pins the profile directory. */
 export const USER_DATA_DIR_SWITCH = '--user-data-dir';
@@ -188,6 +204,17 @@ const isSymbolicLink = (path: string): boolean => {
   }
 };
 
+const filePresence = (path: string): FilePresence => {
+  try {
+    lstatSync(path);
+    return 'present';
+  } catch (error) {
+    // Only a missing path is "absent"; a permission/I/O failure is "unknown"
+    // and must be treated conservatively by the caller.
+    return isEnoent(error) ? 'absent' : 'unknown';
+  }
+};
+
 const singletonLockTarget = (directory: string): string | undefined => {
   try {
     return readlinkSync(join(directory, 'SingletonLock'));
@@ -210,6 +237,7 @@ const processIsAlive = (pid: number): boolean => {
 export const nativeUserDataFileSystem: UserDataFileSystem = {
   stateOf,
   isSymbolicLink,
+  filePresence,
   singletonLockTarget,
   createLockFile: (path, owner) => {
     try {
@@ -283,6 +311,8 @@ export interface ResolveUserDataInput {
   readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
   /** Test seam; defaults to `process.pid`. */
   readonly pid?: number | undefined;
+  /** Test seam; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform | undefined;
 }
 
 interface MigrationContext {
@@ -290,7 +320,33 @@ interface MigrationContext {
   readonly hostname: string;
   readonly isProcessAlive: (pid: number) => boolean;
   readonly pid: number;
+  readonly platform: NodeJS.Platform;
 }
+
+/**
+ * Best-effort "another instance owns this profile" probe. POSIX uses the
+ * Chromium `SingletonLock` symlink plus a process liveness check; Windows uses
+ * the `lockfile` Chromium holds with `FILE_FLAG_DELETE_ON_CLOSE` (a regular
+ * file, not a symlink). A positive signal preserves the legacy directory
+ * instead of renaming it out from under the live process.
+ */
+const isProfileLocked = (
+  fileSystem: UserDataFileSystem,
+  legacy: string,
+  context: MigrationContext,
+): boolean => {
+  if (context.platform === 'win32') {
+    // Chromium holds `<userData>/lockfile` with `FILE_FLAG_DELETE_ON_CLOSE`,
+    // so `present` is a live owner and `unknown` cannot be ruled out; both
+    // preserve the legacy directory rather than risk renaming a live profile.
+    return fileSystem.filePresence(join(legacy, WINDOWS_PROFILE_LOCK_FILE)) !== 'absent';
+  }
+  return isLiveLockOwner({
+    owner: fileSystem.singletonLockTarget(legacy),
+    hostname: context.hostname,
+    isProcessAlive: context.isProcessAlive,
+  });
+};
 
 const acquireMigrationLock = (
   appDataDirectory: string,
@@ -329,6 +385,7 @@ export const resolveUserDataDirectory = (input: ResolveUserDataInput): UserDataR
     hostname: input.hostname ?? hostname(),
     isProcessAlive: input.isProcessAlive ?? processIsAlive,
     pid: input.pid ?? process.pid,
+    platform: input.platform ?? process.platform,
   };
   const target = defaultUserDataDirectory(input.appDataDirectory);
   // An explicit `--user-data-dir` (or a prior `setPath`) is not the default
@@ -355,13 +412,7 @@ export const resolveUserDataDirectory = (input: ResolveUserDataInput): UserDataR
   ) {
     return { directory: legacy, migrated: false, note: 'legacy-symlink' };
   }
-  if (
-    isLiveLockOwner({
-      owner: fileSystem.singletonLockTarget(legacy),
-      hostname: context.hostname,
-      isProcessAlive: context.isProcessAlive,
-    })
-  ) {
+  if (isProfileLocked(fileSystem, legacy, context)) {
     // Another instance still owns this profile; renaming it would disrupt a
     // live process. Use the legacy directory so the single-instance lock can
     // refuse the concurrent start instead.
@@ -517,6 +568,8 @@ export interface UserDataBootstrapInput extends IsolatedUserDataInput {
   readonly hostname?: string | undefined;
   readonly isProcessAlive?: ((pid: number) => boolean) | undefined;
   readonly pid?: number | undefined;
+  /** Test seam; defaults to `process.platform`. */
+  readonly platform?: NodeJS.Platform | undefined;
   readonly onNote?: ((note: UserDataNote) => void) | undefined;
 }
 
@@ -572,6 +625,7 @@ export const applyUserDataBootstrap = (
     hostname: input.hostname,
     isProcessAlive: input.isProcessAlive,
     pid: input.pid,
+    platform: input.platform,
   });
   if (resolution.directory !== userData) {
     host.setPath('userData', resolution.directory);
