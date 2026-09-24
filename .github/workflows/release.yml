@@ -84,6 +84,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd release-assets
+          # Each platform job is a hard `needs:` dependency, so its checksums and
+          # provenance must exist whenever publish runs; a missing file is a
+          # failure, not a silent partial release.
+          for required in SHA256SUMS.txt SHA256SUMS-mac.txt build-info.txt build-info-mac.txt; do
+            if [ ! -f "$required" ]; then
+              printf 'FAIL: missing required release file %s\n' "$required" >&2
+              exit 1
+            fi
+          done
           # Verify every checksum file that this run produced. The Windows
           # installer job may not exist yet on this commit; a missing file is
           # reported, not silently ignored.
@@ -100,11 +109,20 @@ jobs:
           shopt -s nullglob
           # Exact artifact shapes only: this must never pick up an un-packaged
           # win-unpacked/HDSL.exe or an unrelated file from the workspace.
-          assets=(./*.zip ./HDSL-*-mac-arm64.dmg ./HDSL-*-setup.exe)
-          if [ ${#assets[@]} -eq 0 ]; then
-            printf 'FAIL: no release assets matched (*.zip, HDSL-*-mac-arm64.dmg, HDSL-*-setup.exe)\n' >&2
+          zips=(./*.zip)
+          dmgs=(./HDSL-*-mac-arm64.dmg)
+          installers=(./HDSL-*-setup.exe)
+          if [ ${#zips[@]} -eq 0 ] || [ ${#dmgs[@]} -eq 0 ]; then
+            printf 'FAIL: expected at least one *.zip and one HDSL-*-mac-arm64.dmg asset\n' >&2
             exit 1
           fi
+          if [ ${#installers[@]} -gt 0 ]; then
+            if [ ! -f SHA256SUMS-installer.txt ] || [ ! -f build-info-installer.txt ]; then
+              printf 'FAIL: setup.exe present but its checksum/provenance file is missing\n' >&2
+              exit 1
+            fi
+          fi
+          assets=("${zips[@]}" "${dmgs[@]}" "${installers[@]}")
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS.txt build-info-*.txt \
             --verify-tag --prerelease --title "HDSL $GITHUB_REF_NAME · 体验版" \
             --notes-file ../docs/releases/preview-notes.md

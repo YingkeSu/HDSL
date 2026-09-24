@@ -47,9 +47,17 @@ export const inspectMountedImage = (mountPoint) => {
     errors.push(...inspectMacApp(app));
   }
   const applications = join(mountPoint, 'Applications');
-  if (!existsSync(applications)) {
+  // Use lstat: the link target (/Applications) is macOS-only, so existence
+  // must be checked on the link itself, not on its target.
+  let applicationsStat;
+  try {
+    applicationsStat = lstatSync(applications);
+  } catch {
+    applicationsStat = undefined;
+  }
+  if (applicationsStat === undefined) {
     errors.push(`missing drag-install link in mounted image: ${applications}`);
-  } else if (!lstatSync(applications).isSymbolicLink()) {
+  } else if (!applicationsStat.isSymbolicLink()) {
     errors.push(`drag-install link is not a symlink: ${applications}`);
   } else if (readlinkSync(applications) !== '/Applications') {
     errors.push(`drag-install link does not point at /Applications: ${applications}`);

@@ -130,12 +130,16 @@ describe('macOS release workflow', () => {
   });
 
   it('publishes dmg and exe assets, not only zips', () => {
-    expect(workflow).toContain('assets=(./*.zip ./HDSL-*-mac-arm64.dmg ./HDSL-*-setup.exe)');
-    expect(workflow).toContain('"${assets[@]}"');
+    expect(workflow).toContain('zips=(./*.zip)');
+    expect(workflow).toContain('dmgs=(./HDSL-*-mac-arm64.dmg)');
+    expect(workflow).toContain('installers=(./HDSL-*-setup.exe)');
+    expect(workflow).toContain('assets=("${zips[@]}" "${dmgs[@]}" "${installers[@]}")');
     expect(workflow).not.toContain('gh release create "$GITHUB_REF_NAME" ./*.zip');
   });
 
-  it('fails when no release asset matches instead of publishing silently', () => {
-    expect(workflow).toContain('no release assets matched');
+  it('fails when an expected asset, checksum or provenance file is missing', () => {
+    expect(workflow).toContain('FAIL: missing required release file');
+    expect(workflow).toContain('expected at least one *.zip and one HDSL-*-mac-arm64.dmg asset');
+    expect(workflow).toContain('setup.exe present but its checksum/provenance file is missing');
   });
 });
