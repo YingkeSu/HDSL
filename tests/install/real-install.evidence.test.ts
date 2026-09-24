@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { API_VERSION, createContractRuntime } from '@hdsl/contracts';
 import { createManagedInstall, resolveLayout } from '@hdsl/core';
-import { VERIFIED_COMBINATIONS, createRuntimePort } from '@hdsl/runtime';
+import { VERIFIED_COMBINATIONS, createRuntimePort, readDependencyClosure } from '@hdsl/runtime';
 
 const enabled = process.env['HDSL_REAL_INSTALL'] === '1';
 const keep = process.env['HDSL_EVIDENCE_KEEP'] === '1';
@@ -51,12 +51,13 @@ describe.skipIf(!enabled)('real managed install (opt-in evidence)', () => {
       const results: unknown[] = [];
 
       for (const [index, combination] of VERIFIED_COMBINATIONS.entries()) {
+        const environmentName = `evidence-${combination.dsh.version}-${combination.node.version}`;
         const created = contract.dispatch({
           apiVersion: API_VERSION,
           method: 'environments.create',
           input: {
             requestId: `evidence-create-${String(index)}`,
-            name: `evidence-${combination.node.version}`,
+            name: environmentName,
             catalogCombinationId: combination.id,
           },
         });
@@ -79,7 +80,7 @@ describe.skipIf(!enabled)('real managed install (opt-in evidence)', () => {
         }
         const environment = (
           environments.value as Array<{ id: string; name: string; activeGenerationId: string | null }>
-        ).find((entry) => entry.name === `evidence-${combination.node.version}`);
+        ).find((entry) => entry.name === environmentName);
         expect(environment).toBeDefined();
         if (environment === undefined) {
           return;
@@ -89,9 +90,11 @@ describe.skipIf(!enabled)('real managed install (opt-in evidence)', () => {
         expect(manifest.preflight.skipped).toBe(false);
         expect(manifest.preflight.passed).toBe(true);
         expect(manifest.closure).not.toBeNull();
-        expect(manifest.closure?.packageCount).toBe(585);
+        const supportedClosure = readDependencyClosure(combination.dsh.version);
+        expect(supportedClosure).toBeDefined();
+        expect(manifest.closure?.packageCount).toBe(supportedClosure?.packageCount);
         expect(manifest.node.version).toBe(combination.node.version);
-        expect(manifest.dsh.version).toBe('0.1.5-rc.2');
+        expect(manifest.dsh.version).toBe(combination.dsh.version);
 
         const paths = resolveLayout(dataRoot);
         const generationDirectory = join(
@@ -109,7 +112,7 @@ describe.skipIf(!enabled)('real managed install (opt-in evidence)', () => {
           [join(generationDirectory, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js'), '--version'],
           { encoding: 'utf8', env: { HOME: join(generationDirectory, 'home'), DSH_HOME: join(generationDirectory, 'home'), PATH: `${join(generationDirectory, 'node', 'bin')}:/usr/bin:/bin` } },
         ).trim();
-        expect(dshVersion).toBe('0.1.5-rc.2');
+        expect(dshVersion).toBe(combination.dsh.version);
         const lock = JSON.parse(
           readFileSync(join(generationDirectory, 'composition.lock.json'), 'utf8'),
         ) as { node: { sha256: string }; dsh: { sha256: string } };
@@ -132,7 +135,7 @@ describe.skipIf(!enabled)('real managed install (opt-in evidence)', () => {
 
       // eslint-disable-next-line no-console
       console.log(`HDSL_REAL_INSTALL_EVIDENCE ${JSON.stringify({ dataRoot, results }, null, 2)}`);
-      expect(results).toHaveLength(2);
+      expect(results).toHaveLength(VERIFIED_COMBINATIONS.length);
       expect(snapshotHome()).toEqual(homeBefore);
       await managed.close();
       if (!keep) {

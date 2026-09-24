@@ -2,6 +2,7 @@
 node_modules/
 dist/
 out/
+release/
 coverage/
 .env
 .env.*
@@ -19,3 +20,12 @@ docs/agents/
 docs/research/provenance.md
 design-demos/
 direction-approved.md
+
+# Packaged applications and incremental compiler output
+release/
+*.tsbuildinfo
+*.dmg
+*.exe
+*.msi
+*.app/
+*.zip

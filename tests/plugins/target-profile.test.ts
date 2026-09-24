@@ -85,7 +85,7 @@ describe('resolveTargetProfileLock', () => {
       dependencies: Record<string, string>;
       dsh: { profile: { bundles: string[] } };
     };
-    expect(target.dependencies['hdsl-plugin-e2e-fixture']).toBe(`github:octo/dsh-plugin-demo#${COMMIT}`);
+    expect(target.dependencies['hdsl-plugin-e2e-fixture']).toBe(`https://codeload.github.com/octo/dsh-plugin-demo/tar.gz/${COMMIT}`);
     expect(target.dsh.profile.bundles).toContain('@deepseek-ai/dsh-base');
     expect(target.dsh.profile.bundles).toContain('hdsl-plugin-e2e-fixture');
     expect(outcome.value.targetLockSha256).toHaveLength(64);
@@ -114,7 +114,7 @@ describe('resolveTargetProfileLock', () => {
       dependencies: Record<string, string>;
       dsh: { profile: { bundles: string[] } };
     };
-    expect(target.dependencies['plain-dep']).toBe(`github:octo/plain-demo#${COMMIT}`);
+    expect(target.dependencies['plain-dep']).toBe(`https://codeload.github.com/octo/plain-demo/tar.gz/${COMMIT}`);
     expect(target.dsh.profile.bundles).toEqual(['@deepseek-ai/dsh-base']);
     expect(target.dsh.profile.bundles).not.toContain('plain-dep');
   });
@@ -139,7 +139,7 @@ describe('resolveTargetProfileLock', () => {
       dependencies: Record<string, string>;
       dsh: { profile: { bundles: string[] } };
     };
-    expect(target.dependencies['weird-dep']).toBe(`github:octo/weird-demo#${COMMIT}`);
+    expect(target.dependencies['weird-dep']).toBe(`https://codeload.github.com/octo/weird-demo/tar.gz/${COMMIT}`);
     expect(target.dsh.profile.bundles).not.toContain('weird-dep');
     expect(outcome.value.bundleRiskItems).toHaveLength(1);
     expect(outcome.value.bundleRiskItems[0]).toContain('not silently reconciled');

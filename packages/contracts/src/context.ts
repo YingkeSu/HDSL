@@ -18,6 +18,8 @@ import type {
   InstalledPluginsView,
   BuildAuthorization,
   ChangePlanAction,
+  EntryPatchOperation,
+  EntryPatchResult,
   EnvironmentSummary,
   ExportResult,
   GenerationSummary,
@@ -74,6 +76,19 @@ export interface RevisionCommand {
   readonly expectedRevision: number;
 }
 
+/**
+ * `environments.switchCombination`: switches an environment's active
+ * composition to another supported, evidence-backed catalog combination. The port receives the
+ * already-resolved `RuntimeCombination` (the dispatcher resolves the
+ * `catalogCombinationId` and rejects unsupported/mismatched ones first).
+ */
+export interface SwitchCombinationCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly expectedRevision: number;
+  readonly combination: RuntimeCombination;
+}
+
 export interface EnvironmentCommand {
   readonly requestId: string;
   readonly environmentId: string;
@@ -98,6 +113,19 @@ export interface PluginInspectCommand {
 /** `versions.dsh`: a global, registry-only read that starts a discovery operation. */
 export interface DshVersionCommand {
   readonly requestId: string;
+}
+
+/** `compositions.expected`: a read-only expected-composition read for one environment. */
+export interface ExpectedCompositionCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+}
+
+/** `entries.patch`: one desired-config edit of the environment home user patch. */
+export interface EntryPatchCommand {
+  readonly requestId: string;
+  readonly environmentId: string;
+  readonly operation: EntryPatchOperation;
 }
 
 /**
@@ -162,7 +190,13 @@ export interface RestoreGenerationCommand {
 }
 
 export interface ContractPort {
-  readonly host: HostPlatform;
+  /**
+   * The real host the contract gate must evaluate. `undefined` means the
+   * caller did not supply a resolvable host; the platform guard then refuses
+   * create/switch instead of assuming a verified host (never a silent
+   * darwin/arm64 fallback).
+   */
+  readonly host: HostPlatform | undefined;
 
   listCatalog(): PortOutcome<readonly RuntimeCombination[]>;
   listEnvironments(): PortOutcome<readonly EnvironmentSummary[]>;
@@ -173,6 +207,13 @@ export interface ContractPort {
   createEnvironment(command: CreateEnvironmentCommand): PortOutcome<OperationRef>;
   startEnvironment(command: RevisionCommand): PortOutcome<OperationRef>;
   stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef>;
+  /**
+   * Switches an existing, STOPPED environment to another supported catalog
+   * combination: install + verify the new generation, then atomically switch
+   * the active-generation pointer. A pre-commit failure keeps the old
+   * generation; it never auto-stops or auto-restarts a process.
+   */
+  switchCombination(command: SwitchCombinationCommand): PortOutcome<OperationRef>;
   /** May only resolve the current managed process' verified loopback origin. */
   openWebUI(command: EnvironmentCommand): PortOutcome<OpenWebUIResult>;
   cancelOperation(command: OperationCommand): PortOutcome<OperationSnapshot>;
@@ -194,6 +235,27 @@ export interface ContractPort {
    * never touches an environment composition and never runs plugin code.
    */
   listDshVersions(command: DshVersionCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Starts a cancellable, read-only expected-composition read for one
+   * environment (`compositions.expected`). The terminal `ExpectedCompositionView`
+   * is read only from `OperationSnapshot.output`. It runs the managed
+   * `--dump-config` offline (no plugin execution, no credential) and never
+   * claims the runtime ACTIVE plugin set.
+   */
+  describeExpectedComposition(command: ExpectedCompositionCommand): PortOutcome<OperationRef>;
+
+  /**
+   * Persists ONE desired-config edit on the environment-shared home user patch
+   * (`$DSH_HOME/cordis.patch.yml`). It never writes a generation's immutable
+   * profile declaration source and never reports the running process as ACTIVE:
+   * the terminal `EntryPatchResult` carries `saved: true` with
+   * `runtime: 'pending'` / `runtimeVerification: 'unavailable'` and an
+   * `activation` that is never an ACTIVE claim. The read-modify-write is
+   * serialized per environment; a `starting`/`stopping` environment is refused
+   * with `ENVIRONMENT_BUSY`.
+   */
+  patchEntry(command: EntryPatchCommand): PortOutcome<EntryPatchResult>;
 
   /**
    * Starts a cancellable `changes.preview` for one environment. The terminal

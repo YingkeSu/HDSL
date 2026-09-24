@@ -37,6 +37,7 @@ import {
   type PortOutcome,
   type RevisionCommand,
   type RuntimeCombination,
+  type SwitchCombinationCommand,
 } from '@hdsl/contracts';
 import { join } from 'node:path';
 import {
@@ -84,7 +85,8 @@ import {
   type OperationRecord,
   type OperationUpdate,
 } from './operation-store.js';
-import { JournalStore, type CreateJournalRecord } from './journal.js';
+import { JournalStore, journalKind, type CreateJournalRecord } from './journal.js';
+import { readGenerationDshVersion } from './generation-version.js';
 import { IdempotencyStore } from './idempotency-store.js';
 import type {
   DiagnosticsExporter,
@@ -215,6 +217,8 @@ interface GenerationView {
   readonly compositionDigest: string;
   /** Published managed profile name, when the generation owns one. */
   readonly profileName?: string;
+  /** DSH version recorded for this generation (absent on older records). */
+  readonly dshVersion?: string;
 }
 
 interface CreateJob {
@@ -231,11 +235,30 @@ interface CreateJob {
 }
 
 /**
+ * A switch transaction: install a NEW generation for an existing environment,
+ * verify it, then atomically move the active-generation pointer. It shares the
+ * create journal/store but has different rollback semantics (D3): a pre-commit
+ * failure never marks the environment `error` and never clears the old pointer.
+ */
+interface SwitchJob {
+  readonly requestId: string;
+  readonly operationId: string;
+  readonly environmentId: string;
+  readonly generationId: string;
+  readonly transactionId: string;
+  readonly digest: string;
+  readonly lock: CompositionLock;
+  readonly createdAt: string;
+  readonly journal: CreateJournalRecord;
+}
+
+/**
  * Operation kinds this service owns and reconciles on restart. Other kinds share
  * the same persistent store but belong to their own service recover().
  */
 const ENVIRONMENT_LIFECYCLE_OPERATION_KINDS: ReadonlySet<OperationKind> = new Set<OperationKind>([
   'create',
+  'switch',
   'start',
   'stop',
 ]);
@@ -255,7 +278,7 @@ export class EnvironmentService {
   readonly #layout: AppDataLayout;
   readonly #catalog: readonly RuntimeCombination[];
   readonly #runtime: ManagedRuntimePort;
-  readonly #host: HostPlatform;
+  readonly #host: HostPlatform | undefined;
   readonly #clock: () => Date;
   readonly #faults: CreationFaults;
   #process: ManagedProcessPort | undefined;
@@ -281,7 +304,7 @@ export class EnvironmentService {
     this.#layout = resolveLayout(options.dataRoot);
     this.#catalog = [...options.catalog];
     this.#runtime = options.runtime;
-    this.#host = options.host ?? { platform: 'darwin', arch: 'arm64' };
+    this.#host = options.host;
     this.#clock = options.clock ?? (() => new Date());
     this.#faults = options.faults ?? {};
     this.#process = options.process;
@@ -334,7 +357,7 @@ export class EnvironmentService {
     return this.#layout;
   }
 
-  get host(): HostPlatform {
+  get host(): HostPlatform | undefined {
     return this.#host;
   }
 
@@ -593,6 +616,7 @@ tryReadInstallManifest(
     });
     const journal: CreateJournalRecord = {
       schemaVersion: '1',
+      kind: 'create',
       transactionId,
       requestId: command.requestId,
       operationId,
@@ -633,6 +657,153 @@ tryReadInstallManifest(
 
   stopEnvironment(command: RevisionCommand): PortOutcome<OperationRef> {
     return this.#beginProcessOperation('stop', command);
+  }
+
+  /**
+   * Switches an existing, STOPPED environment to another supported catalog
+   * combination (#114 / A2).
+   *
+   * D1: only a `stopped` environment may switch; `starting`/`running`/
+   * `stopping`/`creating`/`error` return a controlled `ENVIRONMENT_BUSY` and
+   * never stop a process or move the pointer. The switch itself does not
+   * auto-stop and does not auto-restart: the caller stops, switches and then
+   * explicitly starts the new generation.
+   *
+   * D2: the switch is a NEW-generation install + composition verification + an
+   * atomic pointer write (`activeGenerationId`/`revision`). D3: every
+   * pre-commit failure deletes only this switch's staged generation and leaves
+   * the old pointer/digest/revision/state untouched. D4: no old generation is
+   * collected.
+   */
+  switchCombination(command: SwitchCombinationCommand): PortOutcome<OperationRef> {
+    if (this.#closed) {
+      return portFail('INTERNAL_ERROR', 'the environment service is closed');
+    }
+    if (!this.#tryAssertLock()) {
+      return portFail('ENVIRONMENT_BUSY', 'the data root is locked by another instance');
+    }
+    const environment = this.#environments.read(command.environmentId);
+    if (environment === undefined) {
+      return notFound('environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    // D1: version switching is an operation-specific stop precondition. This
+    // must stay local to `switchCombination`; it is never a global rule.
+    if (environment.state !== 'stopped') {
+      return portFail('ENVIRONMENT_BUSY', 'the environment must be stopped before switching combinations');
+    }
+    if (environment.activeGenerationId === null) {
+      return notFound('environment has no active generation to switch from');
+    }
+    if (this.#hasOpenTransaction(environment.id) || this.#hasOpenApplyJournal(environment.id)) {
+      return portFail('ENVIRONMENT_BUSY', 'another transaction is in progress for this environment');
+    }
+    const resolved = this.#runtime.resolveComposition(command.combination);
+    if (!resolved.ok) {
+      return portFail(resolved.code, resolved.message);
+    }
+    const lock = resolved.value;
+    if (!this.#lockMatchesCombination(lock, command.combination)) {
+      return portFail('INTERNAL_ERROR', 'catalog produced a composition lock that does not match the combination');
+    }
+    const digest = this.#runtime.compositionDigest(lock);
+    // Idempotent no-op: the requested composition is already the active one.
+    // No new generation is produced and the revision does not move.
+    if (environment.compositionDigest === digest) {
+      return this.#noopSwitch(environment.id);
+    }
+    // Converge any pre-ADR-0006 per-generation home/data to the environment
+    // scope BEFORE the pointer moves, so the old generation's data is never
+    // stranded under a legacy path. Already-migrated environments are a no-op.
+    const migration = this.ensureHomeMigrated(environment.id);
+    if (!migration.ok) {
+      return portFail(migration.code, migration.message);
+    }
+    const createdAt = this.#now();
+    const generationId = newGenerationId();
+    const operationId = newOperationId();
+    const transactionId = newTransactionId();
+    this.#operations.create({
+      id: operationId,
+      kind: 'switch',
+      environmentId: environment.id,
+      phase: 'queued',
+      createdAt,
+    });
+    const journal: CreateJournalRecord = {
+      schemaVersion: '1',
+      kind: 'switch',
+      transactionId,
+      requestId: command.requestId,
+      operationId,
+      environmentId: environment.id,
+      generationId,
+      compositionDigest: digest,
+      lock,
+      phase: 'prepared',
+      createdAt,
+      updatedAt: createdAt,
+    };
+    this.#journals.write(journal);
+    const job: SwitchJob = {
+      requestId: command.requestId,
+      operationId,
+      environmentId: environment.id,
+      generationId,
+      transactionId,
+      digest,
+      lock,
+      createdAt,
+      journal,
+    };
+    this.#track(this.#runSwitch(job));
+    return portOk({ operationId });
+  }
+
+  /**
+   * A switch whose target composition is already active. Produces a
+   * succeeded `switch` operation without a new generation or a revision bump,
+   * so a caller can replay the intent safely.
+   */
+  #noopSwitch(environmentId: string): PortOutcome<OperationRef> {
+    const operationId = newOperationId();
+    const created = this.#operations.create({
+      id: operationId,
+      kind: 'switch',
+      environmentId,
+      phase: 'switched',
+      status: 'running',
+      createdAt: this.#now(),
+    });
+    this.#operations.update(created, { status: 'succeeded', phase: 'finished' }, this.#now());
+    return portOk({ operationId });
+  }
+
+  /** True when a durable create/switch transaction targets this environment. */
+  #hasOpenTransaction(environmentId: string): boolean {
+    return this.#journals.list().some((journal) => journal.environmentId === environmentId);
+  }
+
+  /**
+   * Cross-service single-active guard: a plugin apply/restore journal targets the
+   * same environment and would race the switch. The `applyJournals/` namespace
+   * belongs to `ChangeApplyService`, so it is only read here, never written.
+   */
+  #hasOpenApplyJournal(environmentId: string): boolean {
+    for (const name of readDirectoryNames(this.#layout.applyJournals)) {
+      if (!name.endsWith('.json')) {
+        continue;
+      }
+      const record = tryReadJsonFile<{ environmentId?: unknown }>(
+        join(this.#layout.applyJournals, name),
+      );
+      if (record?.environmentId === environmentId) {
+        return true;
+      }
+    }
+    return false;
   }
 
   /**
@@ -815,6 +986,12 @@ tryReadInstallManifest(
     if (!startable) {
       return portFail('ENVIRONMENT_BUSY', `the environment is not ${kind === 'start' ? 'stopped' : 'running'}`);
     }
+    // A switch keeps the environment `stopped` but holds a durable transaction
+    // journal until it commits or rolls back; a start must not race the new
+    // generation in. `stop` stays available at all times.
+    if (kind === 'start' && this.#hasOpenTransaction(environment.id)) {
+      return portFail('ENVIRONMENT_BUSY', 'a version switch is in progress for this environment');
+    }
     const generation = this.#generationFor(environment.id);
     if (generation === undefined) {
       return notFound('no installed generation is available for this environment');
@@ -882,6 +1059,13 @@ tryReadInstallManifest(
         return;
       }
       this.#updateOperation(operationId, { status: 'succeeded', phase: 'finished' });
+      // D5: remember the generation + DSH version that actually reached
+      // `running`, so a later downgrade restore can explain (never block) a
+      // potential data-compatibility difference. Only a successful START
+      // updates this; a stop does not.
+      if (kind === 'start') {
+        this.#recordLastStarted(environmentId, generation.generationId, generation.dshVersion);
+      }
       this.#setEnvironmentState(environmentId, kind === 'start' ? 'running' : 'stopped');
     } catch (error) {
       if (controller.signal.aborted) {
@@ -914,6 +1098,11 @@ tryReadInstallManifest(
       environmentId,
       environment.activeGenerationId,
     );
+    const dshVersion = readGenerationDshVersion(
+      this.#layout,
+      environmentId,
+      environment.activeGenerationId,
+    );
     return {
       environmentId,
       expectedRevision: environment.revision,
@@ -927,6 +1116,7 @@ tryReadInstallManifest(
       installMode: manifest.installMode,
       compositionDigest: environment.compositionDigest ?? manifest.compositionDigest,
       ...(recordedProfile === undefined ? {} : { profileName: recordedProfile }),
+      ...(dshVersion === undefined ? {} : { dshVersion }),
     };
   }
 
@@ -987,6 +1177,64 @@ tryReadInstallManifest(
       ...environment,
       state: to,
       stateVersion: environment.stateVersion + 1,
+      updatedAt: this.#now(),
+    });
+  }
+
+  /**
+   * Settles orphaned `in-progress` `environments.switchCombination` ledger
+   * entries (crash between the ledger write and the journal write). A replay
+   * then gets a controlled failure instead of `ENVIRONMENT_BUSY` forever. The
+   * ledger carries no environment id, so this is only safe when no switch
+   * transaction is live (checked by the caller).
+   */
+  #settleOrphanSwitchLedgers(): void {
+    for (const { requestId, record } of this.#idempotency.list()) {
+      if (record.state !== 'in-progress' || record.method !== 'environments.switchCombination') {
+        continue;
+      }
+      this.#idempotency.write(requestId, {
+        state: 'completed',
+        method: record.method,
+        fingerprint: record.fingerprint,
+        outcome: {
+          ok: false,
+          error: contractError(
+            'INTERNAL_ERROR',
+            'the switch request was interrupted before it started; retry with a new requestId',
+          ),
+        },
+      });
+    }
+  }
+
+  /**
+   * Records the last generation that reached `running` and its DSH version
+   * (D5). Additive: old records without these fields read as "unknown".
+   */
+  #recordLastStarted(
+    environmentId: string,
+    generationId: string,
+    dshVersion: string | undefined,
+  ): void {
+    if (!this.#lock.held) {
+      return;
+    }
+    const environment = this.#environments.read(environmentId);
+    if (environment === undefined) {
+      return;
+    }
+    const version = dshVersion ?? null;
+    if (
+      environment.lastStartedGenerationId === generationId &&
+      environment.lastStartedDshVersion === version
+    ) {
+      return;
+    }
+    this.#environments.write({
+      ...environment,
+      lastStartedGenerationId: generationId,
+      lastStartedDshVersion: version,
       updatedAt: this.#now(),
     });
   }
@@ -1140,7 +1388,12 @@ tryReadInstallManifest(
         });
         continue;
       }
-      this.#rollBack(journal, 'INTERNAL_ERROR', 'creation was interrupted before the generation was committed');
+      if (journalKind(journal) === 'switch') {
+        // D3: a crashed switch keeps the old generation; never mark `error`.
+        this.#rollBackSwitch(journal);
+      } else {
+        this.#rollBack(journal, 'INTERNAL_ERROR', 'creation was interrupted before the generation was committed');
+      }
       details.push({
         transactionId: journal.transactionId,
         environmentId: journal.environmentId,
@@ -1172,6 +1425,31 @@ tryReadInstallManifest(
       if (operation.kind === 'start' || operation.kind === 'stop') {
         // Reconciled with the process module above; without one these cannot
         // have been created.
+        continue;
+      }
+      if (operation.kind === 'switch') {
+        // An orphaned switch (no journal) must fail WITHOUT the create-only
+        // `#markEnvironmentError`: the previous generation stays authoritative.
+        this.#operations.update(
+          operation,
+          {
+            status: 'failed',
+            phase: 'failed',
+            error: contractError(
+              'INTERNAL_ERROR',
+              'the switch operation was interrupted and no journal was found',
+              { operationId: operation.id },
+            ),
+          },
+          this.#now(),
+        );
+        details.push({
+          transactionId: null,
+          environmentId: operation.environmentId,
+          operationId: operation.id,
+          generationId: null,
+          resolution: 'failed',
+        });
         continue;
       }
       // Only an interrupted `create` remains: the environment never reached a
@@ -1228,6 +1506,23 @@ tryReadInstallManifest(
     // could delete unrelated `hdsl-*` profiles or a just-published generation
     // when the retain set is momentarily empty. Journal-keyed GC ships with the
     // full transaction wiring (pending, uncommitted transaction + no reference).
+
+    // Narrow orphan-ledger reconciliation for `environments.switchCombination`.
+    // The dispatcher writes the `in-progress` ledger and core writes the journal
+    // in ONE synchronous block, so a crash between them can leave an orphaned
+    // `in-progress` switch request with no journal/operation. The pointer cannot
+    // have moved (the journal precedes the pointer write), so a controlled
+    // failure is the honest terminal result and the same requestId no longer
+    // returns ENVIRONMENT_BUSY forever. Only run when no switch transaction is
+    // live, so a concurrently-started request is never settled early.
+    const liveSwitch =
+      journals.some((journal) => journalKind(journal) === 'switch') ||
+      this.#operations
+        .list()
+        .some((operation) => operation.kind === 'switch' && !isTerminalStatus(operation.status));
+    if (!liveSwitch) {
+      this.#settleOrphanSwitchLedgers();
+    }
 
     return {
       reconciled: details.length,
@@ -1451,43 +1746,78 @@ tryReadInstallManifest(
     }
   }
 
-  #commit(job: CreateJob, manifestPath: string): void {
-    if (!this.#tryAssertLock()) {
-      // The lease was lost abnormally; do not write. The journal stays for the
-      // next recover to reconcile.
-      return;
-    }
-    const manifest = readJsonFile<InstallManifest>(manifestPath);
+  /** Builds the install context shared by create and switch transactions. */
+  #installContext(operationId: string, generationId: string, signal: AbortSignal): InstallContext {
+    return {
+      signal,
+      cacheDirectory: this.#layout.artifacts,
+      scratchDirectory: this.#layout.tmp,
+      npmCacheDirectory: this.#layout.npmCache,
+      profileName: managedProfileName(generationId),
+      onProgress: (update) => {
+        const current = this.#operations.read(operationId);
+        if (current === undefined || isTerminalStatus(current.status)) {
+          return;
+        }
+        this.#operations.update(
+          current,
+          {
+            phase: update.phase,
+            ...(update.progress === undefined ? {} : { progress: update.progress }),
+          },
+          this.#now(),
+        );
+      },
+    };
+  }
+
+  /**
+   * Validates the staged install manifest against the transaction's exact
+   * composition and publishes the generation's managed profile BEFORE the
+   * pointer switch. Shared by create and switch so the two commit paths cannot
+   * drift. Failures are returned; callers decide the environment semantics.
+   */
+  #prepareCommit(input: {
+    readonly environmentId: string;
+    readonly generationId: string;
+    readonly transactionId: string;
+    readonly digest: string;
+    readonly lock: CompositionLock;
+    readonly manifestPath: string;
+  }):
+    | { readonly ok: true; readonly profileName?: string; readonly profileDigest?: string }
+    | { readonly ok: false; readonly code: ErrorCode; readonly message: string } {
+    const manifest = readJsonFile<InstallManifest>(input.manifestPath);
     if (manifest === undefined) {
-      this.#fail(job, 'INTERNAL_ERROR', 'managed install did not produce an install manifest');
-      return;
+      return { ok: false, code: 'INTERNAL_ERROR', message: 'managed install did not produce an install manifest' };
     }
     if (manifest.installMode !== 'npm-ci' && !this.#allowArtifactsOnly) {
-      this.#fail(
-        job,
-        'INTERNAL_ERROR',
-        'managed install is incomplete (dependency closure or preflight missing)',
-      );
-      return;
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        message: 'managed install is incomplete (dependency closure or preflight missing)',
+      };
     }
     if (manifest.installMode === 'npm-ci' && !manifest.preflight.passed) {
-      this.#fail(job, 'INTERNAL_ERROR', 'managed install preflight did not pass');
-      return;
+      return { ok: false, code: 'INTERNAL_ERROR', message: 'managed install preflight did not pass' };
     }
     // Defence in depth (review P3-1): the manifest is written by the same
     // process, but the commit must still prove it describes *this* composition.
     const manifestBindsComposition =
-      manifest.compositionDigest === job.digest &&
-      manifest.node.sha256 === job.lock.node.sha256 &&
-      manifest.dsh.sha256 === job.lock.dsh.sha256 &&
-      manifest.node.version === job.lock.node.version &&
-      manifest.dsh.version === job.lock.dsh.version &&
+      manifest.compositionDigest === input.digest &&
+      manifest.node.sha256 === input.lock.node.sha256 &&
+      manifest.dsh.sha256 === input.lock.dsh.sha256 &&
+      manifest.node.version === input.lock.node.version &&
+      manifest.dsh.version === input.lock.dsh.version &&
       (manifest.installMode !== 'npm-ci' || manifest.closure?.installed === true);
     if (!manifestBindsComposition || !(manifest.preflight.passed === true || manifest.preflight.skipped === true)) {
-      this.#fail(job, 'INTERNAL_ERROR', 'the install manifest does not match the requested composition');
-      return;
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        message: 'the install manifest does not match the requested composition',
+      };
     }
-    const paths = generationPaths(this.#layout, job.environmentId, job.generationId);
+    const paths = generationPaths(this.#layout, input.environmentId, input.generationId);
     ensureDirectory(paths.configDirectory);
     ensureDirectory(paths.dataDirectory);
     ensureDirectory(paths.homeDirectory);
@@ -1507,45 +1837,68 @@ tryReadInstallManifest(
       const declaredProfile = manifest.profile ?? null;
       if (declaredProfile !== null) {
         if (
-          declaredProfile.name !== managedProfileName(job.generationId) ||
+          declaredProfile.name !== managedProfileName(input.generationId) ||
           stagedDigest === undefined ||
           stagedDigest !== declaredProfile.digest
         ) {
-          this.#fail(
-            job,
-            'INTERNAL_ERROR',
-            'the install manifest profile does not match the staged declaration source',
-          );
-          return;
+          return {
+            ok: false,
+            code: 'INTERNAL_ERROR',
+            message: 'the install manifest profile does not match the staged declaration source',
+          };
         }
       } else if (stagedDigest !== undefined) {
-        this.#fail(
-          job,
-          'INTERNAL_ERROR',
-          'a staged profile exists but the install manifest does not declare one',
-        );
-        return;
+        return {
+          ok: false,
+          code: 'INTERNAL_ERROR',
+          message: 'a staged profile exists but the install manifest does not declare one',
+        };
       }
       if (stagedDigest !== undefined) {
         const published = publishGenerationProfile({
           layout: this.#layout,
-          environmentId: job.environmentId,
-          generationId: job.generationId,
-          transactionId: job.transactionId,
+          environmentId: input.environmentId,
+          generationId: input.generationId,
+          transactionId: input.transactionId,
           stagedDirectory: stagedProfile,
         });
-        profileName = managedProfileName(job.generationId);
+        profileName = managedProfileName(input.generationId);
         profileDigest = published.fingerprint;
       }
     } catch (error) {
-      this.#fail(
-        job,
-        'INTERNAL_ERROR',
-        error instanceof Error ? error.message : 'the generation profile could not be published',
-      );
+      return {
+        ok: false,
+        code: 'INTERNAL_ERROR',
+        message:
+          error instanceof Error ? error.message : 'the generation profile could not be published',
+      };
+    }
+    return {
+      ok: true,
+      ...(profileName === undefined ? {} : { profileName }),
+      ...(profileDigest === undefined ? {} : { profileDigest }),
+    };
+  }
+
+  #commit(job: CreateJob, manifestPath: string): void {
+    if (!this.#tryAssertLock()) {
+      // The lease was lost abnormally; do not write. The journal stays for the
+      // next recover to reconcile.
       return;
     }
-
+    const prepared = this.#prepareCommit({
+      environmentId: job.environmentId,
+      generationId: job.generationId,
+      transactionId: job.transactionId,
+      digest: job.digest,
+      lock: job.lock,
+      manifestPath,
+    });
+    if (!prepared.ok) {
+      this.#fail(job, prepared.code, prepared.message);
+      return;
+    }
+    const paths = generationPaths(this.#layout, job.environmentId, job.generationId);
     if (this.#faults.pauseAfterPublishBeforePointer === true) {
       // Published (possibly orphaned) but the pointer is not switched: a restart
       // must roll back and keep the published profile attributable, never delete
@@ -1575,9 +1928,10 @@ tryReadInstallManifest(
       id: job.generationId,
       environmentId: job.environmentId,
       compositionDigest: job.digest,
+      dshVersion: job.lock.dsh.version,
       createdAt: job.createdAt,
-      ...(profileName === undefined ? {} : { profileName }),
-      ...(profileDigest === undefined ? {} : { profileDigest }),
+      ...(prepared.profileName === undefined ? {} : { profileName: prepared.profileName }),
+      ...(prepared.profileDigest === undefined ? {} : { profileDigest: prepared.profileDigest }),
     });
 
     const environment = this.#environments.read(job.environmentId);
@@ -1604,6 +1958,174 @@ tryReadInstallManifest(
     }
     this.#journals.write({ ...job.journal, phase: 'committed', updatedAt: this.#now() });
     this.#journals.remove(job.transactionId);
+  }
+
+  async #runSwitch(job: SwitchJob): Promise<void> {
+    const controller = new AbortController();
+    this.#controllers.set(job.operationId, controller);
+    const paths = generationPaths(this.#layout, job.environmentId, job.generationId);
+    try {
+      this.#assertLock();
+      const queued = this.#operations.read(job.operationId);
+      if (queued !== undefined && !isTerminalStatus(queued.status)) {
+        this.#operations.update(queued, { status: 'running', phase: 'downloading' }, this.#now());
+      }
+      ensureDirectory(paths.generationDirectory);
+      const installed = await this.#runtime.install(
+        job.lock,
+        paths.generationDirectory,
+        this.#installContext(job.operationId, job.generationId, controller.signal),
+      );
+      if (!installed.ok) {
+        this.#failSwitch(job, installed.code, installed.message);
+        return;
+      }
+      this.#assertLock();
+      this.#journals.write({ ...job.journal, phase: 'artifacts-installed', updatedAt: this.#now() });
+      if (this.#faults.failBeforeCommit === true) {
+        this.#failSwitch(job, 'INTERNAL_ERROR', 'switch aborted before commit (injected fault)');
+        return;
+      }
+      if (this.#faults.pauseBeforeCommit === true) {
+        return;
+      }
+      this.#commitSwitch(job, paths.manifestPath);
+    } catch (error) {
+      const code: ErrorCode = controller.signal.aborted
+        ? 'INTERNAL_ERROR'
+        : isSpaceError(error)
+          ? 'DISK_FULL'
+          : errorCodeFrom(error) ?? 'INTERNAL_ERROR';
+      this.#failSwitch(job, code, error instanceof Error ? error.message : 'switch failed');
+    } finally {
+      this.#controllers.delete(job.operationId);
+    }
+  }
+
+  /**
+   * The switch commit point. Differs from {@link #commit} deliberately:
+   * - it NEVER writes a new home/data migration `finalized` record (the
+   *   environment already owns one);
+   * - the new `generation.json` records `dshVersion`;
+   * - the pointer moves to the new generation with `state: 'stopped'`.
+   * A pre-commit failure keeps the old generation (see {@link #failSwitch}).
+   */
+  #commitSwitch(job: SwitchJob, manifestPath: string): void {
+    if (!this.#tryAssertLock()) {
+      return;
+    }
+    const prepared = this.#prepareCommit({
+      environmentId: job.environmentId,
+      generationId: job.generationId,
+      transactionId: job.transactionId,
+      digest: job.digest,
+      lock: job.lock,
+      manifestPath,
+    });
+    if (!prepared.ok) {
+      this.#failSwitch(job, prepared.code, prepared.message);
+      return;
+    }
+    const paths = generationPaths(this.#layout, job.environmentId, job.generationId);
+    if (this.#faults.pauseAfterPublishBeforePointer === true) {
+      return;
+    }
+    writeJsonAtomic(paths.lockPath, job.lock);
+    writeJsonAtomic(paths.generationRecordPath, {
+      id: job.generationId,
+      environmentId: job.environmentId,
+      compositionDigest: job.digest,
+      dshVersion: job.lock.dsh.version,
+      createdAt: job.createdAt,
+      ...(prepared.profileName === undefined ? {} : { profileName: prepared.profileName }),
+      ...(prepared.profileDigest === undefined ? {} : { profileDigest: prepared.profileDigest }),
+    });
+
+    const environment = this.#environments.read(job.environmentId);
+    if (environment !== undefined) {
+      this.#environments.write({
+        ...environment,
+        state: 'stopped',
+        stateVersion: environment.stateVersion + 1,
+        revision: environment.revision + 1,
+        activeGenerationId: job.generationId,
+        compositionDigest: job.digest,
+        updatedAt: this.#now(),
+      });
+    }
+
+    if (this.#faults.pauseAfterPointerSwitch === true) {
+      return;
+    }
+
+    const operation = this.#operations.read(job.operationId);
+    if (operation !== undefined && !isTerminalStatus(operation.status)) {
+      this.#operations.update(operation, { status: 'succeeded', phase: 'finished' }, this.#now());
+    }
+    this.#journals.write({ ...job.journal, phase: 'committed', updatedAt: this.#now() });
+    this.#journals.remove(job.transactionId);
+  }
+
+  /**
+   * Terminal switch failure BEFORE the commit point (D3): fail the operation
+   * and delete only this transaction's staged generation. The environment
+   * record (pointer/digest/revision/state) is deliberately untouched and the
+   * environment is NEVER marked `error`.
+   */
+  #failSwitch(job: SwitchJob, code: ErrorCode, message: string): void {
+    if (!this.#tryAssertLock()) {
+      return;
+    }
+    const operation = this.#operations.read(job.operationId);
+    if (operation !== undefined && !isTerminalStatus(operation.status)) {
+      this.#operations.update(
+        operation,
+        {
+          status: 'failed',
+          phase: 'failed',
+          error: contractError(code, message, { operationId: job.operationId }),
+        },
+        this.#now(),
+      );
+    }
+    removePath(generationPaths(this.#layout, job.environmentId, job.generationId).generationDirectory);
+    this.#journals.remove(job.transactionId);
+  }
+
+  /**
+   * Reconciles a crashed switch whose pointer never reached the new generation.
+   * Identical safety envelope to {@link #failSwitch}, plus the `in-progress`
+   * ledger is resolved so a same-`requestId` replay returns the (failed)
+   * operation instead of `ENVIRONMENT_BUSY` forever.
+   */
+  #rollBackSwitch(journal: CreateJournalRecord): void {
+    const operation = this.#operations.read(journal.operationId);
+    if (operation !== undefined && !isTerminalStatus(operation.status)) {
+      this.#operations.update(
+        operation,
+        {
+          status: 'failed',
+          phase: 'failed',
+          error: contractError(
+            'INTERNAL_ERROR',
+            'the switch was interrupted before the generation was committed',
+            { operationId: journal.operationId },
+          ),
+        },
+        this.#now(),
+      );
+    }
+    removePath(generationPaths(this.#layout, journal.environmentId, journal.generationId).generationDirectory);
+    const ledger = this.#idempotency.read(journal.requestId);
+    if (ledger !== undefined && ledger.state === 'in-progress') {
+      this.#idempotency.write(journal.requestId, {
+        state: 'completed',
+        method: ledger.method,
+        fingerprint: ledger.fingerprint,
+        outcome: { ok: true, value: { operationId: journal.operationId } },
+      });
+    }
+    this.#journals.remove(journal.transactionId);
   }
 
   /** Terminal failure for a live transaction: fail, mark `error`, drop staging. */

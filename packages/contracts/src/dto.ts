@@ -37,6 +37,7 @@ import {
   sOptional,
   sString,
   sUnknown,
+  isPlainRecord,
   type Infer,
   type Schema,
 } from './schema.js';
@@ -181,6 +182,8 @@ export const operationKindSchema = sLiteral(
   'create',
   'start',
   'stop',
+  // 1.1 addition (#114, A2): in-environment composition switch transaction.
+  'switch',
   'openWebUI',
   'export',
   // 1.1 plugin discovery (ADR 0005 D4/D5).
@@ -192,6 +195,8 @@ export const operationKindSchema = sLiteral(
   'restore',
   // 1.1 addition (#113, A1): read-only upstream DSH version listing.
   'versions',
+  // 1.1 addition (#118): read-only expected composition from `--dump-config`.
+  'composition',
 );
 export type OperationKind = Infer<typeof operationKindSchema>;
 
@@ -300,6 +305,223 @@ export const dshVersionListingSchema = sObject({
   versions: sArray(dshUpstreamVersionSchema, { maxLength: DSH_UPSTREAM_VERSIONS_MAX }),
 });
 export type DshVersionListing = Infer<typeof dshVersionListingSchema>;
+
+// ---------------------------------------------------------------------------
+// 1.1 addition (#118): read-only EXPECTED composition from the managed
+// `dsh --profile <p> --dump-config` output. It is explicitly the desired/
+// EXPECTED composition, NEVER the runtime ACTIVE plugin set: `--dump-config`
+// resolves config offline, preserves `!!js` expressions verbatim without
+// evaluating them, and the dump <-> runtime-loaded-set equivalence (E9) is NOT
+// established. The view carries `basis: 'dump-config'` and
+// `runtimeVerification: 'unavailable'` so it can never read as ACTIVE.
+// ---------------------------------------------------------------------------
+
+/** Per-view bounds; a dump over these caps is truncated with a diagnostic. */
+export const EXPECTED_COMPOSITION_GROUPS_MAX = 512;
+export const EXPECTED_COMPOSITION_ROWS_MAX = 5000;
+export const EXPECTED_COMPOSITION_DIAGNOSTICS_MAX = 64;
+export const EXPECTED_COMPOSITION_ROW_CONFIG_MAX = 4096;
+export const EXPECTED_COMPOSITION_STDERR_MAX = 8192;
+export const EXPECTED_COMPOSITION_BUNDLES_MAX = 256;
+
+/** Verbatim config subtree of one expected row; `!!js` stays literal (unrun). */
+export const expectedCompositionConfigSchema = sObject({
+  /** Verbatim YAML text (bounded); unevaluated `!!js` expressions stay literal. */
+  text: sString({ maxLength: EXPECTED_COMPOSITION_ROW_CONFIG_MAX }),
+  truncated: sBoolean,
+  /** True when the subtree carries an unevaluated custom tag, alias or merge key. */
+  unevaluated: sBoolean,
+});
+export type ExpectedCompositionConfig = Infer<typeof expectedCompositionConfigSchema>;
+
+/** One expected row: `(id, name, disabled, config?)` from a `# ==` section. */
+export const expectedCompositionRowSchema = sObject({
+  id: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  /** Row `name` (package reference) when it is a plain scalar. */
+  name: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  /** False when `name` is an explicit tag / alias / block scalar / non-string. */
+  nameKnown: sBoolean,
+  disabled: sNullable(sBoolean),
+  /** False when `disabled` is an unevaluated `!!js` expression or non-boolean. */
+  disabledKnown: sBoolean,
+  config: sOptional(expectedCompositionConfigSchema),
+});
+export type ExpectedCompositionRow = Infer<typeof expectedCompositionRowSchema>;
+
+export const expectedCompositionGroupSchema = sObject({
+  /** The `# == <label>` header that introduced this section. */
+  label: sString({ minLength: 1, maxLength: 256 }),
+  rows: sArray(expectedCompositionRowSchema, { maxLength: EXPECTED_COMPOSITION_ROWS_MAX }),
+});
+export type ExpectedCompositionGroup = Infer<typeof expectedCompositionGroupSchema>;
+
+export const expectedCompositionDiagnosticCodeSchema = sLiteral(
+  'preamble-ignored',
+  'group-parse-failed',
+  'row-ignored',
+  'unresolved-construct',
+  'truncated',
+);
+export type ExpectedCompositionDiagnosticCode = Infer<
+  typeof expectedCompositionDiagnosticCodeSchema
+>;
+
+export const expectedCompositionDiagnosticSchema = sObject({
+  code: expectedCompositionDiagnosticCodeSchema,
+  /** Value-free, redacted explanation (raw `!!js` text is never echoed here). */
+  message: sString({ minLength: 1, maxLength: 512 }),
+  groupLabel: sNullable(sString({ minLength: 1, maxLength: 256 })),
+  line: sNullable(sInteger({ min: 1 })),
+});
+export type ExpectedCompositionDiagnostic = Infer<typeof expectedCompositionDiagnosticSchema>;
+
+/**
+ * Terminal `compositions.expected` payload (ADR 0005 D5 model, read-only).
+ * `basis`/`runtimeVerification` are fixed literals so the view can never be
+ * presented as the runtime ACTIVE plugin set.
+ */
+export const expectedCompositionViewSchema = sObject({
+  environmentId: environmentIdSchema,
+  revision: revisionSchema,
+  generationId: sNullable(generationIdSchema),
+  profileName: sString({ minLength: 1, maxLength: 256 }),
+  /** Fixed: produced from the offline dump, never from a running process. */
+  basis: sLiteral('dump-config'),
+  /** Fixed: HDSL does not observe the runtime ACTIVE set in this slice. */
+  runtimeVerification: sLiteral('unavailable'),
+  /** Declared bundles from the profile declaration source. */
+  bundles: sArray(sString({ minLength: 1, maxLength: 214 }), {
+    maxLength: EXPECTED_COMPOSITION_BUNDLES_MAX,
+  }),
+  patchReload: sLiteral('live', 'startup', 'unknown'),
+  groups: sArray(expectedCompositionGroupSchema, { maxLength: EXPECTED_COMPOSITION_GROUPS_MAX }),
+  rowCount: sInteger({ min: 0, max: EXPECTED_COMPOSITION_ROWS_MAX }),
+  stdoutBytes: sInteger({ min: 0 }),
+  /** Bounded stderr text, surfaced as-is (redacted) and never silently dropped. */
+  stderr: sString({ maxLength: EXPECTED_COMPOSITION_STDERR_MAX }),
+  exitCode: sInteger({ min: -1, max: 255 }),
+  timedOut: sBoolean,
+  diagnostics: sArray(expectedCompositionDiagnosticSchema, {
+    maxLength: EXPECTED_COMPOSITION_DIAGNOSTICS_MAX,
+  }),
+  observedAt: sString({ minLength: 1, maxLength: 64 }),
+});
+export type ExpectedCompositionView = Infer<typeof expectedCompositionViewSchema>;
+
+// ---------------------------------------------------------------------------
+// 1.2 addition (#135, E1-T1): desired-config entry patch for the runtime entry
+// axis. It edits the environment-shared home user patch layer
+// (`$DSH_HOME/cordis.patch.yml`) ONLY, never a generation's immutable profile
+// declaration source. A saved file means "desired config persisted", never that
+// the running DSH reached the matching ACTIVE set: `runtime` stays `pending`,
+// `runtimeVerification` stays `unavailable`, and `activation` is one of
+// `restart-required` / `live-reload-unverified`. No local path crosses the
+// bridge.
+// ---------------------------------------------------------------------------
+
+/** Upper bounds for the bounded entry-patch terminal payload. */
+export const ENTRY_PATCH_ROWS_MAX = 500;
+export const ENTRY_PATCH_DIAGNOSTICS_MAX = 64;
+export const ENTRY_PATCH_ROW_ID_MAX = 256;
+
+export const entryPatchOperationKindSchema = sLiteral('enable', 'disable', 'config', 'remove');
+export type EntryPatchOperationKind = Infer<typeof entryPatchOperationKindSchema>;
+
+/** The four supported desired-config edits; `config` is required for `kind: config`. */
+export type EntryPatchOperation =
+  | { readonly kind: 'enable'; readonly rowId: string }
+  | { readonly kind: 'disable'; readonly rowId: string }
+  | { readonly kind: 'config'; readonly rowId: string; readonly config: unknown }
+  | { readonly kind: 'remove'; readonly rowId: string };
+
+const entryPatchRowIdSchema = sString({ minLength: 1, maxLength: ENTRY_PATCH_ROW_ID_MAX });
+
+/** A required value that may itself be any JSON value (including `null`). */
+const requiredUnknownSchema: Schema<unknown> = (value, path, issues) => {
+  if (value === undefined) {
+    issues.push({ path, message: 'is required' });
+    return undefined;
+  }
+  return value;
+};
+
+const entryPatchWithoutConfigSchema = sObject({
+  kind: sLiteral('enable', 'disable', 'remove'),
+  rowId: entryPatchRowIdSchema,
+});
+
+const entryPatchWithConfigSchema = sObject({
+  kind: sLiteral('config'),
+  rowId: entryPatchRowIdSchema,
+  config: requiredUnknownSchema,
+});
+
+/**
+ * Strict discriminated union: `config` is required for `kind: 'config'` and
+ * rejected for the other kinds, and unknown fields are `INVALID_INPUT`.
+ */
+export const entryPatchOperationSchema: Schema<EntryPatchOperation> = (value, path, issues) => {
+  if (!isPlainRecord(value)) {
+    issues.push({ path, message: 'must be a plain object' });
+    return undefined;
+  }
+  if (value['kind'] === 'config') {
+    return entryPatchWithConfigSchema(value, path, issues) as EntryPatchOperation | undefined;
+  }
+  return entryPatchWithoutConfigSchema(value, path, issues) as EntryPatchOperation | undefined;
+};
+
+export const entryPatchDiagnosticCodeSchema = sLiteral(
+  'entry-not-mapping',
+  'insert-row-not-mapping',
+  'row-id-missing',
+  'row-id-not-plain-scalar',
+  'row-name-not-plain-scalar',
+  'row-disabled-not-boolean',
+  'entry-without-id-or-insert',
+  'alias-not-resolved',
+);
+export type EntryPatchDiagnosticCode = Infer<typeof entryPatchDiagnosticCodeSchema>;
+
+/** One row view of the resulting home patch file (no local path). */
+export const entryPatchRowSchema = sObject({
+  id: sString({ minLength: 1, maxLength: ENTRY_PATCH_ROW_ID_MAX }),
+  kind: sLiteral('insert', 'override'),
+  name: sNullable(sString({ minLength: 1, maxLength: 214 })),
+  /** False when `name` is an explicit tag/alias/block scalar/non-string. */
+  nameKnown: sBoolean,
+  disabled: sNullable(sBoolean),
+  hasConfig: sBoolean,
+});
+export type EntryPatchRow = Infer<typeof entryPatchRowSchema>;
+
+export const entryPatchDiagnosticSchema = sObject({
+  code: entryPatchDiagnosticCodeSchema,
+  line: sInteger({ min: 1 }),
+  /** Value-free, redacted structural note; never raw config text. */
+  detail: sString({ minLength: 1, maxLength: 512 }),
+});
+export type EntryPatchDiagnostic = Infer<typeof entryPatchDiagnosticSchema>;
+
+/**
+ * Terminal `entries.patch` payload. `saved`/`runtime`/`runtimeVerification` are
+ * fixed literals so the view can never be presented as the runtime ACTIVE set.
+ */
+export const entryPatchResultSchema = sObject({
+  environmentId: environmentIdSchema,
+  operation: entryPatchOperationKindSchema,
+  /** Desired config was persisted atomically. */
+  saved: sBooleanLiteral(true),
+  /** The running DSH set was NOT observed. */
+  runtime: sLiteral('pending'),
+  runtimeVerification: sLiteral('unavailable'),
+  activation: sLiteral('restart-required', 'live-reload-unverified'),
+  restartRequired: sBoolean,
+  reloadMode: sLiteral('live', 'startup', 'unknown'),
+  rows: sArray(entryPatchRowSchema, { maxLength: ENTRY_PATCH_ROWS_MAX }),
+  diagnostics: sArray(entryPatchDiagnosticSchema, { maxLength: ENTRY_PATCH_DIAGNOSTICS_MAX }),
+});
+export type EntryPatchResult = Infer<typeof entryPatchResultSchema>;
 
 export const exportResultSchema = sObject({
   exportId: exportIdSchema,
@@ -637,6 +859,11 @@ export const generationSummarySchema = sObject({
   profileName: sNullable(sString({ minLength: 1, maxLength: 80 })),
   active: sBoolean,
   createdAt: sString({ minLength: 1, maxLength: 64 }),
+  // 1.1 additive (#114, A2): a NON-BLOCKING data-compatibility warning emitted
+  // by `generations.restore` when the target generation's DSH version is older
+  // than the environment's last successfully started DSH version. Absent/null
+  // means "no warning" (including same-version and unknown-version cases).
+  dshCompatibilityWarning: sOptional(sNullable(sString({ minLength: 1, maxLength: 512 }))),
 });
 export type GenerationSummary = Infer<typeof generationSummarySchema>;
 

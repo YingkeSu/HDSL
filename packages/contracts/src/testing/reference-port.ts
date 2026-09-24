@@ -17,18 +17,23 @@ import type {
   OperationCommand,
   ApplyChangeCommand,
   DshVersionCommand,
+  EntryPatchCommand,
+  ExpectedCompositionCommand,
   PluginInspectCommand,
   PreviewChangeCommand,
   RestoreGenerationCommand,
   PluginSearchCommand,
   PortOutcome,
   RevisionCommand,
+  SwitchCombinationCommand,
 } from '../context.js';
 import { portFail, portOk } from '../context.js';
 import type {
   ChangePlan,
   DshVersionListing,
+  EntryPatchResult,
   EnvironmentSummary,
+  ExpectedCompositionView,
   ExportResult,
   GenerationSummary,
   InstalledPluginsView,
@@ -71,6 +76,17 @@ export interface ReferenceSeed {
     readonly failure?: ErrorCode;
     readonly retryAfterSeconds?: number;
   };
+  /** Terminal payload (or controlled failure) for `compositions.expected` (#118). */
+  readonly expectedComposition?: {
+    readonly result?: ExpectedCompositionView;
+    readonly failure?: ErrorCode;
+    readonly retryAfterSeconds?: number;
+  };
+  /** Terminal payload (or controlled failure) for `entries.patch` (#135). */
+  readonly entryPatch?: {
+    readonly result?: EntryPatchResult;
+    readonly failure?: ErrorCode;
+  };
   /** Seeded `plugins.installed` view per environment id (else an empty list). */
   readonly installedPlugins?: Readonly<Record<string, InstalledPluginsView>>;
   /** Terminal payload (or controlled failure) for a remove `changes.preview`. */
@@ -101,6 +117,8 @@ export class ReferenceContractPort implements ContractPort {
   readonly #pluginSearch: ReferenceSeed['pluginSearch'];
   readonly #pluginInspection: ReferenceSeed['pluginInspection'];
   readonly #dshVersions: ReferenceSeed['dshVersions'];
+  readonly #expectedComposition: ReferenceSeed['expectedComposition'];
+  readonly #entryPatch: ReferenceSeed['entryPatch'];
   readonly #installedPlugins: ReferenceSeed['installedPlugins'];
   readonly #removal: ReferenceSeed['removal'];
   #environmentCounter = 0;
@@ -126,6 +144,8 @@ export class ReferenceContractPort implements ContractPort {
     this.#pluginSearch = seed.pluginSearch;
     this.#pluginInspection = seed.pluginInspection;
     this.#dshVersions = seed.dshVersions;
+    this.#expectedComposition = seed.expectedComposition;
+    this.#entryPatch = seed.entryPatch;
     this.#installedPlugins = seed.installedPlugins;
     this.#removal = seed.removal;
   }
@@ -260,6 +280,30 @@ export class ReferenceContractPort implements ContractPort {
     return portOk({ operationId: operation.id });
   }
 
+  switchCombination(command: SwitchCombinationCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.revision !== command.expectedRevision) {
+      return portFail('REVISION_CONFLICT', 'expectedRevision does not match the current composition revision');
+    }
+    // D1: only a stopped environment may switch; the fixture double never
+    // auto-stops or auto-restarts a process.
+    if (environment.state !== 'stopped') {
+      return portFail('ENVIRONMENT_BUSY', 'the environment must be stopped to switch combinations');
+    }
+    this.#environments.set(environment.id, {
+      ...environment,
+      revision: environment.revision + 1,
+      stateVersion: environment.stateVersion + 1,
+      compositionDigest: 'c'.repeat(64),
+    });
+    const operation = this.#recordOperation('switch', environment.id, 'succeeded');
+    this.effects.push(`switchCombination:${environment.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
   openWebUI(command: EnvironmentCommand): PortOutcome<OpenWebUIResult> {
     const environment = this.#environments.get(command.environmentId);
     if (environment === undefined) {
@@ -346,6 +390,53 @@ export class ReferenceContractPort implements ContractPort {
     const operation = this.#recordPluginOperation('versions', { status: 'succeeded', output: result });
     this.effects.push(`listDshVersions:${operation.id}`);
     return portOk({ operationId: operation.id });
+  }
+
+  describeExpectedComposition(command: ExpectedCompositionCommand): PortOutcome<OperationRef> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    const config = this.#expectedComposition;
+    if (config?.failure !== undefined) {
+      const failed = this.#recordPluginOperation(
+        'composition',
+        {
+          status: 'failed',
+          error: config.failure,
+          ...(config.retryAfterSeconds === undefined
+            ? {}
+            : { retryAfterSeconds: config.retryAfterSeconds }),
+        },
+        command.environmentId,
+      );
+      this.effects.push(`describeExpectedComposition:${failed.id}`);
+      return portOk({ operationId: failed.id });
+    }
+    const result = config?.result ?? defaultExpectedCompositionView(command.environmentId, environment);
+    const operation = this.#recordPluginOperation(
+      'composition',
+      { status: 'succeeded', output: result },
+      command.environmentId,
+    );
+    this.effects.push(`describeExpectedComposition:${operation.id}`);
+    return portOk({ operationId: operation.id });
+  }
+
+  patchEntry(command: EntryPatchCommand): PortOutcome<EntryPatchResult> {
+    const environment = this.#environments.get(command.environmentId);
+    if (environment === undefined) {
+      return portFail('NOT_FOUND', 'environment was not found');
+    }
+    if (environment.state === 'starting' || environment.state === 'stopping') {
+      return portFail('ENVIRONMENT_BUSY', 'the environment is changing state');
+    }
+    const config = this.#entryPatch;
+    if (config?.failure !== undefined) {
+      return portFail(config.failure, 'entry patch fixture failure');
+    }
+    this.effects.push(`patchEntry:${command.environmentId}:${command.operation.kind}`);
+    return portOk(config?.result ?? defaultEntryPatchResult(command.environmentId, command.operation.kind));
   }
 
   previewChange(command: PreviewChangeCommand): PortOutcome<OperationRef> {
@@ -494,17 +585,18 @@ export class ReferenceContractPort implements ContractPort {
   }
 
   #recordPluginOperation(
-    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore' | 'versions',
+    kind: 'search' | 'inspect' | 'preview' | 'apply' | 'restore' | 'versions' | 'composition',
     terminal: {
       readonly status: 'succeeded' | 'failed';
       readonly output?: unknown;
       readonly error?: ErrorCode;
       readonly retryAfterSeconds?: number;
     },
+    environmentId: string | null = null,
   ): OperationSnapshot {
     const operation: OperationSnapshot = {
       id: `op-${String((this.#operationCounter += 1))}`,
-      environmentId: null,
+      environmentId,
       kind,
       phase: terminal.status === 'succeeded' ? 'finished' : 'failed',
       status: terminal.status,
@@ -601,4 +693,85 @@ export const defaultDshVersionListing = (): DshVersionListing => ({
       catalogCombinationIds: ['combo-darwin-arm64'],
     },
   ],
+});
+
+/**
+ * Deterministic `compositions.expected` fixture (#118). It is explicitly the
+ * desired/expected dump (`basis: 'dump-config'`, `runtimeVerification:
+ * 'unavailable'`) and includes a `!!js` row whose config text is preserved
+ * verbatim, never evaluated.
+ */
+export const defaultExpectedCompositionView = (
+  environmentId: string,
+  environment: EnvironmentSummary,
+): ExpectedCompositionView => ({
+  environmentId,
+  revision: environment.revision,
+  generationId: environment.activeGenerationId,
+  profileName: 'hdsl-fixture-generation',
+  basis: 'dump-config',
+  runtimeVerification: 'unavailable',
+  bundles: ['@deepseek-ai/dsh-base', '@deepseek-ai/dsh-web-app'],
+  patchReload: 'live',
+  groups: [
+    {
+      label: '@deepseek-ai/dsh-base',
+      rows: [
+        { id: 'timer', name: '@deepseek-ai/cordis-plugin-timer', nameKnown: true, disabled: null, disabledKnown: false },
+        {
+          id: 'hmr',
+          name: '@deepseek-ai/cordis-plugin-hmr',
+          nameKnown: true,
+          disabled: true,
+          disabledKnown: true,
+          config: { text: 'root:\n  - .', truncated: false, unevaluated: false },
+        },
+        {
+          id: 'sessions',
+          name: '@deepseek-ai/dsh-session-persistence-jsonl',
+          nameKnown: true,
+          disabled: null,
+          disabledKnown: false,
+          config: { text: "root: !!js dshHomePath('sessions')", truncated: false, unevaluated: true },
+        },
+      ],
+    },
+  ],
+  rowCount: 3,
+  stdoutBytes: 128,
+  stderr: '',
+  exitCode: 0,
+  timedOut: false,
+  diagnostics: [],
+  observedAt: '2026-01-02T03:04:05Z',
+});
+
+/**
+ * Deterministic `entries.patch` fixture (#135). It is always
+ * `saved: true` + `runtime: 'pending'` + `runtimeVerification: 'unavailable'`
+ * and its `activation` follows `patchReload`; it never claims ACTIVE.
+ */
+export const defaultEntryPatchResult = (
+  environmentId: string,
+  operation: EntryPatchResult['operation'],
+): EntryPatchResult => ({
+  environmentId,
+  operation,
+  saved: true,
+  runtime: 'pending',
+  runtimeVerification: 'unavailable',
+  activation: 'restart-required',
+  restartRequired: true,
+  reloadMode: 'startup',
+  rows: [
+    {
+      id: 'timer',
+      kind: 'insert',
+      name: '@deepseek-ai/cordis-plugin-timer',
+      nameKnown: true,
+      disabled: operation === 'disable' ? true : null,
+      hasConfig: operation === 'config',
+    },
+  ],
+  diagnostics: [],
 });

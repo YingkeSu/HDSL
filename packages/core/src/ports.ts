@@ -12,6 +12,10 @@
 import type {
   InstalledPluginsView,
   CompositionLock,
+  EntryPatchOperation,
+  EntryPatchResult,
+  ExpectedCompositionDiagnostic,
+  ExpectedCompositionGroup,
   ExportResult,
   OpenWebUIResult,
   PortOutcome,
@@ -50,6 +54,70 @@ export interface InstalledRuntimeArtifacts {
 export interface InstalledPluginsPort {
   list(environmentId: string): PortOutcome<InstalledPluginsView>;
 }
+
+/** Inputs for one managed `--dump-config` read of an active generation (#118). */
+export interface ExpectedCompositionDumpRequest {
+  readonly nodeExecutable: string;
+  readonly dshEntrypoint: string;
+  readonly profileName: string;
+  readonly homeDirectory: string;
+  readonly cwd: string;
+  readonly timeoutMs?: number;
+}
+
+/** Parsed grouped `--dump-config` result (never the runtime ACTIVE set). */
+export interface ExpectedCompositionDumpResult {
+  readonly groups: readonly ExpectedCompositionGroup[];
+  readonly diagnostics: readonly ExpectedCompositionDiagnostic[];
+  readonly rowCount: number;
+  readonly stderr: string;
+  readonly stdoutBytes: number;
+  readonly exitCode: number;
+  readonly timedOut: boolean;
+  readonly observedAt: string;
+}
+
+/**
+ * Managed read-only `--dump-config` adapter. Implementations run the managed
+ * Node + DSH entrypoint offline (no plugin execution, no credential) and must
+ * honour the abort signal.
+ */
+export interface ExpectedCompositionPort {
+  describeExpectedComposition(
+    request: ExpectedCompositionDumpRequest,
+    signal: AbortSignal,
+  ): Promise<PortOutcome<ExpectedCompositionDumpResult>>;
+}
+
+/**
+ * One desired-config edit of the environment-shared home user patch (#135). The
+ * core service resolves the environment-shared home and the published profile's
+ * `patchReload`, reads the current patch text (`[]` when absent) and delegates
+ * the atomic edit to the runtime boundary.
+ */
+export interface EntryPatchRequest {
+  readonly operation: EntryPatchOperation;
+  /** Environment-shared `$DSH_HOME`; the patch path must be strictly inside. */
+  readonly homeRoot: string;
+  /** Absolute path of `<homeRoot>/cordis.patch.yml`. */
+  readonly patchPath: string;
+  /** Current patch text; `[]` when the file is absent. */
+  readonly text: string;
+  readonly reloadMode: 'live' | 'startup' | 'unknown';
+}
+
+/** Terminal home-patch result without the core-owned `environmentId`. */
+export type EntryPatchApplied = Omit<EntryPatchResult, 'environmentId'>;
+
+/**
+ * Runtime-owned desired-config adapter. It MUST write only inside `homeRoot`
+ * (never a generation's immutable profile declaration source) and MUST NOT
+ * upgrade a saved file to a runtime ACTIVE claim.
+ */
+export interface EntryPatchPort {
+  applyPatch(request: EntryPatchRequest): PortOutcome<EntryPatchApplied>;
+}
+
 
 export interface ManagedRuntimePort {
   resolveComposition(combination: RuntimeCombination): PortOutcome<CompositionLock>;

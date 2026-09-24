@@ -7,19 +7,21 @@
  * opener, credential loader availability, close-failure lock retention and the
  * runtime/core process-port phase adapter.
  */
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { portFail, portOk, type RuntimeCombination } from '@hdsl/contracts';
+import { portFail, portOk, API_VERSION, createContractRuntime, type HostPlatform, type RuntimeCombination } from '@hdsl/contracts';
 import { createRuntimePort, type ProcessManager } from '@hdsl/runtime';
 import {
   EnvironmentStore,
   OperationStore,
   ensureLayout,
+  environmentPaths,
   generationPaths,
   resolveLayout,
   type ManagedProcessPort,
+  type ManagedRuntimePort,
 } from '@hdsl/core';
 import {
   adaptProcessPort,
@@ -39,10 +41,19 @@ import {
 } from '../install/synthetic.js';
 
 const nodeTarball = syntheticNodeTarball('22.0.0');
+const nodeTarballB = syntheticNodeTarball('24.0.0');
 const dshTarball = syntheticDshTarball('0.1.5-rc.2');
 const combination = syntheticCombination({
   nodeVersion: '22.0.0',
   nodeTarball,
+  dshVersion: '0.1.5-rc.2',
+  dshTarball,
+});
+// Same DSH version, different Node: a real switch target for the recovery gate.
+const combinationB = syntheticCombination({
+  id: 'comp-node24',
+  nodeVersion: '24.0.0',
+  nodeTarball: nodeTarballB,
   dshVersion: '0.1.5-rc.2',
   dshTarball,
 });
@@ -81,12 +92,28 @@ const fakeProcess = (overrides: Partial<ManagedProcessPort> = {}): ManagedProces
 const syntheticRuntime = () => {
   const artifacts = freshRoot('hdsl-comp-artifacts-');
   writeLocalArtifact(artifacts, sha256(nodeTarball), nodeTarball);
+  writeLocalArtifact(artifacts, sha256(nodeTarballB), nodeTarballB);
   writeLocalArtifact(artifacts, sha256(dshTarball), dshTarball);
   return createRuntimePort({
     closureInstall: false,
     precheck: 'none',
     localArtifactDirectory: artifacts,
   });
+};
+
+/** Wraps the synthetic runtime to record whether an install was ever reached. */
+const recordingRuntime = (): { runtime: ManagedRuntimePort; installs: string[] } => {
+  const real = syntheticRuntime();
+  const installs: string[] = [];
+  const runtime: ManagedRuntimePort = {
+    resolveComposition: (input) => real.resolveComposition(input),
+    compositionDigest: (lock) => real.compositionDigest(lock),
+    install: (lock, destination, context) => {
+      installs.push(`${lock.node.version}+${lock.dsh.version}`);
+      return real.install(lock, destination, context);
+    },
+  };
+  return { runtime, installs };
 };
 
 const createEnvironment = async (
@@ -111,6 +138,9 @@ const compose = async (
     process?: ManagedProcessPort;
     manager?: ProcessManager;
     opener?: VerifiedWebUiOpener;
+    catalog?: readonly RuntimeCombination[];
+    host?: HostPlatform;
+    runtime?: ManagedRuntimePort;
   } = {},
 ) => {
   const contexts: VerifiedWebUiContext[] = [];
@@ -123,9 +153,10 @@ const compose = async (
   const composition = await createDesktopComposition({
     dataRoot,
     appInfo,
-    catalog: [combination as RuntimeCombination],
-    runtime: syntheticRuntime(),
+    catalog: options.catalog ?? [combination as RuntimeCombination],
+    runtime: options.runtime ?? syntheticRuntime(),
     allowArtifactsOnly: true,
+    ...(options.host === undefined ? {} : { host: options.host }),
     process: options.process ?? fakeProcess(),
     ...(options.manager === undefined ? {} : { manager: options.manager }),
     openWebUi: opener,
@@ -208,6 +239,39 @@ describe('createDesktopComposition', () => {
       action: { kind: 'remove', pluginId: 'demo-plugin' },
     });
     expect(preview.ok).toBe(true);
+
+    await composition.close();
+  });
+
+  it('wires the desired-config entry patch to the environment home user patch (no "not wired" placeholder)', async () => {
+    const dataRoot = freshRoot('hdsl-comp-');
+    const { composition } = await compose(dataRoot);
+    await createEnvironment(composition, 'entry 接线环境');
+    const listed = composition.port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environmentId = listed.value[0]?.id as string;
+
+    // The service IS wired at the composition root: it must never return the
+    // "not wired" placeholder, and a legal edit must save the desired config
+    // with the honest saved/pending shape.
+    const patched = composition.port.patchEntry({
+      requestId: 'req-entry-wiring',
+      environmentId,
+      operation: { kind: 'disable', rowId: 'timer' },
+    });
+    if (!patched.ok) {
+      throw new Error(`entries.patch is not wired correctly: ${patched.code} ${patched.message}`);
+    }
+    expect(patched.value.saved).toBe(true);
+    expect(patched.value.runtime).toBe('pending');
+    expect(patched.value.runtimeVerification).toBe('unavailable');
+    // Written to the environment-shared home, never a profile declaration source.
+    const homePatch = join(environmentPaths(composition.service.layout, environmentId).homeDirectory, 'cordis.patch.yml');
+    expect(readFileSync(homePatch, 'utf8')).toContain('timer');
+    expect(patched.value.environmentId).toBe(environmentId);
 
     await composition.close();
   });
@@ -327,13 +391,76 @@ describe('createDesktopComposition', () => {
 });
 
 describe('restart recovery gate', () => {
-  it('blocks new create/start but leaves stop, reads and export available', () => {
+  it('blocks new create/start/switch but leaves stop, reads and export available', () => {
     expect(isBlockedByRecovery('environments.create', true)).toBe(true);
     expect(isBlockedByRecovery('environments.start', true)).toBe(true);
+    expect(isBlockedByRecovery('environments.switchCombination', true)).toBe(true);
     expect(isBlockedByRecovery('environments.stop', true)).toBe(false);
     expect(isBlockedByRecovery('operations.get', true)).toBe(false);
     expect(isBlockedByRecovery('diagnostics.export', true)).toBe(false);
     expect(isBlockedByRecovery('environments.start', false)).toBe(false);
+  });
+
+  it('refuses switchCombination after an unverifiable recovery and never moves the pointer', async () => {
+    const dataRoot = freshRoot('hdsl-comp-switch-gate-');
+    const first = await compose(dataRoot, {
+      catalog: [combination as RuntimeCombination, combinationB as RuntimeCombination],
+    });
+    await createEnvironment(first.composition, 'gate-env');
+    const listed = first.composition.port.listEnvironments();
+    expect(listed.ok).toBe(true);
+    if (!listed.ok) {
+      return;
+    }
+    const environment = listed.value[0];
+    expect(environment).toBeDefined();
+    if (environment === undefined) {
+      return;
+    }
+    const generationX = environment.activeGenerationId as string;
+    const revision = environment.revision;
+    await first.composition.close();
+
+    const reopened = await compose(dataRoot, {
+      catalog: [combination as RuntimeCombination, combinationB as RuntimeCombination],
+      process: fakeProcess({
+        recover: () =>
+          Promise.resolve({ entries: [{ environmentId: environment.id, resolution: 'unverifiable' }] }),
+      }),
+    });
+    expect(reopened.composition.recoveryBlocked).toBe(true);
+
+    // The unverifiable recovery still leaves the environment `stopped`, which
+    // the stopped-only switch guard alone would accept. The recovery gate is
+    // what must refuse the switch.
+    const recovered = reopened.composition.port.findEnvironment(environment.id);
+    expect(recovered.ok && recovered.value.state).toBe('stopped');
+    expect(
+      isBlockedByRecovery('environments.switchCombination', reopened.composition.recoveryBlocked),
+    ).toBe(true);
+
+    // Mirror app.ts beforeDispatch: a blocked method returns ENVIRONMENT_BUSY
+    // without ever reaching the port.
+    let reachedPort = false;
+    let response;
+    if (isBlockedByRecovery('environments.switchCombination', reopened.composition.recoveryBlocked)) {
+      response = portFail('ENVIRONMENT_BUSY', 'restart recovery is unresolved');
+    } else {
+      reachedPort = true;
+      response = reopened.composition.port.switchCombination({
+        requestId: 'req-switch-gate',
+        environmentId: environment.id,
+        expectedRevision: revision,
+        combination: combinationB as RuntimeCombination,
+      });
+    }
+    expect(response.ok).toBe(false);
+    expect(reachedPort).toBe(false);
+
+    const after = reopened.composition.port.findEnvironment(environment.id);
+    expect(after.ok && after.value.activeGenerationId).toBe(generationX);
+    expect(after.ok && after.value.revision).toBe(revision);
+    await reopened.composition.close();
   });
 });
 
@@ -452,6 +579,117 @@ describe('startup recovery with a crashed preview (P1)', () => {
     const operation = composition.port.findOperation('op-00000000000000aa');
     expect(operation.ok).toBe(true);
     if (operation.ok) expect(operation.value.status).toBe('failed');
+    await composition.close();
+  });
+});
+
+/**
+ * #107 host-wiring gate at the real desktop composition root.
+ *
+ * The production bootstrap must hand `createDesktopComposition` the real
+ * `process.platform`/`process.arch`. These tests drive the SAME composition
+ * entry the Electron main process uses with simulated non-darwin hosts, an
+ * unresolved/omitted host and the verified darwin/arm64 host. The recording
+ * runtime fails the negative controls closed if the install is ever reached.
+ */
+const simulatedUnverifiedHosts: ReadonlyArray<readonly [string, HostPlatform]> = [
+  ['win32/x64', { platform: 'win32', arch: 'x64' }],
+  ['linux/x64', { platform: 'linux', arch: 'x64' }],
+  ['linux/arm64', { platform: 'linux', arch: 'arm64' }],
+];
+
+describe('host wiring / platform gate (#107)', () => {
+  it.each(simulatedUnverifiedHosts)(
+    'refuses environments.create on the simulated host %s before any install effect',
+    async (_label, host) => {
+      const dataRoot = freshRoot('hdsl-comp-gate-');
+      const { runtime, installs } = recordingRuntime();
+      const { composition } = await compose(dataRoot, { host, runtime });
+      const contract = createContractRuntime({ port: composition.port });
+      const response = contract.dispatch({
+        apiVersion: API_VERSION,
+        method: 'environments.create',
+        input: { requestId: 'req-host-gate', name: 'gate', catalogCombinationId: combination.id },
+      });
+      expect(response.ok, JSON.stringify(response)).toBe(false);
+      if (!response.ok) {
+        expect(response.error.code).toBe('UNSUPPORTED_COMBINATION');
+      }
+      // No download/install side effect, no environment row, no ledger entry.
+      expect(installs).toEqual([]);
+      const listed = composition.port.listEnvironments();
+      expect(listed.ok && listed.value).toEqual([]);
+      expect(composition.port.findOperation('req-host-gate').ok).toBe(false);
+      await composition.close();
+    },
+  );
+
+  it('refuses environments.create when the host could not be resolved (omitted)', async () => {
+    const dataRoot = freshRoot('hdsl-comp-gate-unknown-');
+    const { runtime, installs } = recordingRuntime();
+    const { composition } = await compose(dataRoot, { runtime });
+    const contract = createContractRuntime({ port: composition.port });
+    const response = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'environments.create',
+      input: { requestId: 'req-host-unknown', name: 'unknown', catalogCombinationId: combination.id },
+    });
+    expect(response.ok, JSON.stringify(response)).toBe(false);
+    if (!response.ok) {
+      expect(response.error.code).toBe('UNSUPPORTED_COMBINATION');
+    }
+    expect(installs).toEqual([]);
+    await composition.close();
+  });
+
+  it('refuses environments.switchCombination on win32/x64 before any install effect', async () => {
+    const dataRoot = freshRoot('hdsl-comp-switch-gate-host-');
+    seedCommittedEnvironmentWithOrphanPreview(dataRoot);
+    const { runtime, installs } = recordingRuntime();
+    const { composition } = await compose(dataRoot, {
+      host: { platform: 'win32', arch: 'x64' },
+      runtime,
+    });
+    const contract = createContractRuntime({ port: composition.port });
+    const response = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'environments.switchCombination',
+      input: {
+        requestId: 'req-switch-host-gate',
+        environmentId: 'env-0000000000000001',
+        expectedRevision: 1,
+        catalogCombinationId: combination.id,
+      },
+    });
+    expect(response.ok, JSON.stringify(response)).toBe(false);
+    if (!response.ok) {
+      expect(response.error.code).toBe('UNSUPPORTED_COMBINATION');
+    }
+    expect(installs).toEqual([]);
+    await composition.close();
+  });
+
+  it('keeps the verified darwin/arm64 host on the create success path', async () => {
+    const dataRoot = freshRoot('hdsl-comp-gate-ok-');
+    const { runtime, installs } = recordingRuntime();
+    const { composition } = await compose(dataRoot, {
+      host: { platform: 'darwin', arch: 'arm64' },
+      runtime,
+    });
+    const contract = createContractRuntime({ port: composition.port });
+    const response = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'environments.create',
+      input: { requestId: 'req-host-ok', name: 'verified', catalogCombinationId: combination.id },
+    });
+    expect(response.ok, JSON.stringify(response)).toBe(true);
+    if (!response.ok) {
+      return;
+    }
+    const operationId = (response.value as { operationId: string }).operationId;
+    const snapshot = await composition.service.waitForOperation(operationId, { timeoutMs: 20_000 });
+    expect(snapshot.status).toBe('succeeded');
+    expect(installs).toHaveLength(1);
     await composition.close();
   });
 });

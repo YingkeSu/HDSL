@@ -21,8 +21,17 @@ import { transactionRecordPath, type AppDataLayout } from './layout.js';
 
 export type JournalPhase = 'prepared' | 'artifacts-installed' | 'committed' | 'failed';
 
+/**
+ * Transaction mode. Missing on records written by older builds and therefore
+ * read as `'create'`; switch and create share the same journal shape but have
+ * DIFFERENT rollback semantics (see `creation-service.ts`).
+ */
+export type JournalKind = 'create' | 'switch';
+
 export interface CreateJournalRecord {
   readonly schemaVersion: '1';
+  /** Missing means `'create'` (backward compatible with older journals). */
+  readonly kind?: JournalKind;
   readonly transactionId: string;
   readonly requestId: string;
   readonly operationId: string;
@@ -72,3 +81,7 @@ export class JournalStore {
     removePath(transactionRecordPath(this.#layout, transactionId));
   }
 }
+
+/** Reads a journal's transaction mode; a missing `kind` is a legacy `create`. */
+export const journalKind = (record: CreateJournalRecord): JournalKind =>
+  record.kind === 'switch' ? 'switch' : 'create';

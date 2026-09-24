@@ -180,6 +180,14 @@ const DSH_VERSIONS_NETWORK_SEED: ReferenceSeed = {
   ...FIXTURE_SEED,
   dshVersions: { failure: 'NETWORK_UNAVAILABLE' },
 };
+const ENTRY_PATCH_NOT_FOUND_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  entryPatch: { failure: 'NOT_FOUND' },
+};
+const ENTRY_PATCH_BUSY_SEED: ReferenceSeed = {
+  ...FIXTURE_SEED,
+  entryPatch: { failure: 'ENVIRONMENT_BUSY' },
+};
 
 export interface FixtureRuntime {
   readonly port: ReferenceContractPort;
@@ -239,7 +247,8 @@ export const ENVELOPE_FIXTURES: readonly ContractFixture[] = [
     description: 'minor version mismatch is rejected (exact match only)',
     // ADR 0005 §5.4: after the 1.0 -> 1.1 migration only this minor row moves;
     // the major row stays 2.0 and the machine table keeps both red.
-    request: { apiVersion: '1.2', method: 'catalog.list', input: {} },
+    // 1.2 -> 1.3 moves the minor row again for the 1.2 freeze (#135).
+    request: { apiVersion: '1.3', method: 'catalog.list', input: {} },
     expected: 'CONTRACT_VERSION_MISMATCH',
   },
   {
@@ -588,6 +597,111 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
       expectedRevision: 1,
     }),
     expected: 'ENVIRONMENT_BUSY',
+  },
+
+  // environments.switchCombination (#114, A2)
+  {
+    id: 'environments-switch-legal',
+    method: 'environments.switchCombination',
+    kind: 'legal',
+    description: 'switches a stopped environment to another verified combination',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-1',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'environments-switch-busy',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'a running environment must be stopped before switching (D1)',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-2',
+      environmentId: FIXTURE_IDS.environment.running,
+      expectedRevision: 3,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'ENVIRONMENT_BUSY',
+  },
+  {
+    id: 'environments-switch-revision',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'expectedRevision does not match',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-3',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 999,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'REVISION_CONFLICT',
+  },
+  {
+    id: 'environments-switch-unknown-environment',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'unknown environmentId',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-4',
+      environmentId: 'env-missing',
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'NOT_FOUND',
+  },
+  {
+    id: 'environments-switch-unknown-combination',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'unknown catalogCombinationId',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-5',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: 'combo-missing',
+    }),
+    expected: 'NOT_FOUND',
+  },
+  {
+    id: 'environments-switch-unsupported',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'a combination for a different host is not supported',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-6',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.win32,
+    }),
+    expected: 'UNSUPPORTED_COMBINATION',
+  },
+  {
+    id: 'environments-switch-unverified',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'an unverified combination can never be switched to',
+    request: request('environments.switchCombination', {
+      requestId: 'req-switch-7',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.unverified,
+    }),
+    expected: 'UNSUPPORTED_COMBINATION',
+  },
+  {
+    id: 'environments-switch-missing-request-id',
+    method: 'environments.switchCombination',
+    kind: 'illegal',
+    description: 'a switch without a requestId is rejected',
+    request: request('environments.switchCombination', {
+      environmentId: FIXTURE_IDS.environment.stopped,
+      expectedRevision: 1,
+      catalogCombinationId: FIXTURE_IDS.combination.verified,
+    }),
+    expected: 'INVALID_INPUT',
   },
 
   // environments.openWebUI
@@ -1276,6 +1390,125 @@ export const CONTRACT_FIXTURES: readonly ContractFixture[] = [
     request: request('versions.dsh', { requestId: 'req-versions-network' }),
     expected: 'ok',
     seed: DSH_VERSIONS_NETWORK_SEED,
+  },
+
+  // compositions.expected (environment-scoped read-only expected composition; #118)
+  {
+    id: 'compositions-expected-legal',
+    method: 'compositions.expected',
+    kind: 'legal',
+    description: 'starts a read-only expected-composition operation for a stopped environment',
+    request: request('compositions.expected', {
+      requestId: 'req-composition',
+      environmentId: FIXTURE_IDS.environment.stopped,
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'compositions-expected-missing-request-id',
+    method: 'compositions.expected',
+    kind: 'illegal',
+    description: 'an expected-composition read without a requestId is rejected',
+    request: request('compositions.expected', {
+      environmentId: FIXTURE_IDS.environment.stopped,
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'compositions-expected-missing-environment',
+    method: 'compositions.expected',
+    kind: 'illegal',
+    description: 'an expected-composition read without an environmentId is rejected',
+    request: request('compositions.expected', { requestId: 'req-composition-bad' }),
+    expected: 'INVALID_INPUT',
+  },
+
+  // entries.patch (desired-config home user patch; saved != ACTIVE; #135)
+  {
+    id: 'entries-patch-legal-enable',
+    method: 'entries.patch',
+    kind: 'legal',
+    description: 'a disable/enable edit of the home user patch is accepted and reported saved',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-1',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      operation: { kind: 'enable', rowId: 'timer' },
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'entries-patch-legal-config',
+    method: 'entries.patch',
+    kind: 'legal',
+    description: 'a config edit carries a required config value',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-2',
+      environmentId: FIXTURE_IDS.environment.running,
+      operation: { kind: 'config', rowId: 'timer', config: { interval: 500 } },
+    }),
+    expected: 'ok',
+  },
+  {
+    id: 'entries-patch-config-missing',
+    method: 'entries.patch',
+    kind: 'illegal',
+    description: 'a config edit without a config value is rejected',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-3',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      operation: { kind: 'config', rowId: 'timer' },
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'entries-patch-config-not-allowed',
+    method: 'entries.patch',
+    kind: 'illegal',
+    description: 'a non-config edit must not carry a config value',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-4',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      operation: { kind: 'remove', rowId: 'timer', config: { interval: 1 } },
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'entries-patch-unknown-field',
+    method: 'entries.patch',
+    kind: 'illegal',
+    description: 'an unknown operation field is rejected (strict validation)',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-5',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      operation: { kind: 'disable', rowId: 'timer', path: '/etc/passwd' },
+    }),
+    expected: 'INVALID_INPUT',
+  },
+  {
+    id: 'entries-patch-not-found',
+    method: 'entries.patch',
+    kind: 'illegal',
+    description: 'removing a row absent from the home patch is NOT_FOUND',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-6',
+      environmentId: FIXTURE_IDS.environment.stopped,
+      operation: { kind: 'remove', rowId: 'missing' },
+    }),
+    expected: 'NOT_FOUND',
+    seed: ENTRY_PATCH_NOT_FOUND_SEED,
+  },
+  {
+    id: 'entries-patch-busy',
+    method: 'entries.patch',
+    kind: 'illegal',
+    description: 'a starting/stopping environment is ENVIRONMENT_BUSY',
+    request: request('entries.patch', {
+      requestId: 'req-entry-patch-7',
+      environmentId: FIXTURE_IDS.environment.running,
+      operation: { kind: 'disable', rowId: 'timer' },
+    }),
+    expected: 'ENVIRONMENT_BUSY',
+    seed: ENTRY_PATCH_BUSY_SEED,
   },
 
 ];

@@ -272,7 +272,7 @@ const lookedLikeNetworkFailure = (output: string): boolean =>
   );
 
 export class RuntimePort implements ManagedRuntimePort {
-  readonly #host: HostPlatform;
+  readonly #host: HostPlatform | undefined;
   readonly #fetch: FetchLike;
   readonly #faults: InstallFaults;
   readonly #urlRewrites: Readonly<Record<string, string>>;
@@ -288,7 +288,7 @@ export class RuntimePort implements ManagedRuntimePort {
   readonly #executeCommand: typeof runCommand;
 
   constructor(options: RuntimePortOptions = {}) {
-    this.#host = options.host ?? { platform: 'darwin', arch: 'arm64' };
+    this.#host = options.host;
     this.#fetch = options.fetch ?? ((input, init) => fetch(input, init));
     this.#faults = options.faults ?? {};
     this.#urlRewrites = options.urlRewrites ?? {};
@@ -308,7 +308,7 @@ export class RuntimePort implements ManagedRuntimePort {
     this.#executeCommand = options.executeCommand ?? runCommand;
   }
 
-  get host(): HostPlatform {
+  get host(): HostPlatform | undefined {
     return this.#host;
   }
 

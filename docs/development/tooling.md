@@ -8,6 +8,8 @@
 
 ```bash
 # 已使用 nvm 时，先执行 nvm install && nvm use
+git clone https://github.com/YingkeSu/HDSL.git
+cd HDSL
 npm install --global pnpm@11.7.0
 pnpm install --frozen-lockfile
 ```
@@ -36,3 +38,5 @@ pnpm install --frozen-lockfile
 [Engineering checks](../../.github/workflows/engineering-checks.yml) 在 Ubuntu 上安装锁定依赖并运行类型检查、构建和默认测试。[Repository checks](../../.github/workflows/repository-checks.yml) 运行文档结构检查。
 
 真实 DSH 下载、系统钥匙串、原生 GUI 和跨平台验收需要相应运行环境及显式启用；CI 通过不代表这些场景全部通过。详见[测试指南](testing.md)。
+
+工程与文档工作流均支持 Actions 页面的「Run workflow」，也可执行 `gh workflow run engineering-checks.yml --ref main` 或 `gh workflow run repository-checks.yml --ref main`。提交带 `[skip ci]` 时不会自动产生检查结果；需要验证该提交时使用手动入口。工程 CI 构建完整桌面应用（包含 renderer），再运行默认测试。

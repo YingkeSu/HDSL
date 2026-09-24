@@ -20,6 +20,7 @@ import {
 import {
   buildAuthorizationSchema,
   changePlanActionSchema,
+  entryPatchOperationSchema,
   pluginSourceSelectorSchema,
   PLUGIN_QUERY_MAX_LENGTH,
   PLUGIN_QUERY_MIN_LENGTH,
@@ -32,6 +33,8 @@ export const CONTRACT_METHODS = [
   'environments.create',
   'environments.start',
   'environments.stop',
+  // 1.1 addition (#114, A2): in-environment composition switch transaction.
+  'environments.switchCombination',
   'environments.openWebUI',
   'operations.get',
   'operations.cancel',
@@ -51,6 +54,12 @@ export const CONTRACT_METHODS = [
   'generations.restore',
   // 1.1 addition (#113, A1): read-only upstream DSH version discovery.
   'versions.dsh',
+  // 1.1 addition (#118): read-only expected composition from `--dump-config`.
+  'compositions.expected',
+  // 1.2 addition (#135, E1-T1): desired-config entry patch for the runtime
+  // entry axis. It edits the environment-shared home user patch ONLY and NEVER
+  // reports the running process as ACTIVE.
+  'entries.patch',
 ] as const;
 
 export type ContractMethod = (typeof CONTRACT_METHODS)[number];
@@ -77,6 +86,12 @@ export const methodInputSchemas = {
     requestId: requestIdSchema,
     environmentId: environmentIdSchema,
     expectedRevision: revisionSchema,
+  }),
+  'environments.switchCombination': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    expectedRevision: revisionSchema,
+    catalogCombinationId: catalogCombinationIdSchema,
   }),
   'environments.openWebUI': sObject({
     requestId: requestIdSchema,
@@ -137,6 +152,15 @@ export const methodInputSchemas = {
   'versions.dsh': sObject({
     requestId: requestIdSchema,
   }),
+  'compositions.expected': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+  }),
+  'entries.patch': sObject({
+    requestId: requestIdSchema,
+    environmentId: environmentIdSchema,
+    operation: entryPatchOperationSchema,
+  }),
 } satisfies Record<ContractMethod, Schema<unknown>>;
 
 export type MethodInputs = {
@@ -168,6 +192,10 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'environments.create': define('environments.create', { readOnly: false, idempotent: true }),
   'environments.start': define('environments.start', { readOnly: false, idempotent: true }),
   'environments.stop': define('environments.stop', { readOnly: false, idempotent: true }),
+  'environments.switchCombination': define('environments.switchCombination', {
+    readOnly: false,
+    idempotent: true,
+  }),
   'environments.openWebUI': define('environments.openWebUI', {
     readOnly: false,
     idempotent: true,
@@ -185,6 +213,14 @@ export const METHOD_DEFINITIONS: Record<ContractMethod, MethodDefinition> = {
   'generations.list': define('generations.list', { readOnly: true, idempotent: false }),
   'generations.restore': define('generations.restore', { readOnly: false, idempotent: true }),
   'versions.dsh': define('versions.dsh', { readOnly: false, idempotent: true }),
+  'compositions.expected': define('compositions.expected', {
+    readOnly: false,
+    idempotent: true,
+  }),
+  'entries.patch': define('entries.patch', {
+    readOnly: false,
+    idempotent: true,
+  }),
 };
 
 export const validateMethodInput = <M extends ContractMethod>(

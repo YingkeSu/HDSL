@@ -43,6 +43,12 @@ const noopActions: RendererActions = {
   selectInstalledPlugin: () => undefined,
   previewPluginRemoval: () => undefined,
   loadDshVersions: () => undefined,
+  switchVersion: () => undefined,
+  loadExpectedComposition: () => undefined,
+  setEntryPatchRowId: () => undefined,
+  setEntryPatchConfigText: () => undefined,
+  patchEntry: () => undefined,
+  restartSelected: () => undefined,
 };
 
 const flush = (): Promise<void> =>

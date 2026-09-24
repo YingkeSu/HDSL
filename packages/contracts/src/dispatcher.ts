@@ -44,6 +44,8 @@ import {
   changePlanSchema,
   changeApplicationSchema,
   dshVersionListingSchema,
+  entryPatchResultSchema,
+  expectedCompositionViewSchema,
   environmentSummaryListSchema,
   generationSummaryListSchema,
   installedPluginsViewSchema,
@@ -161,6 +163,7 @@ const OPERATION_OUTPUT_SCHEMAS: Partial<Record<OperationKind, Schema<unknown>>> 
   apply: changeApplicationSchema,
   restore: generationSummarySchema,
   versions: dshVersionListingSchema,
+  composition: expectedCompositionViewSchema,
 };
 
 /**
@@ -202,9 +205,12 @@ const sanitizeOperationSnapshot = (snapshot: OperationSnapshot): OperationSnapsh
 };
 
 export const unsupportedCombinationReason = (
-  host: HostPlatform,
+  host: HostPlatform | undefined,
   combination: RuntimeCombination,
 ): string | undefined => {
+  if (host === undefined) {
+    return 'the host platform could not be resolved for this build';
+  }
   if (!isHostPlatformSupported(host)) {
     return `host platform ${formatHostPlatform(host)} is not verified for this build`;
   }
@@ -422,6 +428,41 @@ const execute = (
       publishIfKnown(runtime, reference.operationId);
       return { response: contractOk(API_VERSION, reference), executed: true };
     }
+    case 'environments.switchCombination': {
+      const typed = input as MethodInputs['environments.switchCombination'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      if (environment.value.revision !== typed.expectedRevision) {
+        return { response: failureForCode('REVISION_CONFLICT'), executed: false };
+      }
+      const combination = runtime.port.findCombination(typed.catalogCombinationId);
+      if (!combination.ok) {
+        return guardFailure(combination);
+      }
+      const unsupported = unsupportedCombinationReason(runtime.port.host, combination.value);
+      if (unsupported !== undefined) {
+        return { response: failure('UNSUPPORTED_COMBINATION', unsupported), executed: false };
+      }
+      markInProgress();
+      const outcome = runtime.port.switchCombination({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        expectedRevision: typed.expectedRevision,
+        combination: combination.value,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(
+        operationRefSchema,
+        outcome.value,
+        'environments.switchCombination',
+      );
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
+    }
     case 'environments.openWebUI': {
       const typed = input as MethodInputs['environments.openWebUI'];
       const environment = runtime.port.findEnvironment(typed.environmentId);
@@ -569,6 +610,60 @@ const execute = (
       const reference = validatePortValue(operationRefSchema, outcome.value, 'versions.dsh');
       publishIfKnown(runtime, reference.operationId);
       return { response: contractOk(API_VERSION, reference), executed: true };
+    }
+    case 'compositions.expected': {
+      // Environment-scoped read-only expected composition (#118). Existence is a
+      // pure guard so an unknown environment cannot poison the requestId; the
+      // port owns the busy/generation checks. The terminal
+      // `ExpectedCompositionView` is read from `output`.
+      const typed = input as MethodInputs['compositions.expected'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      markInProgress();
+      const outcome = runtime.port.describeExpectedComposition({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      const reference = validatePortValue(
+        operationRefSchema,
+        outcome.value,
+        'compositions.expected',
+      );
+      publishIfKnown(runtime, reference.operationId);
+      return { response: contractOk(API_VERSION, reference), executed: true };
+    }
+    case 'entries.patch': {
+      // Desired-config edit of the environment-shared home user patch (#135).
+      // Existence is a pure guard so an unknown environment cannot poison the
+      // requestId; the port owns the busy checks and the serialized
+      // read-modify-write. The terminal `EntryPatchResult` is returned directly
+      // and is always `saved: true` + `runtime: 'pending'`.
+      const typed = input as MethodInputs['entries.patch'];
+      const environment = runtime.port.findEnvironment(typed.environmentId);
+      if (!environment.ok) {
+        return guardFailure(environment);
+      }
+      markInProgress();
+      const outcome = runtime.port.patchEntry({
+        requestId: typed.requestId,
+        environmentId: typed.environmentId,
+        operation: typed.operation,
+      });
+      if (!outcome.ok) {
+        return executedFailure(outcome);
+      }
+      return {
+        response: contractOk(
+          API_VERSION,
+          validatePortValue(entryPatchResultSchema, outcome.value, 'entries.patch'),
+        ),
+        executed: true,
+      };
     }
   }
 };

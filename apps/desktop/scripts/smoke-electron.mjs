@@ -25,7 +25,10 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const electronPath = require('electron');
+const executableIndex = process.argv.indexOf('--executable');
+const packagedExecutable = executableIndex < 0 ? undefined : process.argv[executableIndex + 1];
+if (executableIndex >= 0 && !packagedExecutable) throw new Error('--executable requires a path');
+const electronPath = packagedExecutable ?? require('electron');
 const here = dirname(fileURLToPath(import.meta.url));
 const appRoot = join(here, '..');
 
@@ -102,7 +105,7 @@ const port = await freePort();
 const child = spawn(
   electronPath,
   [
-    appRoot,
+    ...(packagedExecutable === undefined ? [appRoot] : []),
     '--hdsl-data-root',
     dataRoot,
     `--user-data-dir=${userData}`,

@@ -11,9 +11,12 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { AppView, type AppViewProps } from '../App.js';
 import { CreateEnvironmentForm } from '../components/CreateEnvironmentForm.js';
 import { DshVersions } from '../components/DshVersions.js';
+import { EntryPatch } from '../components/EntryPatch.js';
+import { ExpectedComposition } from '../components/ExpectedComposition.js';
 import { PluginDiscovery } from '../components/PluginDiscovery.js';
 import { PluginInstall } from '../components/PluginInstall.js';
 import { PluginRemoval } from '../components/PluginRemoval.js';
+import { SwitchVersion } from '../components/SwitchVersion.js';
 
 export const renderAppView = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(AppView, props));
@@ -27,8 +30,17 @@ export const renderPluginDiscovery = (props: AppViewProps): string =>
 export const renderDshVersions = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(DshVersions, props));
 
+export const renderExpectedComposition = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(ExpectedComposition, props));
+
+export const renderEntryPatch = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(EntryPatch, props));
+
 export const renderPluginInstall = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginInstall, props));
 
 export const renderPluginRemoval = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginRemoval, props));
+
+export const renderSwitchVersion = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(SwitchVersion, props));

@@ -16,6 +16,9 @@ import {
   type ChangeApplication,
   type ChangePlan,
   type DshVersionListing,
+  type EntryPatchOperationKind,
+  type EntryPatchResult,
+  type ExpectedCompositionView,
   type GenerationSummary,
   type ContractError,
   type EnvironmentSummary,
@@ -122,6 +125,31 @@ export interface RendererState {
   readonly selectedInstalledPluginId: string | null;
   /** Last succeeded `versions.dsh` upstream DSH version listing, or null. */
   readonly dshVersions: DshVersionListing | null;
+  /** Last succeeded `compositions.expected` desired-composition view, or null. */
+  readonly expectedComposition: ExpectedCompositionView | null;
+  /** Row id input for the desired-config home patch edit (`entries.patch`, #135). */
+  readonly entryPatchRowId: string;
+  /** Config JSON text used only by the `config` operation; the whole row config is replaced. */
+  readonly entryPatchConfigText: string;
+  /**
+   * Last succeeded `entries.patch` result, or null. It is always the DESIRED
+   * config save (`saved: true`, `runtime: 'pending'`) and never the runtime
+   * ACTIVE set.
+   */
+  readonly entryPatchResult: EntryPatchResult | null;
+  /**
+   * The exact `environments.stop` operation the user asked to be followed by a
+   * restart, or null. Binding to the operation id (instead of a boolean) means a
+   * failed, cancelled, unrelated or superseded stop can never trigger an
+   * unintended start.
+   */
+  readonly restartAfterStopOperationId: string | null;
+  /**
+   * Non-blocking DSH data-compatibility warning returned by the last succeeded
+   * `generations.restore` (A2/#114), or null. Null covers "no restore yet" and
+   * the same-version/unknown-version cases, which never warn.
+   */
+  readonly restoreWarning: string | null;
 }
 
 /**
@@ -171,6 +199,33 @@ export interface RendererActions {
   previewPluginRemoval(): void;
   /** Starts a read-only upstream DSH version listing (`versions.dsh`, A1/#113). */
   loadDshVersions(): void;
+  /**
+   * Switches a STOPPED environment's active composition to another supported
+   * combination (`environments.switchCombination`, A2/#114). The supported set
+   * is the audited `versions.dsh` listing; an unsupported/unknown combination is
+   * refused, and a running/starting/stopping environment is never auto-stopped.
+   */
+  switchVersion(catalogCombinationId: string): void;
+  /**
+   * Starts a read-only EXPECTED composition read for the selected environment
+   * (`compositions.expected`, #118). The result is never the runtime ACTIVE set.
+   */
+  loadExpectedComposition(): void;
+  /** Row id input for the desired-config home patch edit (`entries.patch`, #135). */
+  setEntryPatchRowId(rowId: string): void;
+  /** Config JSON text for the `config` operation (`entries.patch`, #135). */
+  setEntryPatchConfigText(config: string): void;
+  /**
+   * Persists one desired-config edit of the environment home user patch
+   * (`entries.patch`, #135). A saved result is NEVER the runtime ACTIVE set.
+   */
+  patchEntry(kind: EntryPatchOperationKind): void;
+  /**
+   * Explicit restart fallback: stops and restarts the selected environment so a
+   * saved desired config is deterministically applied. It never claims a live
+   * reload succeeded.
+   */
+  restartSelected(): void;
 }
 
 export const INITIAL_STATE: RendererState = {
@@ -205,6 +260,12 @@ export const INITIAL_STATE: RendererState = {
   installedPlugins: null,
   selectedInstalledPluginId: null,
   dshVersions: null,
+  expectedComposition: null,
+  entryPatchRowId: '',
+  entryPatchConfigText: '',
+  entryPatchResult: null,
+  restartAfterStopOperationId: null,
+  restoreWarning: null,
 };
 
 /** The repository currently shown in the discovery detail panel, or null. */
@@ -241,6 +302,53 @@ export const canStart = (environment: EnvironmentSummary): boolean =>
 
 export const canStop = (environment: EnvironmentSummary): boolean =>
   environment.state === 'running' || environment.state === 'starting';
+
+/** Only a stopped environment may switch composition; switching never auto-stops. */
+export const canSwitchVersion = (environment: EnvironmentSummary): boolean =>
+  environment.state === 'stopped';
+
+/**
+ * A desired-config home patch edit is allowed while running (hot path) or
+ * stopped; `starting`/`stopping`/`creating` are refused with `ENVIRONMENT_BUSY`
+ * by core. The renderer mirrors that so the buttons can be disabled.
+ */
+export const canEditRuntimeEntry = (environment: EnvironmentSummary): boolean =>
+  environment.state !== 'starting' &&
+  environment.state !== 'stopping' &&
+  environment.state !== 'creating';
+
+/**
+ * Combination ids the audited upstream `versions.dsh` listing marks as
+ * supported (A1/#113). An empty set means "not yet known", never "unsafe".
+ */
+export const supportedCombinationIds = (state: RendererState): ReadonlySet<string> => {
+  const ids = new Set<string>();
+  const listing = state.dshVersions;
+  if (listing === null) {
+    return ids;
+  }
+  for (const entry of listing.versions) {
+    if (!entry.supported) continue;
+    for (const combinationId of entry.catalogCombinationIds) {
+      ids.add(combinationId);
+    }
+  }
+  return ids;
+};
+
+/**
+ * Catalog combinations that are verifiably switchable: verified on this host
+ * AND referenced by a supported upstream DSH version. Unknown or unverified
+ * combinations are never offered as switchable (unknown != unsafe).
+ */
+export const switchableCombinations = (
+  state: RendererState,
+): readonly RuntimeCombination[] => {
+  const supported = supportedCombinationIds(state);
+  return state.catalog.filter(
+    (entry) => entry.compatibility.status === 'verified' && supported.has(entry.id),
+  );
+};
 
 /** Keep mutations from replacing an operation whose initial snapshot is missing. */
 export const isBusy = (state: RendererState): boolean =>

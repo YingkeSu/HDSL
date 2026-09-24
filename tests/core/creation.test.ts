@@ -85,6 +85,13 @@ interface Harness {
 
 const roots: string[] = [];
 
+/**
+ * The synthetic catalog below is macOS ARM64. The real dispatcher platform
+ * gate now reads an explicit host (no silent darwin fallback), so every
+ * harness must declare the host it is simulating.
+ */
+const TEST_HOST = { platform: 'darwin', arch: 'arm64' } as const;
+
 const listFilesRecursively = (root: string): string[] => {
   if (!existsSync(root)) {
     return [];
@@ -141,6 +148,7 @@ const buildHarness = async (options: HarnessOptions = {}): Promise<Harness> => {
   const runtime = createRuntimePort({
     closureInstall: false,
     precheck: 'none',
+    host: TEST_HOST,
     ...(options.profileInit === true ? { profileInit: true } : {}),
     ...(options.executeCommand === undefined ? {} : { executeCommand: options.executeCommand as never }),
     localArtifactDirectory: localArtifacts,
@@ -151,6 +159,7 @@ const buildHarness = async (options: HarnessOptions = {}): Promise<Harness> => {
     dataRoot,
     catalog,
     runtime,
+    host: TEST_HOST,
     ...(options.fixtures === false ? {} : { fixtures: { allowArtifactsOnly: true } }),
     ...(options.faults === undefined ? {} : { faults: options.faults }),
   });
@@ -557,6 +566,7 @@ describe('journal recovery', () => {
       dataRoot,
       catalog: [combinationA],
       runtime,
+      host: TEST_HOST,
       fixtures: { allowArtifactsOnly: true },
     });
     const contract = createContractRuntime({ port: managed.port });

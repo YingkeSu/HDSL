@@ -163,6 +163,13 @@ const waitUntil = async (predicate: () => boolean, timeoutMs = 2_000): Promise<v
 
 const roots: string[] = [];
 
+/**
+ * The synthetic catalog below is macOS ARM64. The dispatcher platform gate now
+ * reads an explicit host (no silent darwin fallback), so every harness declares
+ * the host it is simulating.
+ */
+const TEST_HOST = { platform: 'darwin', arch: 'arm64' } as const;
+
 const freshRoot = (prefix: string): string => {
   const root = mkdtempSync(join(tmpdir(), prefix));
   roots.push(root);
@@ -183,6 +190,7 @@ const buildHarness = async (
   const runtime = createRuntimePort({
     closureInstall: false,
     precheck: 'none',
+    host: TEST_HOST,
     localArtifactDirectory: artifacts,
   });
   const process = options.process ?? new FakeProcess();
@@ -190,6 +198,7 @@ const buildHarness = async (
     dataRoot,
     catalog: [combination] as readonly RuntimeCombination[],
     runtime,
+    host: TEST_HOST,
     processFactory: () => process,
     fixtures: { allowArtifactsOnly: true },
     lockWaitTimeoutMs: options.lockWaitTimeoutMs ?? 200,
@@ -438,6 +447,7 @@ describe('close ordering', () => {
       dataRoot,
       catalog: [combination] as readonly RuntimeCombination[],
       runtime,
+      host: TEST_HOST,
       fixtures: { allowArtifactsOnly: true },
       lockWaitTimeoutMs: 150,
     });
@@ -462,6 +472,7 @@ describe('close ordering', () => {
       dataRoot,
       catalog: [combination] as readonly RuntimeCombination[],
       runtime: new GatedRuntime(),
+      host: TEST_HOST,
       fixtures: { allowArtifactsOnly: true },
       lockWaitTimeoutMs: 150,
     });

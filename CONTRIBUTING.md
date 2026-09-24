@@ -1,6 +1,6 @@
 # 贡献指南
 
-开发环境与启动命令见 [README](README.md)，详细工具配置见[工具链](docs/development/tooling.md)。问题和功能建议通过 [GitHub Issues](https://github.com/YingkeSu/HDSL/issues) 跟踪。
+开发环境与启动命令见[工具链](docs/development/tooling.md)，详细工具配置见[工具链](docs/development/tooling.md)。问题和功能建议通过 [GitHub Issues](https://github.com/YingkeSu/HDSL/issues) 跟踪。
 
 ## 开始修改
 

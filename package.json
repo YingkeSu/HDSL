@@ -1,6 +1,6 @@
 {
   "name": "hdsl",
-  "version": "0.0.0",
+  "version": "0.1.0-preview.1",
   "private": true,
   "description": "HDSL — Hello DSH Launcher. Managed local environments for DeepSeek Harness.",
   "license": "SEE LICENSE IN LICENSE",
@@ -14,6 +14,7 @@
     "build": "tsc -b tsconfig.build.json",
     "build:renderer": "pnpm --filter @hdsl/desktop run build:renderer",
     "build:desktop": "pnpm run build && pnpm run build:renderer",
+    "package:win": "pnpm run build:desktop && pnpm --filter @hdsl/desktop run package:win",
     "clean": "tsc -b tsconfig.build.json --clean",
     "test": "vitest run",
     "test:watch": "vitest",

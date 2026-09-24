@@ -31,6 +31,8 @@ import {
   OperationStore,
   PluginDiscoveryService,
   VersionDiscoveryService,
+  ExpectedCompositionService,
+  EntryPatchService,
   ChangePreviewService,
   ChangeApplyService,
   ChangePlanStore,
@@ -49,6 +51,8 @@ import {
 import {
   createGitHubPluginSource,
   createNpmDshVersionSource,
+  createExpectedCompositionPort,
+  createEntryPatchPort,
   createPluginApplyPort,
   createManagedPnpmExecutor,
   createGenerationRuntimeVerifier,
@@ -110,6 +114,12 @@ export interface DesktopCompositionOptions {
   readonly dataRoot: string;
   readonly appInfo: DiagnosticAppInfo;
   readonly catalog?: readonly RuntimeCombination[];
+  /**
+   * The real host this build runs on. Production MUST pass
+   * `resolveHostPlatform(process.platform, process.arch)`: when it is omitted
+   * (or unresolvable) the contract platform gate refuses every create/switch
+   * instead of silently assuming darwin/arm64. Tests inject a host explicitly.
+   */
   readonly host?: HostPlatform;
   readonly runtime?: ManagedRuntimePort;
   /** Test seam: replaces the real GitHub read adapter (no fixture hits the network). */
@@ -154,7 +164,7 @@ export interface DesktopComposition {
   ) => () => void;
   /**
    * True when restart reconciliation left a managed process it could not prove
-   * exited. New create/start mutations are then refused by main until the
+   * exited. New create/start/switch mutations are then refused by main until the
    * residue is resolved; stop/read/export remain available.
    */
   readonly recoveryBlocked: boolean;
@@ -174,6 +184,10 @@ export interface DesktopComposition {
 export const RECOVERY_BLOCKED_METHODS: ReadonlySet<string> = new Set([
   'environments.create',
   'environments.start',
+  // A switch installs a new generation, moves the active pointer and converges
+  // the shared home; an unverifiable managed process (possibly still running)
+  // must not race that, exactly like create/start.
+  'environments.switchCombination',
 ]);
 
 /**
@@ -329,7 +343,15 @@ export const createDesktopComposition = async (
   options: DesktopCompositionOptions,
 ): Promise<DesktopComposition> => {
   const catalog = options.catalog ?? VERIFIED_COMBINATIONS;
-  const runtime = options.runtime ?? createRuntimePort(PRODUCTION_RUNTIME_OPTIONS);
+  // The runtime port receives the same real host as core so its own `host`
+  // getter can never fall back to a hardcoded darwin/arm64 on an
+  // unverified/unknown platform.
+  const runtime =
+    options.runtime ??
+    createRuntimePort({
+      ...PRODUCTION_RUNTIME_OPTIONS,
+      ...(options.host === undefined ? {} : { host: options.host }),
+    });
   const exported: { current: DiagnosticsExporter | undefined } = { current: undefined };
   const service = new EnvironmentService({
     dataRoot: options.dataRoot,
@@ -411,6 +433,24 @@ export const createDesktopComposition = async (
     layout: service.layout,
     source: createNpmDshVersionSource({ fetch: globalThis.fetch, catalog }),
   });
+  // Read-only EXPECTED composition (`compositions.expected`, #118). It runs the
+  // managed `--dump-config` offline against the active generation and parses the
+  // grouped dump. It never executes plugin code, never claims the runtime ACTIVE
+  // set, and no process is spawned until the method is called.
+  const expectedComposition = new ExpectedCompositionService({
+    layout: service.layout,
+    environments: new EnvironmentStore(service.layout),
+    port: createExpectedCompositionPort(),
+  });
+  // Desired-config entry patch (`entries.patch`, #135). It writes ONLY the
+  // environment-shared home user patch (`home/cordis.patch.yml`) and never a
+  // generation's immutable profile declaration source; a saved file is never
+  // reported as the runtime ACTIVE set.
+  const entryPatch = new EntryPatchService({
+    layout: service.layout,
+    environments: new EnvironmentStore(service.layout),
+    port: createEntryPatchPort(),
+  });
   // Environment-scoped change preview. The default adapter is the same GitHub
   // source; tests inject a controlled preview port instead.
   const executorIdentity = {
@@ -481,6 +521,8 @@ export const createDesktopComposition = async (
     exportDiagnostics: exporter,
     pluginDiscovery,
     versionDiscovery,
+    expectedComposition,
+    entryPatch,
     changePreview,
     changeApply,
     installedPlugins,
