@@ -18,7 +18,7 @@ M0 的证据门槛为 R001–R004。R005（插件/bundle 锁版本与隔离安�
 
 ## 下一步
 
-1. #88 Electron 退出/租约观察已修复（ADR 0008），T006/T007 与 T008a 的 macOS 桌面证据已补齐（[validation-001.md](validation-001.md)）。当前收尾 #100 的原生 `shell.openExternal` 与当前 SHA 手工原生复验；不把测试清理时的 SIGKILL 计作正常退出。
+1. #88 Electron 退出/租约观察已修复（PR #105），T006/T007 与 T008a 的 macOS 桌面证据已补齐（[validation-001.md](validation-001.md)）。当前收尾 #100 的原生 `shell.openExternal` 与当前 SHA 手工原生复验；不把测试清理时的 SIGKILL 计作正常退出。
 2. 真实第三方插件 macOS 全链验收已完成（[#98](https://github.com/YingkeSu/HDSL/issues/98)）；后续候选仍按精确 commit、入口、脚本、许可与服务依赖核验，记录成功与受控拒绝。stars 不替代安全或兼容核验。
 3. 契约 1.1 已冻结（`contracts-v1.1.0`）；1.2（`entries.patch` / E1-T1 [#135](https://github.com/YingkeSu/HDSL/issues/135)）已实现，标签待编排者按精确提交创建。持续修正过时文档；插件受限范围以 #73 最终验收记录与实现为准。
 4. 稳定性与桌面验收收尾后，补整合包规格和实施计划，验证本机独立数据目录之间的导出/导入/重建；跨机结果仍单列未测。
