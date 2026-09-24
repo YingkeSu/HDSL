@@ -1,20 +1,25 @@
 /**
  * Plugin discovery layout/accessibility regression (issue #148).
  *
- * GitHub returns up to 100 hits and the component keeps them all in the DOM
- * (the first page is the designed limit). The list therefore has to live in a
- * bounded, keyboard-focusable scroll region, otherwise the source
+ * The plugins.search page carries up to `PLUGIN_SEARCH_PAGE_SIZE` (100) hits
+ * and the component keeps them all in the DOM; the GitHub search ceiling
+ * (`GITHUB_SEARCH_RESULT_LIMIT` = 1000) is a different number shown as copy in
+ * the counts panel. The list therefore has to live in a bounded,
+ * keyboard-focusable scroll region, otherwise the source
  * preview/install/generation/uninstall panels are pushed many screens down.
  *
- * These assertions are structural (react-dom/server, no DOM). The interactive
- * 1086x773 and narrow-viewport keyboard/scroll pass is recorded separately and
- * is intentionally not claimed here.
+ * These assertions are structural (react-dom/server, no DOM/CSS layout), so
+ * they cannot measure real reachability. Real-browser evidence for focus,
+ * wheel and ArrowDown scrolling is recorded separately (independent Chrome/CDP
+ * review on PR #154 and the 1086x773 / 420x740 harness measurements); this file
+ * deliberately claims only the markup/scoping contract.
  */
 import { readFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   GITHUB_SEARCH_RESULT_LIMIT,
+  PLUGIN_SEARCH_PAGE_SIZE,
   type PluginSearchHit,
   type PluginSearchResult,
 } from '@hdsl/contracts';
@@ -95,7 +100,7 @@ const searchWith = (hits: readonly PluginSearchHit[]): PluginSearchResult => ({
   hits: [...hits],
   totalCount: hits.length === 0 ? 0 : 15881,
   incompleteResults: false,
-  hasMore: hits.length >= GITHUB_SEARCH_RESULT_LIMIT,
+  hasMore: hits.length >= PLUGIN_SEARCH_PAGE_SIZE,
   fetchedAt: '2026-01-02T03:04:05Z',
   fromCache: false,
 });
@@ -118,25 +123,41 @@ const render = (hits: readonly PluginSearchHit[]): string =>
   });
 
 describe('PluginDiscovery bounded result list (#148)', () => {
-  it('keeps the full 100-hit first page in one focusable, labelled scroll region', () => {
-    const hits = Array.from({ length: GITHUB_SEARCH_RESULT_LIMIT }, (_, index) => hit(index));
+  it('keeps the full 100-hit search page in one focusable, labelled scroll region', () => {
+    // Anchor the fixture to the product page size instead of a bare literal.
+    expect(PLUGIN_SEARCH_PAGE_SIZE).toBe(100);
+    const hits = Array.from({ length: PLUGIN_SEARCH_PAGE_SIZE }, (_, index) => hit(index));
     const html = render(hits);
     const region = scrollRegion(html);
 
     // The designed first-page cap is preserved and nothing is virtualized away.
-    expect([...region.matchAll(/<li>/g)]).toHaveLength(GITHUB_SEARCH_RESULT_LIMIT);
+    expect([...region.matchAll(/<li>/g)]).toHaveLength(PLUGIN_SEARCH_PAGE_SIZE);
     expect(region).toContain('octo/dsh-plugin-000');
     expect(region).toContain('octo/dsh-plugin-099');
 
-    // Keyboard reachability: the region itself is focusable and named.
+    // Keyboard reachability: the region itself is focusable and named exactly
+    // for the rendered page size (not the GitHub 1000-result ceiling).
     expect(region).toContain('role="group"');
     expect(region).toContain('tabindex="0"');
-    expect(region).toMatch(/aria-label="[^"]*100[^"]*"/);
+    expect(region).toContain('aria-label="命中结果列表（100 条，可滚动）"');
+    expect(region).not.toContain('1000');
     expect(region).toContain('aria-describedby="plugin-results-hint"');
 
     // A visible hint explains the independent scroll to sighted keyboard users.
     expect(html).toContain('id="plugin-results-hint"');
     expect(html).toContain('列表可独立滚动');
+  });
+
+  it('keeps the GitHub 1000-result ceiling distinct from the 100-hit page', () => {
+    const hits = Array.from({ length: PLUGIN_SEARCH_PAGE_SIZE }, (_, index) => hit(index));
+    const html = render(hits);
+    const region = scrollRegion(html);
+    // The region labels the page it renders (100), never the GitHub ceiling...
+    expect(region).toContain('aria-label="命中结果列表（100 条，可滚动）"');
+    expect(region).not.toContain('1000');
+    // ...while the ceiling stays visible as copy in the counts panel.
+    expect(html).toContain(String(GITHUB_SEARCH_RESULT_LIMIT));
+    expect(GITHUB_SEARCH_RESULT_LIMIT).toBe(1000);
   });
 
   it('uses the same bounded region for a single-hit result', () => {
