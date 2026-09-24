@@ -57,6 +57,10 @@ export const FORBIDDEN_RULES = [
   { id: 'diagnostics', test: (p) => p.split('/').some((part) => part.includes('hdsl-diagnostics') || part.includes('diagnostics-export')), why: 'diagnostic exports are per-user data' },
   { id: 'credentials', test: (p) => p.endsWith('.credentials.yaml') || p.includes('/.hdsl/'), why: 'credentials and local runtime state must never be packaged' },
   { id: 'dev-cache', test: (p) => p.split('/').some((part) => part === 'pnpm-cache' || part === '.cache' || part === '.scratch'), why: 'development caches are not distributable content' },
+  { id: 'dependency-sources', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/') && p.includes('/src/'), why: 'workspace dependency TypeScript sources are not runtime content' },
+  { id: 'dependency-source-map', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/') && p.endsWith('.map'), why: 'workspace dependency build maps are not runtime content' },
+  { id: 'test-only-api', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/contracts/dist/testing/'), why: 'the contracts testing subpath is a test-only API and must never ship' },
+  { id: 'test-evidence-fixture', test: (p) => p.startsWith('resources/app/node_modules/@hdsl/runtime/catalog/service-verifications/'), why: 'service-verification evidence fixtures are review data, not runtime content' },
   { id: 'dev-dependency', test: (p) => DEV_DEPENDENCY_DIRS.some((name) => p.startsWith(`resources/app/node_modules/${name}/`)), why: 'development-only dependencies must not be packaged' },
 ];
 

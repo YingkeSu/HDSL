@@ -21,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 import { attachArguments, inspectMountedImage } from '../../apps/desktop/scripts/verify-mac-dmg.mjs';
 import { inspectMacApp } from '../../apps/desktop/scripts/verify-mac-package.mjs';
+import { REQUIRED_FILES, verifyPackagedTree } from '../../apps/desktop/scripts/verify-win-package.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -33,6 +34,7 @@ const readText = (relativePath: string): string =>
 interface DesktopManifest {
   readonly scripts?: Record<string, string>;
   readonly build?: {
+    readonly files?: readonly string[];
     readonly mac?: {
       readonly target?: readonly { readonly target?: string; readonly arch?: readonly string[] }[];
       readonly identity?: string | null;
@@ -74,6 +76,37 @@ describe('macOS DMG packaging declaration', () => {
     // Windows packaging is owned by its own change; the mac work must leave the
     // win target declaration untouched.
     expect(build.win?.target).toEqual([{ target: 'dir', arch: ['x64'] }]);
+  });
+
+  it('excludes workspace test APIs, sources and maps from the packaged tree', () => {
+    // electron-builder copies workspace dependency directories wholesale, so the
+    // only place to keep test-only content out of the app bundle is here.
+    expect(build.files).toEqual(
+      expect.arrayContaining([
+        '!node_modules/@hdsl/*/src/**',
+        '!node_modules/@hdsl/*/dist/**/*.map',
+        '!node_modules/@hdsl/contracts/dist/testing/**',
+        '!node_modules/@hdsl/runtime/catalog/service-verifications/**',
+      ]),
+    );
+  });
+});
+
+describe('packaged-tree test-content rules', () => {
+  it.each([
+    ['resources/app/node_modules/@hdsl/contracts/dist/testing/index.js', 'test-only-api'],
+    ['resources/app/node_modules/@hdsl/contracts/dist/index.js.map', 'dependency-source-map'],
+    ['resources/app/node_modules/@hdsl/core/src/credential-store.ts', 'dependency-sources'],
+    ['resources/app/node_modules/@hdsl/runtime/catalog/service-verifications/x.json', 'test-evidence-fixture'],
+  ])('rejects %s as %s', (extra, ruleId) => {
+    const errors = verifyPackagedTree(root, {
+      listFiles: () => [...REQUIRED_FILES, extra],
+    });
+    expect(errors.some((error) => error.includes(`(${ruleId})`))).toBe(true);
+  });
+
+  it('accepts the production dependency tree without those paths', () => {
+    expect(verifyPackagedTree(root, { listFiles: () => [...REQUIRED_FILES] })).toEqual([]);
   });
 });
 
