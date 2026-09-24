@@ -68,11 +68,8 @@ describe('RendererController load', () => {
       'env-running',
       'env-stopped',
     ]);
-    // catalog.list already filters unverified combinations in main.
-    expect(state.catalog.map((entry) => entry.id)).toEqual([
-      'combo-darwin-arm64',
-      'combo-win32-x64',
-    ]);
+    // catalog.list already filters unverified and non-host combinations in main.
+    expect(state.catalog.map((entry) => entry.id)).toEqual(['combo-darwin-arm64']);
     expect(state.selectedEnvironmentId).toBe('env-running');
     expect(state.createCombinationId).toBe('combo-darwin-arm64');
     await controller.dispose();

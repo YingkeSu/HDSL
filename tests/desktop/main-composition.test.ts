@@ -624,6 +624,45 @@ describe('host wiring / platform gate (#107)', () => {
     },
   );
 
+  it('#147 lists no installable combination on the simulated win32/x64 host', async () => {
+    const dataRoot = freshRoot('hdsl-comp-catalog-win-');
+    const { composition } = await compose(dataRoot, { host: { platform: 'win32', arch: 'x64' } });
+    const contract = createContractRuntime({ port: composition.port });
+    const response = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'catalog.list',
+      input: {},
+    });
+    expect(response.ok, JSON.stringify(response)).toBe(true);
+    if (response.ok) {
+      // Windows is preview-only: the darwin combination must never be offered
+      // as installable, so the UI can block creation before the form.
+      expect(response.value).toEqual([]);
+    }
+    // The foreign-host combination stays resolvable so the platform gate still
+    // refuses it with a specific UNSUPPORTED_COMBINATION, not a generic NOT_FOUND.
+    const lookup = composition.port.findCombination(combination.id);
+    expect(lookup.ok).toBe(true);
+    await composition.close();
+  });
+
+  it('#147 still lists the verified combination on the darwin/arm64 host', async () => {
+    const dataRoot = freshRoot('hdsl-comp-catalog-darwin-');
+    const { composition } = await compose(dataRoot, { host: { platform: 'darwin', arch: 'arm64' } });
+    const contract = createContractRuntime({ port: composition.port });
+    const response = contract.dispatch({
+      apiVersion: API_VERSION,
+      method: 'catalog.list',
+      input: {},
+    });
+    expect(response.ok, JSON.stringify(response)).toBe(true);
+    if (response.ok) {
+      const ids = (response.value as readonly { id: string }[]).map((entry) => entry.id);
+      expect(ids).toContain(combination.id);
+    }
+    await composition.close();
+  });
+
   it('refuses environments.create when the host could not be resolved (omitted)', async () => {
     const dataRoot = freshRoot('hdsl-comp-gate-unknown-');
     const { runtime, installs } = recordingRuntime();

@@ -8,6 +8,7 @@
  * in the demo preview and the PR report, not claimed as Electron acceptance.
  */
 import type { ChangePlan, EnvironmentSummary } from '@hdsl/contracts';
+import { FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 import { renderAppView, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import {
@@ -319,6 +320,35 @@ describe('AppView state matrix', () => {
     expect(html).toContain('http://127.0.0.1:53123');
     expect(html).toContain('export-1');
     expect(html).toContain('已脱敏');
+  });
+});
+
+describe('#147 host-scoped create entry points', () => {
+  it('disables every create entry point and explains the boundary when no combination targets this host', () => {
+    const html = renderAppView({ state: state({ catalog: [], environments: [] }), actions: noopActions });
+    expect(buttonNamed(html, '新建环境')?.attrs).toContain('disabled');
+    expect(buttonNamed(html, '创建第一个环境')?.attrs).toContain('disabled');
+    // The build boundary is stated instead of offering a form that must fail on
+    // the platform gate; Windows/Linux are explicitly preview-only.
+    expect(html).toContain('当前平台没有可安装的受审运行时组合');
+    expect(html).toContain('Windows');
+    expect(html).toContain('仅提供界面预览');
+  });
+
+  it('keeps the create entries enabled when a host-installable combination exists', () => {
+    const html = renderAppView({
+      state: state({ catalog: FIXTURE_SEED.catalog, environments: [] }),
+      actions: noopActions,
+    });
+    expect(buttonNamed(html, '新建环境')?.attrs).not.toContain('disabled');
+    expect(buttonNamed(html, '创建第一个环境')?.attrs).not.toContain('disabled');
+    expect(html).not.toContain('当前平台没有可安装的受审运行时组合');
+  });
+
+  it('disables the create submit and shows the boundary inside the form', () => {
+    const html = renderCreateForm({ state: state({ catalog: [] }), actions: noopActions });
+    expect(buttonNamed(html, '创建环境')?.attrs).toContain('disabled');
+    expect(html).toContain('当前平台没有可安装的受审运行时组合，已禁用创建');
   });
 });
 

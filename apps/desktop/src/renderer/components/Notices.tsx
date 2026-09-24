@@ -5,12 +5,17 @@
  * live region. Only contract-provided, already-sanitized text is rendered.
  */
 import type { ReactElement } from 'react';
-import { describeError } from '../format.js';
+import { describeError, NO_INSTALLABLE_COMBINATION_NOTICE } from '../format.js';
 import type { RendererState } from '../view-model.js';
 
 export function Notices({ state }: { readonly state: RendererState }): ReactElement {
   return (
     <div className="notices">
+      {state.phase === 'ready' && state.catalog.length === 0 && (
+        <p role="note" className="notice">
+          {NO_INSTALLABLE_COMBINATION_NOTICE}
+        </p>
+      )}
       {state.loadError !== null && (
         <p role="alert" className="notice notice-error">
           加载失败：{describeError(state.loadError)}

@@ -336,6 +336,25 @@ export const supportedCombinationIds = (state: RendererState): ReadonlySet<strin
   return ids;
 };
 
+/** Catalog combination ids installable on this host (already host-scoped by main). */
+export const installableCombinationIds = (state: RendererState): ReadonlySet<string> =>
+  new Set(state.catalog.map((entry) => entry.id));
+
+/**
+ * True when an upstream `versions.dsh` entry has at least one audited
+ * combination that is actually installable on this host. The registry listing
+ * reports audited coverage independently of the host, so the renderer
+ * intersects it with the host-scoped catalog before claiming that a version can
+ * be installed here.
+ */
+export const isVersionInstallableOnHost = (
+  state: RendererState,
+  combinationIds: readonly string[],
+): boolean => {
+  const installable = installableCombinationIds(state);
+  return combinationIds.some((id) => installable.has(id));
+};
+
 /**
  * Catalog combinations that are verifiably switchable: verified on this host
  * AND referenced by a supported upstream DSH version. Unknown or unverified

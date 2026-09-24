@@ -163,7 +163,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
             <button
               id="new-environment"
               type="button"
-              disabled={state.phase !== 'ready' || busy}
+              disabled={state.phase !== 'ready' || busy || state.catalog.length === 0}
               onClick={() => {
                 openCreate();
               }}
@@ -203,7 +203,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
                 <button
                   className="primary"
                   type="button"
-                  disabled={busy}
+                  disabled={busy || state.catalog.length === 0}
                   onClick={() => {
                     openCreate();
                   }}
