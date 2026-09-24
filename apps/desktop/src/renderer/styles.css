@@ -568,6 +568,24 @@ progress {
 .hdsl-app:has(> .demo-banner) .sidebar {
   grid-row: 3/5;
 }
+/* Plugin discovery (#148): the API returns up to 100 hits. Bound the list to
+   its own scroll region so the source preview, install, generation and
+   uninstall panels below it stay reachable without scrolling through every
+   hit. The region is focusable so it can be scrolled with the keyboard. */
+.plugin-results-hint {
+  margin: 6px 0 10px;
+}
+.plugin-results-scroll {
+  max-height: min(45vh, 460px);
+  overflow-y: auto;
+  border: 1px solid #eaf0f7;
+  border-radius: 6px;
+  padding: 4px 10px;
+}
+.plugin-results-scroll:focus-visible {
+  outline: 3px solid #1b70d1;
+  outline-offset: 3px;
+}
 dialog {
   width: min(500px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
