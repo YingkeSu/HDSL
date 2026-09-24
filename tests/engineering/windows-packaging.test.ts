@@ -32,6 +32,7 @@ import {
   verifyInstallerFile,
   verifyPackagedTree,
 } from '../../apps/desktop/scripts/verify-win-package.mjs';
+import { verifyChecksumFile } from '../../apps/desktop/scripts/verify-checksum-file.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 
@@ -287,6 +288,45 @@ describe('packaged payload content audit', () => {
   });
 });
 
+describe('checksum file format', () => {
+  const hash = 'a'.repeat(64);
+  const name = 'HDSL-0.1.0-preview.1-win-x64-abc1234-setup.exe';
+  let directory: string;
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'hdsl-sums-'));
+  });
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('accepts an LF-only, BOM-free checksum file', () => {
+    const file = join(directory, 'SHA256SUMS.txt');
+    writeFileSync(file, `${hash}  ${name}\n`);
+    expect(verifyChecksumFile(file, name)).toEqual([]);
+  });
+
+  it('rejects the CRLF that PowerShell Set-Content produces', () => {
+    const file = join(directory, 'SHA256SUMS.txt');
+    writeFileSync(file, `${hash}  ${name}\r\n`);
+    expect(verifyChecksumFile(file, name).some((error) => error.includes('CR'))).toBe(true);
+  });
+
+  it('rejects a UTF-8 BOM', () => {
+    const file = join(directory, 'SHA256SUMS.txt');
+    writeFileSync(
+      file,
+      Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(`${hash}  ${name}\n`)]),
+    );
+    expect(verifyChecksumFile(file, name).some((error) => error.includes('BOM'))).toBe(true);
+  });
+
+  it('rejects a filename mismatch', () => {
+    const file = join(directory, 'SHA256SUMS.txt');
+    writeFileSync(file, `${hash}  other.zip\n`);
+    expect(verifyChecksumFile(file, name).some((error) => error.includes('expected'))).toBe(true);
+  });
+});
+
 describe('archive integrity checker', () => {
   it('accepts a complete tree', () => {
     expect(verifyPackagedTree(root, { listFiles: completeTree })).toEqual([]);
@@ -374,6 +414,30 @@ describe('Windows portable build workflow', () => {
     expect(workflow).toContain('Get-FileHash -Algorithm SHA256');
     expect(workflow).toContain('SHA256SUMS.txt');
     expect(workflow).toContain('build-info.txt');
+  });
+
+  it('writes checksum files with LF so sha256sum -c works on Linux', () => {
+    // Windows `Set-Content` defaults to CRLF, which GNU `sha256sum -c` does not
+    // strip; the Ubuntu publish job and users would then fail verification.
+    expect(workflow).not.toMatch(/Set-Content[^\n]*SHA256SUMS/);
+    expect(workflow).toContain('[System.IO.File]::WriteAllText("$release/SHA256SUMS.txt"');
+    expect(workflow).toContain(
+      '[System.IO.File]::WriteAllText("$release/SHA256SUMS-installer.txt"',
+    );
+    // Format stays 'lowercase-hash + two spaces + filename' with a single LF.
+    expect(workflow).toContain('"$hash  $name`n"');
+  });
+
+  it('checks the produced bytes and rejects a CRLF control on the runner', () => {
+    expect(workflow).toContain('verify-checksum-file.mjs "$release/SHA256SUMS.txt"');
+    expect(workflow).toContain('crlf-control.txt');
+    expect(workflow).toContain('crlf-control-installer.txt');
+  });
+
+  it('consumes the checksums with GNU sha256sum on Linux', () => {
+    expect(workflow).toContain('sha256sum -c SHA256SUMS.txt');
+    expect(workflow).toContain('sha256sum -c SHA256SUMS-installer.txt');
+    expect(workflow).toContain('runs-on: ubuntu-latest');
   });
 
   it('names the artifact with version, win-x64 and the exact build SHA', () => {

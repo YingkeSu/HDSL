@@ -87,8 +87,10 @@ jobs:
           Copy-Item -Path "$release/win-unpacked/*" -Destination $stage -Recurse -Force
           Compress-Archive -Path $stage -DestinationPath "$release/$name" -CompressionLevel Optimal
           $hash = (Get-FileHash -Algorithm SHA256 -Path "$release/$name").Hash.ToLower()
-          Set-Content -Path "$release/SHA256SUMS.txt" -Encoding ascii -Value "$hash  $name"
-          Set-Content -Path "$release/build-info.txt" -Encoding ascii -Value @(
+          # Write LF, not the Windows default CRLF: the Ubuntu publish job and
+          # users run `sha256sum -c`, which does not strip a carriage return.
+          [System.IO.File]::WriteAllText("$release/SHA256SUMS.txt", "$hash  $name`n", [System.Text.UTF8Encoding]::new($false))
+          $info = @(
             "artifact: $name",
             "version: $version",
             "base-commit: $env:GITHUB_SHA",
@@ -102,6 +104,13 @@ jobs:
             "signing: unsigned, not notarized",
             "windows-host-evidence: none (the packaged app was not executed)"
           )
+          [System.IO.File]::WriteAllText("$release/build-info.txt", ($info -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+          node apps/desktop/scripts/verify-checksum-file.mjs "$release/SHA256SUMS.txt" "$name"
+          if ($LASTEXITCODE -ne 0) { throw 'SHA256SUMS.txt is not sha256sum-consumable' }
+          [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/crlf-control.txt", "$hash  $name`r`n", [System.Text.UTF8Encoding]::new($false))
+          node apps/desktop/scripts/verify-checksum-file.mjs "$env:RUNNER_TEMP/crlf-control.txt" "$name"
+          if ($LASTEXITCODE -ne 1) { throw "CRLF negative control was not rejected (exit $LASTEXITCODE)" }
+          Write-Host 'PASS: SHA256SUMS.txt is LF-only and BOM-free; the CRLF control was rejected.'
           Get-Content "$release/SHA256SUMS.txt"
           Get-Content "$release/build-info.txt"
 
@@ -227,8 +236,10 @@ jobs:
           $name = $env:HDSL_INSTALLER_NAME
           $release = 'apps/desktop/release'
           $hash = (Get-FileHash -Algorithm SHA256 -Path "$release/$name").Hash.ToLower()
-          Set-Content -Path "$release/SHA256SUMS-installer.txt" -Encoding ascii -Value "$hash  $name"
-          Set-Content -Path "$release/build-info-installer.txt" -Encoding ascii -Value @(
+          # Write LF, not the Windows default CRLF: the Ubuntu publish job and
+          # users run `sha256sum -c`, which does not strip a carriage return.
+          [System.IO.File]::WriteAllText("$release/SHA256SUMS-installer.txt", "$hash  $name`n", [System.Text.UTF8Encoding]::new($false))
+          $info = @(
             "artifact: $name",
             "format: NSIS installer (.exe), Windows PE, Nullsoft Install System stub",
             "version: $version",
@@ -245,6 +256,13 @@ jobs:
             "evidence: silent /S install into an isolated directory, in-place upgrade and silent /S uninstall on the build runner; the installed tree passed the archive-integrity check and user-data sentinels survived",
             "windows-gui-evidence: none (the installed application was not launched or exercised through the UI)"
           )
+          [System.IO.File]::WriteAllText("$release/build-info-installer.txt", ($info -join "`n") + "`n", [System.Text.UTF8Encoding]::new($false))
+          node apps/desktop/scripts/verify-checksum-file.mjs "$release/SHA256SUMS-installer.txt" "$name"
+          if ($LASTEXITCODE -ne 0) { throw 'SHA256SUMS-installer.txt is not sha256sum-consumable' }
+          [System.IO.File]::WriteAllText("$env:RUNNER_TEMP/crlf-control-installer.txt", "$hash  $name`r`n", [System.Text.UTF8Encoding]::new($false))
+          node apps/desktop/scripts/verify-checksum-file.mjs "$env:RUNNER_TEMP/crlf-control-installer.txt" "$name"
+          if ($LASTEXITCODE -ne 1) { throw "installer CRLF negative control was not rejected (exit $LASTEXITCODE)" }
+          Write-Host 'PASS: SHA256SUMS-installer.txt is LF-only and BOM-free; the CRLF control was rejected.'
           Get-Content "$release/SHA256SUMS-installer.txt"
           Get-Content "$release/build-info-installer.txt"
 
@@ -258,3 +276,27 @@ jobs:
             apps/desktop/release/*.exe
             apps/desktop/release/SHA256SUMS-installer.txt
             apps/desktop/release/build-info-installer.txt
+
+  verify-linux-checksums:
+    name: GNU sha256sum -c on the produced checksums (ubuntu-latest)
+    runs-on: ubuntu-latest
+    needs: [portable-zip, nsis-installer]
+    steps:
+      - uses: actions/download-artifact@v8.0.1
+        with:
+          pattern: hdsl-*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Consume the checksum files with GNU coreutils
+        run: |
+          cd release-assets
+          ls -l
+          # This is the same command the release publish job and users run. It
+          # fails on a BOM or on CRLF, so it is the real consumer test for the
+          # Windows-produced checksum files.
+          sha256sum -c SHA256SUMS.txt
+          sha256sum -c SHA256SUMS-installer.txt
+          grep -q $'\r' SHA256SUMS.txt && { echo 'SHA256SUMS.txt contains CR'; exit 1; } || true
+          grep -q $'\r' SHA256SUMS-installer.txt && { echo 'SHA256SUMS-installer.txt contains CR'; exit 1; } || true
+          echo 'PASS: GNU sha256sum verified both Windows checksum files.'

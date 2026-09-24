@@ -58,6 +58,7 @@ CI 侧由 [windows-portable-build.yml](../../.github/workflows/windows-portable-
 
 - job `portable-zip`：`pnpm --filter @hdsl/desktop run package:win`，把 `win-unpacked` 复制为 `HDSL-<version>-win-x64` 目录并压缩为 ZIP；产出 `SHA256SUMS.txt` 与 `build-info.txt`。
 - job `nsis-installer`：`pnpm --filter @hdsl/desktop run package:win:nsis`，核对安装器文件格式，执行静默安装/升级/卸载验收，再重命名为 `HDSL-<version>-win-x64-<sha7>-setup.exe`；产出 `SHA256SUMS-installer.txt` 与 `build-info-installer.txt`。
+- job `verify-linux-checksums`（`ubuntu-latest`）：下载两个 artifact，用 GNU `sha256sum -c` 消费 `SHA256SUMS.txt` 与 `SHA256SUMS-installer.txt`，并断言无 CR。这是发布 publish 与用户侧校验的真实消费者测试（仅靠写文件时的字符串断言不够）。
 
 该工作流是**受控、仅构建**的：`permissions: contents: read`，不含签名/发布凭据，不创建 Release，保留 14 天 artifact；触发为 `workflow_dispatch` 与打包相关路径的 `push`。Windows 上不运行单元/集成测试；`portable-zip` 只做构建与归档完整性核对；`nsis-installer` 额外在隔离 runner 上静默运行安装器/卸载器以取得安装/卸载**文件布局**证据，但**不启动已安装的 GUI 应用**，因此不是 Windows 主机或 GUI 验收。
 
@@ -98,7 +99,7 @@ sha256sum -c SHA256SUMS.txt                  # bash / WSL
 Get-FileHash -Algorithm SHA256 .\HDSL-*.zip  # PowerShell，与文件内大写十六进制比对
 ```
 
-`SHA256SUMS.txt` / `SHA256SUMS-installer.txt` 为 `sha256sum` 兼容格式（小写摘要 + 两个空格 + 文件名）；`build-info.txt` 与 `build-info-installer.txt` 分别记录便携 ZIP 与安装器的 artifact 名、版本、完整基线提交、平台、Node/pnpm/Electron 版本、打包命令、发布渠道、安装器选项与“未签名 / 无 Windows GUI 证据”声明。
+`SHA256SUMS.txt` / `SHA256SUMS-installer.txt` 为 `sha256sum` 兼容格式（小写摘要 + 两个空格 + 文件名，**LF 行尾、无 BOM**——Windows 的 `Set-Content` 默认 CRLF 并可能带 BOM，会让 Ubuntu publish 的 `sha256sum -c` 与用户侧校验失败，故工作流用 `[System.IO.File]::WriteAllText(..., UTF8Encoding(false))` 显式写 LF；每个 job 还用 `apps/desktop/scripts/verify-checksum-file.mjs` 对**真实产物文件**做字节级检查，并用一个 CRLF 控制文件证明该检查会拒绝，再由 `verify-linux-checksums` 用 GNU `sha256sum -c` 消费）；`build-info.txt` 与 `build-info-installer.txt` 分别记录便携 ZIP 与安装器的 artifact 名、版本、完整基线提交、平台、Node/pnpm/Electron 版本、打包命令、发布渠道、安装器选项与“未签名 / 无 Windows GUI 证据”声明。
 
 ## 静默安装 / 升级 / 卸载验收（一次性 CI runner）
 
