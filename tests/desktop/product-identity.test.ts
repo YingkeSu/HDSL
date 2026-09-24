@@ -34,6 +34,7 @@ interface DesktopManifest {
   readonly build?: {
     readonly productName?: string;
     readonly copyright?: string;
+    readonly extraMetadata?: { readonly author?: { readonly name?: string } };
   };
 }
 
@@ -52,10 +53,18 @@ describe('desktop product metadata (issue #149)', () => {
     expect(desktop.name).toBe(LEGACY_PRODUCT_NAME);
   });
 
-  it('declares the author electron-builder uses for the Windows CompanyName', () => {
-    // `appInfo.companyName` is `metadata.author.name`; when it is missing the
-    // version resource keeps Electron's `GitHub, Inc.` default.
-    expect(desktop.author?.name).toBe(PRODUCT_NAME);
+  it('clears the Windows CompanyName instead of declaring a company', () => {
+    // electron-builder writes `appInfo.companyName` (`metadata.author.name`) as
+    // the Windows `CompanyName`, and when it is absent the executable keeps
+    // Electron's `GitHub, Inc.` default. A top-level `author: { name: '' }`
+    // cannot clear it: `normalizePackageData` round-trips people through
+    // `unParsePerson`/`parsePerson` and drops the empty name, so `companyName`
+    // becomes `undefined` and the field is left untouched. `extraMetadata` is
+    // deep-assigned *after* normalization, so this is the declaration that
+    // actually reaches the executable's version resource as an empty
+    // `CompanyName` (confirmed against a real `win-unpacked/HDSL.exe`).
+    expect(desktop.author).toBeUndefined();
+    expect(desktop.build?.extraMetadata?.author?.name).toBe('');
   });
 
   it('pins the copyright instead of deriving it from the build year', () => {
