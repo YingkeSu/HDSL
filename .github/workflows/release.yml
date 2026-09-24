@@ -40,22 +40,29 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run build:desktop
-      - run: pnpm --filter @hdsl/desktop run package:mac
+      - name: Package macOS ARM64 (unpacked dir + DMG)
+        run: pnpm --filter @hdsl/desktop run package:mac
       - name: Verify application contents
         run: node apps/desktop/scripts/verify-mac-package.mjs apps/desktop/release/mac-arm64/HDSL.app
+      - name: Verify the DMG mounts, carries the app and detaches
+        run: |
+          dmg=$(ls apps/desktop/release/HDSL-*-mac-arm64.dmg)
+          node apps/desktop/scripts/verify-mac-dmg.mjs "$dmg"
       - name: Archive app and record provenance
         run: |
           version=$(node -p "require('./apps/desktop/package.json').version")
-          name="HDSL-$version-mac-arm64.zip"
+          zip="HDSL-$version-mac-arm64.zip"
+          dmg="HDSL-$version-mac-arm64.dmg"
           cd apps/desktop/release
-          ditto -c -k --sequesterRsrc --keepParent mac-arm64/HDSL.app "$name"
-          shasum -a 256 "$name" > SHA256SUMS-mac.txt
-          printf 'version: %s\ncommit: %s\nplatform: mac-arm64\nsigning: no Developer ID or notarization\n' "$version" "$GITHUB_SHA" > build-info-mac.txt
+          ditto -c -k --sequesterRsrc --keepParent mac-arm64/HDSL.app "$zip"
+          shasum -a 256 "$dmg" "$zip" > SHA256SUMS-mac.txt
+          printf 'version: %s\ncommit: %s\nplatform: mac-arm64\nprimary-format: dmg\nauxiliary-format: zip\nsigning: no Developer ID or notarization\n' "$version" "$GITHUB_SHA" > build-info-mac.txt
       - uses: actions/upload-artifact@v7.0.1
         with:
           name: hdsl-mac-arm64-${{ github.sha }}
           if-no-files-found: error
           path: |
+            apps/desktop/release/*.dmg
             apps/desktop/release/*.zip
             apps/desktop/release/SHA256SUMS-mac.txt
             apps/desktop/release/build-info-mac.txt
@@ -77,11 +84,27 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           cd release-assets
-          sha256sum -c SHA256SUMS.txt
-          sha256sum -c SHA256SUMS-mac.txt
+          # Verify every checksum file that this run produced. The Windows
+          # installer job may not exist yet on this commit; a missing file is
+          # reported, not silently ignored.
+          for sums in SHA256SUMS.txt SHA256SUMS-mac.txt SHA256SUMS-installer.txt; do
+            if [ -f "$sums" ]; then
+              sha256sum -c "$sums"
+            else
+              printf 'note: %s absent; that artifact was not built in this run\n' "$sums"
+            fi
+          done
           mv build-info.txt build-info-windows.txt
           cat SHA256SUMS-mac.txt >> SHA256SUMS.txt
           rm SHA256SUMS-mac.txt
-          gh release create "$GITHUB_REF_NAME" ./*.zip SHA256SUMS.txt build-info-*.txt \
+          shopt -s nullglob
+          # Exact artifact shapes only: this must never pick up an un-packaged
+          # win-unpacked/HDSL.exe or an unrelated file from the workspace.
+          assets=(./*.zip ./HDSL-*-mac-arm64.dmg ./HDSL-*-setup.exe)
+          if [ ${#assets[@]} -eq 0 ]; then
+            printf 'FAIL: no release assets matched (*.zip, HDSL-*-mac-arm64.dmg, HDSL-*-setup.exe)\n' >&2
+            exit 1
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" SHA256SUMS.txt build-info-*.txt \
             --verify-tag --prerelease --title "HDSL $GITHUB_REF_NAME · 体验版" \
             --notes-file ../docs/releases/preview-notes.md

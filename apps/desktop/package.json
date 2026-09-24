@@ -9,7 +9,7 @@
   "scripts": {
     "build:renderer": "node scripts/build-renderer.mjs",
     "package:win": "electron-builder --win --x64 --dir",
-    "package:mac": "electron-builder --mac --arm64 --dir"
+    "package:mac": "electron-builder --mac --arm64"
   },
   "exports": {
     ".": {
@@ -58,10 +58,20 @@
           "arch": [
             "arm64"
           ]
+        },
+        {
+          "target": "dmg",
+          "arch": [
+            "arm64"
+          ]
         }
       ],
       "identity": null,
-      "category": "public.app-category.developer-tools"
+      "category": "public.app-category.developer-tools",
+      "artifactName": "HDSL-${version}-mac-${arch}.${ext}"
+    },
+    "dmg": {
+      "sign": false
     },
     "extraResources": [
       {

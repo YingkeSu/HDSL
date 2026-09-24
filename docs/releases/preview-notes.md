@@ -2,7 +2,7 @@ HDSL 首个打包体验版：在桌面上管理 DSH 环境、版本与插件。
 
 ### 下载
 
-- **Mac（Apple 芯片）**：下载 `mac-arm64.zip`，解压后将 HDSL.app 拖入应用程序。
+- **Mac（Apple 芯片）**：下载 `mac-arm64.dmg`，打开后把 HDSL.app 拖入应用程序，再推出磁盘映像。
 - **Windows（Intel / AMD 64 位）**：下载 `win-x64-…-portable.zip`，完整解压后打开 HDSL.exe。当前仅供界面预览，不能创建、安装或运行 DSH 环境，尚未经过 Windows 实机使用验收。
 - Intel Mac、Windows ARM 与 Linux 暂无支持。
 
