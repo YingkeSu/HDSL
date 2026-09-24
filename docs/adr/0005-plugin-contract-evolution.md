@@ -23,7 +23,7 @@
 ## 1. 背景
 
 - 001 契约已冻结并打标签 `contracts-v1.0.0`：wire 版本 `API_VERSION = "1.0"`，**完全匹配**，任何 major/minor 不一致在任何副作用前拒绝为 `CONTRACT_VERSION_MISMATCH`。
-- 001 只预留了 `changes.preview` / `changes.apply` / `generations.restore` 三个名字，**未定义输入结构、未暴露为可调用方法**；`pack.*` 明确留给 003。
+- 001 只预留了 `changes.preview` / `changes.apply` / `generations.restore` 三个名字，**未定义输入结构、未暴露为可调用方法**；`pack.*` 明确留给 004（编号更正：原文写作「003」；`003` 已由 [version-switch 规格](../../specs/003-version-switch/spec.md) 占用）。
 - 父 PRD #73 需要检索、来源预览、安装/卸载事务与恢复能力，必须在不回退 001 行为、不改冻结标签的前提下演进共享面。
 - 完全匹配语义带来一个硬约束：**不存在"向后兼容的新增"**——只要共享面变化，就必须显式改版本并同步两侧（renderer 与 main 共用同一构建产物），否则新字段/新方法会被严格 unknown-field 校验拒掉。
 - QA 准备清单 §14/§15（本机临时依据）指出：若 #74 不给机制结论，S1 的契约 fixture 无法冻结；且"预览判定脚本"与"apply 验证未执行"是两种机制，AC 表述必须拆分。本 ADR 对这两点做出契约级决定。
@@ -78,7 +78,7 @@ F12b 已在 rev 2 从断言降级为"无出处"；D15 的内置保护机制改�
 | `plugins.installed` | 只读即时查询（无 `requestId`） | `environmentId` | `InstalledPluginsView`（活动代的组成插件 + 内置/启用/来源摘要 + revision/generationId 绑定；`plugins` 上界 128，超出为受控失败而非静默截断，见 D20） | 单环境 |
 
 - **返回风格规则**（解释语义一致性）：长时/网络/事务类 → `OperationRef` + 终态 `output`（D5）；只读即时查询 → 直接返回值。据此 `generations.list` 直接返回，而 `plugins.search`（网络 + 可取消）返回 `OperationRef`。
-- 预留名字 `changes.preview` / `changes.apply` / `generations.restore` 从"仅文档预留"提升为白名单成员；`pack.inspect` / `pack.import` / `pack.export` **继续预留**，不暴露（003 定义）。
+- 预留名字 `changes.preview` / `changes.apply` / `generations.restore` 从"仅文档预留"提升为白名单成员；`pack.inspect` / `pack.import` / `pack.export` **继续预留**，不暴露（004 定义；编号更正：原文写作「003」，该槽位已由 [version-switch 规格](../../specs/003-version-switch/spec.md) 占用）。
 - 命名（`plugins.*` 前缀）属提案，评审可改；改名的成本与实现同步更新 `CONTRACT_METHODS`、fixture、preload 白名单与本文方法表。
 - `source` 输入**只接受 GitHub 仓库引用**（`owner`/`name`/可选 `ref`）。`link:`/`file:`/本地路径/任意 URL/自由包名一律 `INVALID_INPUT`，与 PRD"源是 GitHub 公开仓库"的 Out of Scope 一致，并在入口即阻断本地路径泄漏与"用普通目录冒充来源锁"。
 
