@@ -1,19 +1,23 @@
 name: Windows portable build
 
-# Build-only evidence for the unsigned Windows x64 portable ZIP
-# (issue #8 is the maintainer's real-hardware verification and is NOT closed by
-# this workflow). Deliberate scope limits:
+# Build evidence for the unsigned Windows x64 deliverables: the portable ZIP and
+# the NSIS `.exe` installer. (Issue #8 is the maintainer's real-hardware
+# verification and is NOT closed by this workflow.) Deliberate scope limits:
 #
 #   - The workspace unit suite is absent on purpose: this job must not run
 #     Windows tests. The Linux `Engineering checks` job owns that suite.
-#   - The packaged app is never started. `HDSL.exe` is only inspected as a file
-#     tree by `apps/desktop/scripts/verify-win-package.mjs`, so "the archive is
-#     complete" is the only claim this job can make.
+#   - The portable job never starts the packaged app. `HDSL.exe` is only
+#     inspected as a file tree by `apps/desktop/scripts/verify-win-package.mjs`,
+#     so "the archive is complete" is the only claim that job can make.
+#   - The installer job runs the installer and uninstaller silently (`/S`) on
+#     the ephemeral runner and checks the installed tree. That is install/
+#     uninstall layout evidence only; the installed GUI app is never launched,
+#     so it is not Windows host or GUI acceptance.
 #   - `permissions` is read-only: no signing identity, no release, no upload
 #     credential. Release creation happens later from a reviewed SHA.
 #
-# The resulting ZIP is unsigned, un-notarized and has no Windows host evidence;
-# see docs/development/windows-portable-build.md before distributing it.
+# Both Windows deliverables are unsigned and un-notarized; see
+# docs/development/windows-portable-build.md before distributing them.
 
 on:
   workflow_call:
@@ -108,3 +112,137 @@ jobs:
             apps/desktop/release/*.zip
             apps/desktop/release/SHA256SUMS.txt
             apps/desktop/release/build-info.txt
+
+  nsis-installer:
+    name: unsigned NSIS installer / silent install-uninstall (windows-latest)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7.0.1
+
+      - uses: pnpm/action-setup@v6.1.0
+        with:
+          version: 11.7.0
+
+      - uses: actions/setup-node@v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - name: Install (frozen lockfile)
+        run: pnpm install --frozen-lockfile
+
+      - name: Build workspace and renderer
+        run: pnpm run build:desktop
+
+      - name: Package unsigned NSIS installer (.exe)
+        run: pnpm --filter @hdsl/desktop run package:win:nsis
+
+      - name: Verify the .exe is an NSIS PE installer; name it with version and short SHA
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem apps/desktop/release -Filter *.exe |
+            Where-Object { $_.Name -notlike 'Uninstall*' } |
+            Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $installer) { throw 'electron-builder produced no .exe installer' }
+          Write-Host "installer: $($installer.FullName) ($($installer.Length) bytes)"
+          node apps/desktop/scripts/verify-win-package.mjs --installer $installer.FullName
+          $version = node -p "require('./apps/desktop/package.json').version"
+          $sha = $env:GITHUB_SHA.Substring(0, 7)
+          $name = "HDSL-$version-win-x64-$sha-setup.exe"
+          Rename-Item -Path $installer.FullName -NewName $name
+          "HDSL_INSTALLER_NAME=$name" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      - name: Silent install into an isolated directory
+        shell: pwsh
+        run: |
+          $installer = Join-Path 'apps/desktop/release' $env:HDSL_INSTALLER_NAME
+          $target = Join-Path $env:RUNNER_TEMP 'hdsl-install'
+          New-Item -ItemType Directory -Force -Path $target | Out-Null
+          $proc = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$target" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "installer exited with code $($proc.ExitCode)" }
+          if (-not (Test-Path (Join-Path $target 'HDSL.exe'))) { throw 'HDSL.exe missing after silent install' }
+          node apps/desktop/scripts/verify-win-package.mjs $target
+          "HDSL_INSTALL_DIR=$target" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      - name: Seed user-data sentinels, then upgrade in place
+        shell: pwsh
+        run: |
+          $sentinels = @(
+            (Join-Path $env:APPDATA 'HDSL\hdsl-installer-sentinel.txt'),
+            (Join-Path $env:APPDATA '@hdsl\desktop\hdsl-installer-sentinel.txt'),
+            (Join-Path $env:LOCALAPPDATA 'HDSL\hdsl-installer-sentinel.txt')
+          )
+          foreach ($sentinel in $sentinels) {
+            New-Item -ItemType Directory -Force -Path (Split-Path $sentinel) | Out-Null
+            Set-Content -Path $sentinel -Value 'must survive install, upgrade and uninstall' -Encoding ascii
+          }
+          $installer = Join-Path 'apps/desktop/release' $env:HDSL_INSTALLER_NAME
+          $proc = Start-Process -FilePath $installer -ArgumentList '/S', "/D=$($env:HDSL_INSTALL_DIR)" -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "upgrade installer exited with code $($proc.ExitCode)" }
+          if (-not (Test-Path (Join-Path $env:HDSL_INSTALL_DIR 'HDSL.exe'))) { throw 'HDSL.exe missing after in-place upgrade' }
+          foreach ($sentinel in $sentinels) {
+            if (-not (Test-Path $sentinel)) { throw "in-place upgrade removed user data: $sentinel" }
+          }
+          "HDSL_SENTINELS=$($sentinels -join ';')" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding ascii
+
+      - name: Silent uninstall and prove user data survives
+        shell: pwsh
+        run: |
+          $target = $env:HDSL_INSTALL_DIR
+          $uninstaller = Get-ChildItem $target -Filter 'Uninstall*.exe' | Select-Object -First 1
+          if (-not $uninstaller) { throw 'uninstaller not found in the installed directory' }
+          $proc = Start-Process -FilePath $uninstaller.FullName -ArgumentList '/S' -Wait -PassThru
+          if ($proc.ExitCode -ne 0) { throw "uninstaller exited with code $($proc.ExitCode)" }
+          for ($i = 0; $i -lt 30 -and (Test-Path (Join-Path $target 'HDSL.exe')); $i++) { Start-Sleep -Seconds 1 }
+          if (Test-Path (Join-Path $target 'HDSL.exe')) { throw 'HDSL.exe still present after silent uninstall' }
+          foreach ($sentinel in ($env:HDSL_SENTINELS -split ';')) {
+            if (-not (Test-Path $sentinel)) { throw "silent uninstall removed user data: $sentinel" }
+          }
+          Write-Host 'PASS: silent install, in-place upgrade and silent uninstall removed the app and kept user data.'
+
+      - name: Clean up the isolated install directory
+        if: always()
+        shell: pwsh
+        run: |
+          if ($env:HDSL_INSTALL_DIR -and (Test-Path $env:HDSL_INSTALL_DIR)) {
+            Remove-Item -Recurse -Force $env:HDSL_INSTALL_DIR
+          }
+
+      - name: Hash the installer and record provenance
+        shell: pwsh
+        run: |
+          $version = node -p "require('./apps/desktop/package.json').version"
+          $name = $env:HDSL_INSTALLER_NAME
+          $release = 'apps/desktop/release'
+          $hash = (Get-FileHash -Algorithm SHA256 -Path "$release/$name").Hash.ToLower()
+          Set-Content -Path "$release/SHA256SUMS-installer.txt" -Encoding ascii -Value "$hash  $name"
+          Set-Content -Path "$release/build-info-installer.txt" -Encoding ascii -Value @(
+            "artifact: $name",
+            "format: NSIS installer (.exe), Windows PE, Nullsoft Install System stub",
+            "version: $version",
+            "base-commit: $env:GITHUB_SHA",
+            "base-ref: $env:GITHUB_REF",
+            "release-channel: windows-preview (unsigned, not a full MVP release)",
+            "runner: $env:RUNNER_OS",
+            "node: $(node --version)",
+            "pnpm: $(pnpm --version)",
+            "electron: $(node -p "require('./apps/desktop/package.json').devDependencies.electron")",
+            "package: pnpm --filter @hdsl/desktop run package:win:nsis (electron-builder --win nsis --x64)",
+            "installer-options: oneClick=false, perMachine=false, allowToChangeInstallationDirectory=true, deleteAppDataOnUninstall=false",
+            "signing: unsigned, not notarized",
+            "evidence: silent /S install into an isolated directory, in-place upgrade and silent /S uninstall on the build runner; the installed tree passed the archive-integrity check and user-data sentinels survived",
+            "windows-gui-evidence: none (the installed application was not launched or exercised through the UI)"
+          )
+          Get-Content "$release/SHA256SUMS-installer.txt"
+          Get-Content "$release/build-info-installer.txt"
+
+      - name: Upload NSIS installer
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: hdsl-win-x64-installer-${{ github.sha }}
+          if-no-files-found: error
+          retention-days: 14
+          path: |
+            apps/desktop/release/*.exe
+            apps/desktop/release/SHA256SUMS-installer.txt
+            apps/desktop/release/build-info-installer.txt

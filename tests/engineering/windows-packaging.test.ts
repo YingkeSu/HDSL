@@ -15,14 +15,18 @@
  * - the workflow is build-only: it must not run Windows tests and must not hold
  *   release/signing permissions.
  */
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   DEV_DEPENDENCY_DIRS,
   FORBIDDEN_RULES,
+  MIN_INSTALLER_BYTES,
+  NSIS_MARKER,
   REQUIRED_FILES,
+  verifyInstallerFile,
   verifyPackagedTree,
 } from '../../apps/desktop/scripts/verify-win-package.mjs';
 
@@ -47,6 +51,14 @@ interface DesktopManifest {
       readonly certificateFile?: string;
       readonly signingHashAlgorithms?: readonly string[];
     };
+    readonly nsis?: {
+      readonly artifactName?: string;
+      readonly oneClick?: boolean;
+      readonly perMachine?: boolean;
+      readonly allowToChangeInstallationDirectory?: boolean;
+      readonly deleteAppDataOnUninstall?: boolean;
+      readonly certificateFile?: string;
+    };
   };
   readonly devDependencies?: Record<string, string>;
 }
@@ -54,12 +66,39 @@ interface DesktopManifest {
 /** A complete tree, as the checker expects to find it after a real package run. */
 const completeTree = (): string[] => [...REQUIRED_FILES];
 
+/**
+ * Writes a synthetic PE file that mimics an NSIS installer without shipping a
+ * multi-megabyte binary fixture. The NSIS marker is what separates a real
+ * installer from a renamed `win-unpacked/HDSL.exe`, so the negative controls
+ * below exercise exactly that distinction.
+ */
+const writeSyntheticInstaller = (
+  directory: string,
+  options: { size?: number; marker?: boolean; mz?: boolean; peOffset?: number } = {},
+): string => {
+  const size = options.size ?? MIN_INSTALLER_BYTES + 4096;
+  const buffer = Buffer.alloc(size, 0);
+  if (options.mz ?? true) buffer.write('MZ', 0, 'latin1');
+  const peOffset = options.peOffset ?? 0x80;
+  buffer.writeUInt32LE(peOffset, 0x3c);
+  if (peOffset + 4 <= size) buffer.writeUInt32LE(0x0000_4550, peOffset);
+  if ((options.marker ?? true) && 0x1000 + NSIS_MARKER.length <= size) {
+    buffer.write(NSIS_MARKER, 0x1000, 'latin1');
+  }
+  const installerPath = join(directory, 'setup.exe');
+  writeFileSync(installerPath, buffer);
+  return installerPath;
+};
+
 describe('Windows portable packaging declaration', () => {
   const desktop = readJson('apps/desktop/package.json') as DesktopManifest;
   const build = desktop.build ?? {};
 
-  it('declares an unpacked win32/x64 dir target', () => {
-    expect(build.win?.target).toEqual([{ target: 'dir', arch: ['x64'] }]);
+  it('declares an unpacked win32/x64 dir target plus the NSIS installer target', () => {
+    expect(build.win?.target).toEqual([
+      { target: 'dir', arch: ['x64'] },
+      { target: 'nsis', arch: ['x64'] },
+    ]);
   });
 
   it('declares no signing identity and ships an inspectable (non-asar) tree', () => {
@@ -80,6 +119,7 @@ describe('Windows portable packaging declaration', () => {
 
   it('exposes the packaging command through a script', () => {
     expect(desktop.scripts?.['package:win']).toBe('electron-builder --win --x64 --dir');
+    expect(desktop.scripts?.['package:win:nsis']).toBe('electron-builder --win nsis --x64');
     expect(readJson('package.json').scripts).toMatchObject({
       'package:win': expect.stringContaining('build:desktop'),
     });
@@ -87,6 +127,65 @@ describe('Windows portable packaging declaration', () => {
 
   it('keeps electron-builder pinned exactly', () => {
     expect(desktop.devDependencies?.['electron-builder']).toMatch(/^\d+\.\d+\.\d+$/);
+  });
+});
+
+describe('NSIS installer packaging declaration', () => {
+  const desktop = readJson('apps/desktop/package.json') as DesktopManifest;
+  const build = desktop.build ?? {};
+
+  it('produces a versioned win-x64 setup artifact name', () => {
+    expect(build.nsis?.artifactName).toBe('${productName}-${version}-win-${arch}-setup.${ext}');
+  });
+
+  it('uses an assisted, per-user installer that never deletes user data by default', () => {
+    expect(build.nsis?.oneClick).toBe(false);
+    expect(build.nsis?.perMachine).toBe(false);
+    expect(build.nsis?.allowToChangeInstallationDirectory).toBe(true);
+    expect(build.nsis?.deleteAppDataOnUninstall).toBe(false);
+  });
+
+  it('declares no signing identity for the installer', () => {
+    expect(build.win?.certificateFile).toBeUndefined();
+    expect(build.win?.signingHashAlgorithms).toBeUndefined();
+    expect(build.nsis?.certificateFile).toBeUndefined();
+  });
+});
+
+describe('NSIS installer file check', () => {
+  let directory: string;
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), 'hdsl-nsis-'));
+  });
+  afterEach(() => {
+    rmSync(directory, { recursive: true, force: true });
+  });
+
+  it('accepts a PE file that carries the NSIS signature', () => {
+    expect(verifyInstallerFile(writeSyntheticInstaller(directory))).toEqual([]);
+  });
+
+  it('rejects a renamed win-unpacked HDSL.exe (PE without the NSIS signature)', () => {
+    const errors = verifyInstallerFile(writeSyntheticInstaller(directory, { marker: false }));
+    expect(errors).toEqual([expect.stringContaining(NSIS_MARKER)]);
+  });
+
+  it('rejects a file without an MZ header', () => {
+    const errors = verifyInstallerFile(writeSyntheticInstaller(directory, { mz: false }));
+    expect(errors).toEqual([expect.stringContaining('MZ')]);
+  });
+
+  it('rejects a file too small to be an Electron NSIS installer', () => {
+    const errors = verifyInstallerFile(
+      writeSyntheticInstaller(directory, { size: 128, peOffset: 64, marker: false }),
+    );
+    expect(errors.some((error) => error.includes('too small'))).toBe(true);
+  });
+
+  it('fails closed when the installer is absent', () => {
+    expect(verifyInstallerFile(join(directory, 'missing.exe'))).toEqual([
+      expect.stringContaining('missing installer file'),
+    ]);
   });
 });
 
@@ -191,6 +290,49 @@ describe('Windows portable build workflow', () => {
     // evidence stays reproducible from the documented instructions.
     expect(workflow).toContain(
       'apps/desktop/scripts/verify-win-package.mjs apps/desktop/release/win-unpacked',
+    );
+  });
+});
+
+describe('Windows NSIS installer job', () => {
+  const workflow = readText('.github/workflows/windows-portable-build.yml');
+
+  it('adds a read-only installer job on a Windows runner', () => {
+    expect(workflow).toContain('nsis-installer:');
+    expect(workflow).toContain('runs-on: windows-latest');
+    expect(workflow).toContain('permissions:\n  contents: read');
+  });
+
+  it('builds through the nsis script and checks the .exe file format', () => {
+    expect(workflow).toContain('pnpm --filter @hdsl/desktop run package:win:nsis');
+    expect(workflow).toContain('node apps/desktop/scripts/verify-win-package.mjs --installer');
+  });
+
+  it('runs silent install, in-place upgrade and uninstall and proves user data survives', () => {
+    expect(workflow).toContain("-ArgumentList '/S'");
+    expect(workflow).toContain('Uninstall');
+    expect(workflow).toContain('hdsl-installer-sentinel.txt');
+    expect(workflow).toContain('deleteAppDataOnUninstall');
+    expect(workflow).toContain('verify-win-package.mjs $target');
+  });
+
+  it('uploads the .exe with its own checksum and provenance files', () => {
+    expect(workflow).toContain('name: hdsl-win-x64-installer-${{ github.sha }}');
+    expect(workflow).toContain('HDSL-$version-win-x64-$sha-setup.exe');
+    expect(workflow).toContain('SHA256SUMS-installer.txt');
+    expect(workflow).toContain('build-info-installer.txt');
+    expect(workflow).toContain('Get-FileHash -Algorithm SHA256');
+  });
+
+  it('never claims Windows GUI evidence', () => {
+    expect(workflow).toContain(
+      'windows-gui-evidence: none (the installed application was not launched',
+    );
+  });
+
+  it('holds no publishing or signing permission', () => {
+    expect(workflow).not.toMatch(
+      /contents: write|id-token|GH_TOKEN|NPM_TOKEN|softprops\/action-gh-release|gh release/,
     );
   });
 });

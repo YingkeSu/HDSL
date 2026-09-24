@@ -9,6 +9,7 @@
   "scripts": {
     "build:renderer": "node scripts/build-renderer.mjs",
     "package:win": "electron-builder --win --x64 --dir",
+    "package:win:nsis": "electron-builder --win nsis --x64",
     "package:mac": "electron-builder --mac --arm64 --dir"
   },
   "exports": {
@@ -48,8 +49,21 @@
           "arch": [
             "x64"
           ]
+        },
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
         }
       ]
+    },
+    "nsis": {
+      "artifactName": "${productName}-${version}-win-${arch}-setup.${ext}",
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "deleteAppDataOnUninstall": false
     },
     "mac": {
       "target": [

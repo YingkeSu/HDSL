@@ -13,6 +13,10 @@ export interface ForbiddenRule {
 export declare const REQUIRED_FILES: readonly string[];
 export declare const FORBIDDEN_RULES: readonly ForbiddenRule[];
 export declare const DEV_DEPENDENCY_DIRS: readonly string[];
+export declare const MIN_INSTALLER_BYTES: number;
+export declare const NSIS_MARKER: string;
+
+export declare const verifyInstallerFile: (installerPath: string) => string[];
 
 export interface VerifyOptions {
   /** Test seam replacing the real directory walk. */

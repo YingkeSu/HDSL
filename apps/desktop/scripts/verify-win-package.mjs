@@ -12,7 +12,7 @@
  *
  * Usage: node scripts/verify-win-package.mjs <win-unpacked-directory>
  */
-import { existsSync, readdirSync, statSync } from 'node:fs';
+import { closeSync, existsSync, openSync, readSync, readdirSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -72,6 +72,91 @@ export const DEV_DEPENDENCY_DIRS = [
   'vitest',
 ];
 
+/**
+ * Format check for the `.exe` deliverable produced by the `nsis` target.
+ *
+ * A Windows installer is a PE executable, and NSIS stamps every installer and
+ * uninstaller it builds with the `NullsoftInst` signature block. Requiring both
+ * means a renamed `HDSL.exe` from `win-unpacked` (also a PE file) cannot pass as
+ * an installer, which is exactly the substitution this deliverable must rule
+ * out. This is a file-format check only: it never executes the installer.
+ */
+export const MIN_INSTALLER_BYTES = 1_048_576; // 1 MiB; the NSIS stub alone is larger.
+export const NSIS_MARKER = 'NullsoftInst';
+const PE_SIGNATURE = 0x0000_4550; // "PE\0\0" as a little-endian uint32.
+const PE_HEADER_SCAN_BYTES = 16 * 1024 * 1024; // Bound the marker scan for a large installer.
+const CHUNK_BYTES = 1024 * 1024;
+
+const hasNsisMarker = (path, size) => {
+  const marker = Buffer.from(NSIS_MARKER, 'latin1');
+  const fd = openSync(path, 'r');
+  try {
+    const limit = Math.min(size, PE_HEADER_SCAN_BYTES);
+    let position = 0;
+    let tail = Buffer.alloc(0);
+    while (position < limit) {
+      const length = Math.min(CHUNK_BYTES, limit - position);
+      const chunk = Buffer.alloc(length);
+      const read = readSync(fd, chunk, 0, length, position);
+      if (read <= 0) break;
+      const window = Buffer.concat([tail, chunk.subarray(0, read)]);
+      if (window.includes(marker)) return true;
+      tail = window.subarray(Math.max(0, window.length - marker.length + 1));
+      position += read;
+    }
+    return false;
+  } finally {
+    closeSync(fd);
+  }
+};
+
+/**
+ * Checks the NSIS `.exe` installer as a file.
+ *
+ * @param {string} installerPath Installer produced by `electron-builder --win nsis --x64`.
+ * @returns {string[]} One message per problem; empty means the file is an NSIS PE installer.
+ */
+export const verifyInstallerFile = (installerPath) => {
+  const errors = [];
+  if (!existsSync(installerPath) || !statSync(installerPath).isFile()) {
+    return [`missing installer file: ${installerPath}`];
+  }
+  const size = statSync(installerPath).size;
+  if (size < MIN_INSTALLER_BYTES) {
+    errors.push(
+      `installer is too small to be an Electron NSIS installer: ${String(size)} bytes < ${String(MIN_INSTALLER_BYTES)}`,
+    );
+  }
+  const fd = openSync(installerPath, 'r');
+  try {
+    const header = Buffer.alloc(64);
+    const read = readSync(fd, header, 0, header.length, 0);
+    if (read < header.length || header.toString('latin1', 0, 2) !== 'MZ') {
+      errors.push(`not a Windows PE executable (missing MZ header): ${installerPath}`);
+      return errors;
+    }
+    const peOffset = header.readUInt32LE(0x3c);
+    if (peOffset < 64 || peOffset > size - 4) {
+      errors.push(`not a Windows PE executable (invalid PE header offset): ${installerPath}`);
+      return errors;
+    }
+    const signature = Buffer.alloc(4);
+    readSync(fd, signature, 0, signature.length, peOffset);
+    if (signature.readUInt32LE(0) !== PE_SIGNATURE) {
+      errors.push(`not a Windows PE executable (missing PE signature): ${installerPath}`);
+      return errors;
+    }
+  } finally {
+    closeSync(fd);
+  }
+  if (!hasNsisMarker(installerPath, size)) {
+    errors.push(
+      `not an NSIS installer (missing ${NSIS_MARKER} signature); a renamed win-unpacked/HDSL.exe is not an installer: ${installerPath}`,
+    );
+  }
+  return errors;
+};
+
 const toPosix = (value) => value.split(sep).join('/');
 
 const walk = (root, current = root, out = []) => {
@@ -122,12 +207,30 @@ export const verifyPackagedTree = (appDir, options = {}) => {
 };
 
 const main = () => {
-  const appDir = process.argv[2];
-  if (appDir === undefined || appDir.trim() === '') {
-    process.stderr.write('usage: node scripts/verify-win-package.mjs <win-unpacked-directory>\n');
+  const [mode, target] = process.argv.slice(2);
+  if (mode === '--installer' && target !== undefined && target.trim() !== '') {
+    const errors = verifyInstallerFile(target);
+    if (errors.length > 0) {
+      process.stderr.write(`${errors.join('\n')}\n`);
+      process.stderr.write(`FAIL: ${String(errors.length)} problem(s) in ${target}\n`);
+      process.exitCode = 1;
+      return;
+    }
+    process.stdout.write(
+      `PASS: NSIS PE installer with ${NSIS_MARKER} signature and plausible size in ${target}\n`,
+    );
+    process.stdout.write('Scope: installer file format only; the installer was not executed.\n');
+    return;
+  }
+  if (mode === undefined || mode.trim() === '' || mode === '--installer') {
+    process.stderr.write(
+      'usage: node scripts/verify-win-package.mjs <win-unpacked-directory>\n' +
+        '       node scripts/verify-win-package.mjs --installer <setup.exe>\n',
+    );
     process.exitCode = 2;
     return;
   }
+  const appDir = mode;
   const errors = verifyPackagedTree(appDir);
   if (errors.length > 0) {
     process.stderr.write(`${errors.join('\n')}\n`);
