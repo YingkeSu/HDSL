@@ -6,11 +6,17 @@
 
 为 DeepSeek Harness 管理环境、版本与插件的桌面启动器。
 
+**简体中文** · [English](README.en.md)
+
 [下载体验版](https://github.com/YingkeSu/HDSL/releases) · [使用指南](docs/user-guide.md) · [反馈问题](https://github.com/YingkeSu/HDSL/issues)
 
 </div>
 
 ---
+
+![HDSL 启动页：环境入口与可用版本](docs/images/launcher.png)
+
+<p align="center">从一个窗口开始，管理你的本地 DSH 工作环境。</p>
 
 ## 把准备工作交给 HDSL
 
@@ -22,6 +28,10 @@
 - **按需管理插件** — 查找插件，预览安装内容，安装或移除扩展；需要重启时会提示你。
 - **尝试新版本，保留旧组成** — 切换已支持的 DSH 版本，也能恢复此前的版本与插件组成。
 - **遇到问题有迹可循** — 查看错误与恢复状态，导出经过脱敏的诊断信息，方便反馈。
+
+![HDSL 创建环境：命名并选择运行版本](docs/images/create-environment.png)
+
+*应用实拍：macOS 上的中文界面，使用全新临时配置；示例名称为「日常工作」。*
 
 ## 下载与安装
 
