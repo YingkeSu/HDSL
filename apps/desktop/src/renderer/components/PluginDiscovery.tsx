@@ -281,28 +281,44 @@ export function PluginDiscovery({
           <div className="panel plugin-results">
             <h3>匹配的仓库</h3>
             {search.hits.length === 0 && <p>没有匹配的公开仓库。</p>}
-            <ul>
-              {search.hits.map((hit) => (
-                <li key={hit.fullName}>
-                  <button
-                    type="button"
-                    aria-current={hit.fullName === state.selectedPluginFullName ? 'true' : undefined}
-                    onClick={() => {
-                      actions.selectPlugin(hit.fullName);
-                    }}
-                  >
-                    <strong>{hit.fullName}</strong>
-                    {hit.archived && <span className="tag">已归档</span>}
-                    {hit.fork && <span className="tag">fork</span>}
-                    <small>{hit.description ?? '（无描述）'}</small>
-                    <small>
-                      ★ {formatStars(hit.stars)} · {hit.topics.join(', ') || '无 topics'}（
-                      {METADATA_DISCLAIMER}）
-                    </small>
-                  </button>
-                </li>
-              ))}
-            </ul>
+            {search.hits.length > 0 && (
+              <>
+                <p className="muted plugin-results-hint" id="plugin-results-hint">
+                  列表可独立滚动：聚焦列表后可用方向键或 Page Up / Page Down 浏览全部{' '}
+                  {search.hits.length} 条命中，无需先滚过整个结果集即可到达下方的来源预览、安装、代际与卸载区域。
+                </p>
+                <div
+                  className="plugin-results-scroll"
+                  role="group"
+                  aria-label={`命中结果列表（${String(search.hits.length)} 条，可滚动）`}
+                  aria-describedby="plugin-results-hint"
+                  tabIndex={0}
+                >
+                  <ul>
+                    {search.hits.map((hit) => (
+                      <li key={hit.fullName}>
+                        <button
+                          type="button"
+                          aria-current={hit.fullName === state.selectedPluginFullName ? 'true' : undefined}
+                          onClick={() => {
+                            actions.selectPlugin(hit.fullName);
+                          }}
+                        >
+                          <strong>{hit.fullName}</strong>
+                          {hit.archived && <span className="tag">已归档</span>}
+                          {hit.fork && <span className="tag">fork</span>}
+                          <small>{hit.description ?? '（无描述）'}</small>
+                          <small>
+                            ★ {formatStars(hit.stars)} · {hit.topics.join(', ') || '无 topics'}（
+                            {METADATA_DISCLAIMER}）
+                          </small>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              </>
+            )}
           </div>
 
           {detail !== null && (
