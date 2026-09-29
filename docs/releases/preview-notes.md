@@ -1,10 +1,9 @@
-HDSL 首个打包体验版：在桌面上管理 DSH 环境、版本与插件。
+HDSL 打包体验版：在桌面上管理 DSH 环境、版本与插件。
 
 ### 下载
 
 - **Mac（Apple 芯片）**：下载 `mac-arm64.dmg`，打开后把 HDSL.app 拖入应用程序，再推出磁盘映像。
 - **Windows（Intel / AMD 64 位）**：下载 `win-x64-…-setup.exe` 安装器安装（未签名，SmartScreen 可能提示），或下载 `win-x64-…-portable.zip` 完整解压后打开 HDSL.exe。当前仅供界面预览，不能创建、安装或运行 DSH 环境，尚未经过 Windows 实机使用验收。
-- 安装器与 `.dmg` 资产从包含对应打包变更的下一次发布起提供；此前的 Release 尚无这些资产。
 - Intel Mac、Windows ARM 与 Linux 暂无支持。
 
 ### 你可以做什么
@@ -19,4 +18,4 @@ HDSL 首个打包体验版：在桌面上管理 DSH 环境、版本与插件。
 - 恢复组成不会回滚文件或会话数据。插件可以访问环境外的文件，请备份重要数据并仅安装可信插件。
 - 整合包分享尚未提供。
 
-构建来源见随包发布的 build-info 文件，压缩包校验值见 SHA256SUMS.txt。打包和文件完整性检查不代表所有平台的实际功能都已通过验收。
+构建来源见随包发布的 build-info 文件，压缩包校验值见 SHA256SUMS.txt，Windows 安装器校验值见 SHA256SUMS-installer.txt。打包和文件完整性检查不代表所有平台的实际功能都已通过验收。
