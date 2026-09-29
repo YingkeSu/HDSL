@@ -197,4 +197,4 @@
 
 ## 后续接口预留
 
-`pack.inspect` / `pack.import` / `pack.export` 在 003 规格中定义，本契约不暴露。Registry 与小程序接口须另设版本化规格。1.2 白名单内的 22 个方法均已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
+`pack.inspect` / `pack.import` / `pack.export` 在 004 规格中定义（编号更正：原文写作「003」；`003` 已由 [version-switch 规格](../../003-version-switch/spec.md) 占用），本契约不暴露。Registry 与小程序接口须另设版本化规格。1.2 白名单内的 22 个方法均已实现；行为边界、错误映射与证据分层见 [002 规格](../../002-plugin-transactions/spec.md) 与 [ADR 0005](../../../docs/adr/0005-plugin-contract-evolution.md)。
