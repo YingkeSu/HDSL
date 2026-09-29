@@ -10,6 +10,7 @@ import { createElement } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { AppView, type AppViewProps } from '../App.js';
 import { CreateEnvironmentForm } from '../components/CreateEnvironmentForm.js';
+import { CreateErrorNotice } from '../components/CreateErrorNotice.js';
 import { DshVersions } from '../components/DshVersions.js';
 import { EntryPatch } from '../components/EntryPatch.js';
 import { ExpectedComposition } from '../components/ExpectedComposition.js';
@@ -23,6 +24,9 @@ export const renderAppView = (props: AppViewProps): string =>
 
 export const renderCreateForm = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(CreateEnvironmentForm, props));
+
+export const renderCreateErrorNotice = (props: AppViewProps): string =>
+  renderToStaticMarkup(createElement(CreateErrorNotice, props));
 
 export const renderPluginDiscovery = (props: AppViewProps): string =>
   renderToStaticMarkup(createElement(PluginDiscovery, props));

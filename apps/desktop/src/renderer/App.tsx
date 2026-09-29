@@ -2,6 +2,7 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactElement } from 'react';
 import type { RendererController } from './controller.js';
 import { CreateEnvironmentForm } from './components/CreateEnvironmentForm.js';
+import { CreateErrorNotice } from './components/CreateErrorNotice.js';
 import { DshVersions } from './components/DshVersions.js';
 import { EnvironmentDetail } from './components/EnvironmentDetail.js';
 import { EntryPatch } from './components/EntryPatch.js';
@@ -77,6 +78,9 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
   const openCreate = (combinationId?: string): void => {
     returnFocus.current =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // A create failure from a previous dialog session must not leak into a new
+    // one. This clears ONLY the create-scoped error.
+    actions.clearCreateError?.();
     if (combinationId !== undefined) actions.setCreateCombinationId(combinationId);
     setSubmitted(false);
     setCreating(true);
@@ -84,6 +88,9 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
   const closeCreate = (): void => {
     dialog.current?.close();
     setCreating(false);
+    // Closing/abandoning the create dialog clears the create-scoped error; an
+    // unrelated `actionError` from another flow stays visible (#146).
+    actions.clearCreateError?.();
     returnFocus.current?.focus();
   };
 
@@ -343,6 +350,7 @@ export function AppView({ state, actions }: AppViewProps): ReactElement {
             <Icon name="close" />
           </button>
           <Notices state={state} />
+          <CreateErrorNotice state={state} />
           <CreateEnvironmentForm
             state={state}
             actions={actions}

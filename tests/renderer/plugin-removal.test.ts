@@ -68,6 +68,7 @@ const actions: RendererActions = {
   setCreateName: () => undefined,
   setCreateCombinationId: () => undefined,
   createEnvironment: () => undefined,
+  clearCreateError: () => undefined,
   selectEnvironment: () => undefined,
   startSelected: () => undefined,
   stopSelected: () => undefined,
@@ -268,6 +269,9 @@ describe('renderer removal markup (DOM-free real React)', () => {
     });
     expect(html).toContain('内置 bundle');
     expect(html).toContain('不能卸载');
+    // #145: the diagnostic code/message stay available in the details.
+    expect(html).toContain('技术详情');
+    expect(html).toContain('BUILTIN_BUNDLE_PROTECTED：protected');
     expect(html).not.toContain('确认卸载');
   });
 

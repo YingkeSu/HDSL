@@ -10,7 +10,7 @@
 import type { ChangePlan, EnvironmentSummary } from '@hdsl/contracts';
 import { FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
-import { renderAppView, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
+import { renderAppView, renderCreateErrorNotice, renderCreateForm, renderPluginInstall } from '../../apps/desktop/src/renderer/testing/render-markup.js';
 import {
   INITIAL_STATE,
   type RendererActions,
@@ -23,6 +23,7 @@ const noopActions: RendererActions = {
   setCreateName: () => undefined,
   setCreateCombinationId: () => undefined,
   createEnvironment: () => undefined,
+  clearCreateError: () => undefined,
   selectEnvironment: () => undefined,
   startSelected: () => undefined,
   stopSelected: () => undefined,
@@ -119,7 +120,30 @@ describe('AppView state matrix', () => {
       actions: noopActions,
     });
     expect(html).toMatch(/role="alert"[\s\S]*加载失败/);
+    expect(html).toContain('内部错误');
+    expect(html).toContain('技术详情');
     expect(html).toContain('INTERNAL_ERROR');
+    expect(html).toContain('该失败可重试。');
+  });
+
+  it('leads with Chinese copy and keeps the code in the technical details (#145)', () => {
+    const html = renderAppView({
+      state: state({
+        actionError: {
+          code: 'INVALID_INPUT',
+          message: 'invalid input (input.name: must not contain path separators)',
+          retryable: false,
+        },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('操作失败：输入不合法');
+    expect(html).toContain('环境名称：不能包含路径分隔符（/ 或 \\）');
+    expect(html).toContain('技术详情');
+    // The diagnostic code stays available, but only inside the details block.
+    expect(html).toContain(
+      'INVALID_INPUT：invalid input (input.name: must not contain path separators)',
+    );
   });
 
   it('replaces start with open and enables stop for a running environment', () => {
@@ -207,7 +231,8 @@ describe('AppView state matrix', () => {
       actions: noopActions,
     });
     expect(html).toMatch(/role="alert"[\s\S]*START_TIMEOUT/);
-    expect(html).toContain('（可重试）');
+    expect(html).toContain('受管进程未在时限内就绪');
+    expect(html).toContain('该失败可重试。');
   });
 
   it('renders a poll failure and an explicit retry entry when tracking is paused', () => {
@@ -352,6 +377,37 @@ describe('#147 host-scoped create entry points', () => {
   });
 });
 
+describe('#146 dialog-scoped create error', () => {
+  const createError = {
+    code: 'INVALID_INPUT' as const,
+    message: 'invalid input (input.name: must not contain path separators)',
+    retryable: false,
+  };
+
+  it('renders the create error only inside the create dialog notice', () => {
+    const dialogHtml = renderCreateErrorNotice({
+      state: state({ createError }),
+      actions: noopActions,
+    });
+    expect(dialogHtml).toMatch(/role="alert"[\s\S]*创建环境失败[\s\S]*INVALID_INPUT/);
+    expect(dialogHtml).toContain('输入不合法');
+    expect(dialogHtml).toContain('环境名称：不能包含路径分隔符');
+    // Nothing to render before a failure / after the dialog is cleared.
+    expect(renderCreateErrorNotice({ state: state({ createError: null }), actions: noopActions })).toBe('');
+  });
+
+  it('does not promote the create error to the page-level notices', () => {
+    const pageHtml = renderAppView({ state: state({ createError }), actions: noopActions });
+    // If the create failure were promoted to the page-level Notices, its
+    // message / code / old copy would appear here. Assert the actual page
+    // output instead of relying on the dialog being absent.
+    expect(pageHtml).not.toContain('创建环境失败');
+    expect(pageHtml).not.toContain('创建参数无效');
+    expect(pageHtml).not.toContain('invalid input (input.name');
+    expect(pageHtml).not.toContain('INVALID_INPUT');
+  });
+});
+
 describe('AppView accessibility basics', () => {
   it('associates every form control with a label', () => {
     const props = { state: state({ catalog: [] }), actions: noopActions };
@@ -492,5 +548,26 @@ describe('S4 explicit build authorization UI (issue #78)', () => {
     });
     expect(html).toContain('无法完整枚举依赖闭包中的安装期脚本');
     expect(buttonNamed(html, '确认并授权安装')).toBeUndefined();
+  });
+});
+
+describe('#145 localized contract errors in the install panel', () => {
+  it('keeps the raw message out of the alert lead and inside the technical details', () => {
+    const raw = 'the managed package executor is missing or does not match';
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        actionError: { code: 'EXECUTOR_UNAVAILABLE', message: raw, retryable: false },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('技术详情');
+    expect(html).toContain(`EXECUTOR_UNAVAILABLE：${raw}`);
+    // Everything before the collapsible details is the localized copy.
+    const alert = html.slice(html.indexOf('role="alert"'));
+    const detailsIndex = alert.indexOf('技术详情');
+    expect(detailsIndex).toBeGreaterThan(0);
+    expect(alert.slice(0, detailsIndex)).not.toContain(raw);
   });
 });

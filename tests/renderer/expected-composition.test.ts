@@ -24,6 +24,7 @@ const noopActions: RendererActions = {
   setCreateName: () => undefined,
   setCreateCombinationId: () => undefined,
   createEnvironment: () => undefined,
+  clearCreateError: () => undefined,
   selectEnvironment: () => undefined,
   startSelected: () => undefined,
   stopSelected: () => undefined,
@@ -260,5 +261,34 @@ describe('ExpectedComposition markup', () => {
     expect(html).toContain('期望组成');
     expect(html).not.toContain('@deepseek-ai/dsh-session-persistence-jsonl');
     expect(html).not.toContain('warning: something happened');
+  });
+
+  it('#145 localizes a composition failure and keeps the raw message in the details', () => {
+    const html = renderExpectedComposition({
+      state: {
+        ...INITIAL_STATE,
+        environments: FIXTURE_SEED.environments,
+        selectedEnvironmentId: FIXTURE_IDS.environment.running,
+        trackedOperation: {
+          operationId: 'op-composition',
+          kind: 'composition',
+          phase: 'failed',
+          status: 'failed',
+          sequence: 2,
+          progress: null,
+          environmentId: FIXTURE_IDS.environment.running,
+          output: null,
+          error: {
+            code: 'PROCESS_EXITED',
+            message: 'the managed process exited unexpectedly',
+            retryable: true,
+          },
+        },
+      },
+      actions: noopActions,
+    });
+    expect(html).toContain('受管进程意外退出');
+    expect(html).toContain('技术详情');
+    expect(html).toContain('PROCESS_EXITED：the managed process exited unexpectedly');
   });
 });

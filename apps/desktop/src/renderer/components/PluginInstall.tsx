@@ -11,6 +11,7 @@
 import type { ReactElement } from 'react';
 import type { ChangePlan, ContractError } from '@hdsl/contracts';
 import { selectedEnvironment, type RendererActions, type RendererState } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 const SCRIPT_LABEL: Record<ChangePlan['scriptAssessment'], string> = {
   'none-detected': '未在已解析的清单中发现安装期脚本（仅为解析结论，不构成安全保证）',
@@ -262,7 +263,7 @@ export function PluginInstall({ state, actions }: { state: RendererState; action
       </div>
 
       {state.actionError !== null && (
-        <p role="alert">{errorHint(state.actionError)}（{state.actionError.code}）</p>
+        <ErrorNotice error={state.actionError} title={errorHint(state.actionError)} />
       )}
 
       {tracked?.kind === 'preview' && tracked.status === 'failed' && (
