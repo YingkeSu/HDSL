@@ -5,8 +5,9 @@
  * live region. Only contract-provided, already-sanitized text is rendered.
  */
 import type { ReactElement } from 'react';
-import { describeError, NO_INSTALLABLE_COMBINATION_NOTICE } from '../format.js';
+import { NO_INSTALLABLE_COMBINATION_NOTICE } from '../format.js';
 import type { RendererState } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 export function Notices({ state }: { readonly state: RendererState }): ReactElement {
   return (
@@ -16,16 +17,8 @@ export function Notices({ state }: { readonly state: RendererState }): ReactElem
           {NO_INSTALLABLE_COMBINATION_NOTICE}
         </p>
       )}
-      {state.loadError !== null && (
-        <p role="alert" className="notice notice-error">
-          加载失败：{describeError(state.loadError)}
-        </p>
-      )}
-      {state.actionError !== null && (
-        <p role="alert" className="notice notice-error">
-          操作失败：{describeError(state.actionError)}
-        </p>
-      )}
+      {state.loadError !== null && <ErrorNotice prefix="加载失败：" error={state.loadError} />}
+      {state.actionError !== null && <ErrorNotice prefix="操作失败：" error={state.actionError} />}
       {state.notice !== null && (
         <p role="status" aria-live="polite" className="notice">
           {state.notice}

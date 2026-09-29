@@ -120,7 +120,30 @@ describe('AppView state matrix', () => {
       actions: noopActions,
     });
     expect(html).toMatch(/role="alert"[\s\S]*加载失败/);
+    expect(html).toContain('内部错误');
+    expect(html).toContain('技术详情');
     expect(html).toContain('INTERNAL_ERROR');
+    expect(html).toContain('该失败可重试。');
+  });
+
+  it('leads with Chinese copy and keeps the code in the technical details (#145)', () => {
+    const html = renderAppView({
+      state: state({
+        actionError: {
+          code: 'INVALID_INPUT',
+          message: 'invalid input (input.name: must not contain path separators)',
+          retryable: false,
+        },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('操作失败：输入不合法');
+    expect(html).toContain('环境名称：不能包含路径分隔符（/ 或 \\）');
+    expect(html).toContain('技术详情');
+    // The diagnostic code stays available, but only inside the details block.
+    expect(html).toContain(
+      'INVALID_INPUT：invalid input (input.name: must not contain path separators)',
+    );
   });
 
   it('replaces start with open and enables stop for a running environment', () => {
@@ -208,7 +231,8 @@ describe('AppView state matrix', () => {
       actions: noopActions,
     });
     expect(html).toMatch(/role="alert"[\s\S]*START_TIMEOUT/);
-    expect(html).toContain('（可重试）');
+    expect(html).toContain('受管进程未在时限内就绪');
+    expect(html).toContain('该失败可重试。');
   });
 
   it('renders a poll failure and an explicit retry entry when tracking is paused', () => {
@@ -366,6 +390,8 @@ describe('#146 dialog-scoped create error', () => {
       actions: noopActions,
     });
     expect(dialogHtml).toMatch(/role="alert"[\s\S]*创建环境失败[\s\S]*INVALID_INPUT/);
+    expect(dialogHtml).toContain('输入不合法');
+    expect(dialogHtml).toContain('环境名称：不能包含路径分隔符');
     // Nothing to render before a failure / after the dialog is cleared.
     expect(renderCreateErrorNotice({ state: state({ createError: null }), actions: noopActions })).toBe('');
   });
@@ -522,5 +548,26 @@ describe('S4 explicit build authorization UI (issue #78)', () => {
     });
     expect(html).toContain('无法完整枚举依赖闭包中的安装期脚本');
     expect(buttonNamed(html, '确认并授权安装')).toBeUndefined();
+  });
+});
+
+describe('#145 localized contract errors in the install panel', () => {
+  it('keeps the raw message out of the alert lead and inside the technical details', () => {
+    const raw = 'the managed package executor is missing or does not match';
+    const html = renderPluginInstall({
+      state: state({
+        environments: [environment()],
+        selectedEnvironmentId: 'env-1',
+        actionError: { code: 'EXECUTOR_UNAVAILABLE', message: raw, retryable: false },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('技术详情');
+    expect(html).toContain(`EXECUTOR_UNAVAILABLE：${raw}`);
+    // Everything before the collapsible details is the localized copy.
+    const alert = html.slice(html.indexOf('role="alert"'));
+    const detailsIndex = alert.indexOf('技术详情');
+    expect(detailsIndex).toBeGreaterThan(0);
+    expect(alert.slice(0, detailsIndex)).not.toContain(raw);
   });
 });

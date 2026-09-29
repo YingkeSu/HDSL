@@ -374,4 +374,55 @@ describe('PluginDiscovery markup', () => {
     // The permission 403 must not be described as a retryable throttle.
     expect(html).not.toContain('GitHub 限流');
   });
+
+  it('#145 renders an empty-query INVALID_INPUT with a Chinese field hint, not a bare code', () => {
+    const html = renderPluginDiscovery({
+      state: state({
+        pluginQuery: '',
+        actionError: {
+          code: 'INVALID_INPUT',
+          message: 'invalid input (input.query: must be at least 1 characters)',
+          retryable: false,
+        },
+      }),
+      actions: noopActions,
+    });
+    // Primary copy is Chinese and names the field; the raw code only lives in
+    // the expandable technical detail.
+    expect(html).toContain('检索未开始：输入不合法');
+    expect(html).toContain('检索关键词：至少需要 1 个字符');
+    expect(html).toContain('技术详情');
+    expect(html).toContain(
+      'INVALID_INPUT：invalid input (input.query: must be at least 1 characters)',
+    );
+    expect(html).not.toMatch(/<strong>检索未开始：INVALID_INPUT/);
+  });
+
+  it('#145 leads a search failure with a Chinese title and keeps the code in the details', () => {
+    const html = renderPluginDiscovery({
+      state: state({
+        trackedOperation: {
+          operationId: 'op-search',
+          kind: 'search',
+          phase: 'failed',
+          status: 'failed',
+          sequence: 2,
+          progress: null,
+          environmentId: null,
+          error: {
+            code: 'NETWORK_UNAVAILABLE',
+            message: 'the network is unavailable',
+            retryable: true,
+          },
+          output: null,
+        },
+      }),
+      actions: noopActions,
+    });
+    expect(html).toContain('检索失败：网络不可用');
+    expect(html).toContain('技术详情');
+    expect(html).toContain('NETWORK_UNAVAILABLE：the network is unavailable');
+    // The message is not promoted ahead of the localized title.
+    expect(html).not.toMatch(/检索失败：the network is unavailable/);
+  });
 });

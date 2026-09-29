@@ -16,6 +16,7 @@ import {
   type RendererActions,
   type RendererState,
 } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 export interface EntryPatchProps {
   readonly state: RendererState;
@@ -101,11 +102,7 @@ export function EntryPatch({ state, actions }: EntryPatchProps): ReactElement | 
       {!editable && (
         <p className="muted">环境正在启动或停止，暂时不能编辑期望配置。</p>
       )}
-      {state.actionError !== null && (
-        <p role="alert">
-          {state.actionError.code}：{state.actionError.message}
-        </p>
-      )}
+      {state.actionError !== null && <ErrorNotice error={state.actionError} />}
       {result !== null && (
         <div>
           <p role="status">

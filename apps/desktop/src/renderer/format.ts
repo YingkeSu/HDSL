@@ -2,14 +2,14 @@
  * Display-only labels and formatting for the renderer (T006a).
  *
  * These helpers never rewrite contract data: error text is the already
- * sanitized `ContractError.message` from `@hdsl/contracts`. The renderer adds a
- * stable error code and a retry hint, and never renders a port message, a token
- * URL or a local path of its own.
+ * sanitized `ContractError.message` from `@hdsl/contracts`. Error rendering
+ * lives in `error-text.ts` / `components/ErrorNotice.tsx` (#145), which keeps
+ * the Chinese explanation primary and never renders a port message, a token URL
+ * or a local path of its own.
  */
 import {
   formatHostPlatform,
   VERIFIED_HOSTS,
-  type ContractError,
   type EnvironmentState,
   type OperationStatus,
 } from '@hdsl/contracts';
@@ -61,10 +61,6 @@ export const formatOperationKind = (kind: string | null): string =>
  */
 export const formatTimestamp = (value: string): string =>
   value.replace('T', ' ').replace(/Z$/, ' UTC');
-
-/** `CODE：sanitized message（可重试）`, never a raw downstream message. */
-export const describeError = (error: ContractError): string =>
-  `${error.code}：${error.message}${error.retryable ? '（可重试）' : ''}`;
 
 /**
  * Copy for the create flow when this build has no installable combination for

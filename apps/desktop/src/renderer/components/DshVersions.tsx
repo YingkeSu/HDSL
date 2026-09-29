@@ -16,18 +16,19 @@ import {
   type RendererActions,
   type RendererState,
 } from '../view-model.js';
+import { ErrorNotice } from './ErrorNotice.js';
 
 /** Registry-specific, source-neutral text (never the raw port message). */
 const REGISTRY_ERROR_HINT: Readonly<Record<string, string>> = {
-  NETWORK_UNAVAILABLE: '公开 npm registry 暂时不可达；可重试。',
-  RATE_LIMITED: '公开 npm registry 限流；可稍后重试。',
-  DOWNLOAD_FAILED: 'npm registry 响应无法解析；可重试。',
-  SOURCE_ACCESS_DENIED: 'npm registry 拒绝访问（不可重试）。',
+  NETWORK_UNAVAILABLE: '公开 npm registry 暂时不可达。',
+  RATE_LIMITED: '公开 npm registry 已限流。',
+  DOWNLOAD_FAILED: 'npm registry 响应无法解析。',
+  SOURCE_ACCESS_DENIED: 'npm registry 拒绝访问。',
   SOURCE_NOT_FOUND: 'npm registry 上没有该包。',
 };
 
 const registryHint = (error: ContractError): string =>
-  REGISTRY_ERROR_HINT[error.code] ?? '查询失败；可重试。';
+  REGISTRY_ERROR_HINT[error.code] ?? '查询 npm registry 失败。';
 
 export interface DshVersionsProps {
   readonly state: RendererState;
@@ -61,11 +62,7 @@ export function DshVersions({ state, actions }: DshVersionsProps): ReactElement 
           正在查询 npm registry…（{tracked?.phase ?? 'reading registry'}）
         </p>
       )}
-      {error !== null && (
-        <p role="alert">
-          {error.code}：{registryHint(error)}
-        </p>
-      )}
+      {error !== null && <ErrorNotice error={error} title={registryHint(error)} />}
       {listing !== null && !reading && (
         <div>
           <p className="muted">
