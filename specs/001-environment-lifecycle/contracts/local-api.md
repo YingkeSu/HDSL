@@ -35,7 +35,7 @@
 
 | 方法 | 输入 | 返回 | 约束 |
 | --- | --- | --- | --- |
-| catalog.list | 无 | 已核验 RuntimeCombination[] | 含平台、来源与兼容证据；未核验组合不出现在列表 |
+| catalog.list | 无 | 已核验且匹配当前宿主平台的 RuntimeCombination[] | 含平台、来源与兼容证据；未核验组合**以及不匹配当前宿主平台的组合**不出现在列表（列表是「可安装」投影面，不代表放宽平台证据）；`environments.create`/`switchCombination` 的平台门禁不变，越权请求仍以 `UNSUPPORTED_COMBINATION` 拒绝 |
 | environments.list | 无 | EnvironmentSummary[] | 只读摘要，不含秘密与本地路径 |
 | environments.create | requestId, name, catalogCombinationId | OperationRef | name 1–80 字符；`catalogCombinationId` 必须映射到 CompositionLock；平台必须匹配 |
 | environments.start | requestId, environmentId, expectedRevision | OperationRef | 重复启动不重复进程；组合修订变化则拒绝 |
@@ -161,7 +161,7 @@
 | idempotency-conflict | — | 同 `requestId` 不同 `name` → `IDEMPOTENCY_CONFLICT` |
 | idempotency-guard-retry | 先 `NOT_FOUND` 再修正参数 | 修正后同 `requestId` → `ok`（守卫拒绝不锁死参数） |
 
-补充行为测试（`tests/contracts/`，不在上表逐条列出）：重复 `requestId` 返回原 `ExportResult` 摘要且副作用计数为 1；参数键顺序不影响指纹；守卫拒绝不记录、`in-progress` 不重做；端口异常/畸形返回/非法出站 DTO/重复 sequence → 脱敏 `INTERNAL_ERROR`；`catalog.list` 过滤未核验组合；订阅/退订按 operationId 分组递增且严格单调、退订后重放重建同一 `subscriptionId`；错误文本长度上限；秘密与本地路径不进入错误与事件。
+补充行为测试（`tests/contracts/`，不在上表逐条列出）：重复 `requestId` 返回原 `ExportResult` 摘要且副作用计数为 1；参数键顺序不影响指纹；守卫拒绝不记录、`in-progress` 不重做；端口异常/畸形返回/非法出站 DTO/重复 sequence → 脱敏 `INTERNAL_ERROR`；`catalog.list` 过滤未核验组合以及不匹配当前宿主平台的组合；订阅/退订按 operationId 分组递增且严格单调、退订后重放重建同一 `subscriptionId`；错误文本长度上限；秘密与本地路径不进入错误与事件。
 
 契约版本标签：`contracts-v1.0.0` ↔ `API_VERSION = "1.0"`（已冻结，只读）；`1.1` 对应 `contracts-v1.1.0`，按 ADR 0005 §5.4 由编排者在合入后的**精确提交**上创建。**截至本修订 `contracts-v1.1.0` 尚未创建**；打标签 ≠ 平台验收，实现切片不提前 tag 未审 HEAD。
 

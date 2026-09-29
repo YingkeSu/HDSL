@@ -8,12 +8,14 @@
  * dispatcher must then refuse create/switch for that unknown host.
  */
 import {
+  combinationsForHost,
   isHostPlatformSupported,
+  isTargetedAtHost,
   resolveHostPlatform,
   unsupportedCombinationReason,
   type HostPlatform,
 } from '@hdsl/contracts';
-import { FIXTURE_SEED } from '@hdsl/contracts/testing';
+import { FIXTURE_IDS, FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 
 const darwinArm64Combination = FIXTURE_SEED.catalog[0];
@@ -84,4 +86,42 @@ describe('unsupportedCombinationReason with an unresolved host', () => {
       );
     },
   );
+});
+
+/**
+ * #147: the installable surface must be filtered by the REAL host, so a Windows
+ * build never offers the darwin/arm64 combinations as installable.
+ */
+describe('combinationsForHost', () => {
+  it('matches a combination target only on the exact host pair', () => {
+    expect(isTargetedAtHost({ platform: 'darwin', arch: 'arm64' }, darwinArm64Combination)).toBe(
+      true,
+    );
+    expect(isTargetedAtHost({ platform: 'darwin', arch: 'x64' }, darwinArm64Combination)).toBe(
+      false,
+    );
+    expect(isTargetedAtHost({ platform: 'win32', arch: 'arm64' }, darwinArm64Combination)).toBe(
+      false,
+    );
+  });
+
+  it('keeps only combinations targeting the verified host', () => {
+    const ids = combinationsForHost(
+      { platform: 'darwin', arch: 'arm64' },
+      FIXTURE_SEED.catalog,
+    ).map((entry) => entry.id);
+    expect(ids).toContain(FIXTURE_IDS.combination.verified);
+    expect(ids).not.toContain(FIXTURE_IDS.combination.win32);
+  });
+
+  it.each(knownButUnverifiedHosts)(
+    'is empty for the known-but-unverified host $platform/$arch (not an untested success)',
+    (host) => {
+      expect(combinationsForHost(host, FIXTURE_SEED.catalog)).toEqual([]);
+    },
+  );
+
+  it('is empty for an unresolved host instead of falling back to darwin', () => {
+    expect(combinationsForHost(undefined, FIXTURE_SEED.catalog)).toEqual([]);
+  });
 });

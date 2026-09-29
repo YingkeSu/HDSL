@@ -10,7 +10,7 @@
 | EnvironmentSummary | id, name, revision, stateVersion, state, activeGenerationId, compositionDigest | `environments.list` 的只读视图；不含秘密、token 或本地路径 |
 | Generation | id, environmentId, compositionDigest, createdAt | 只属于一个环境；组成固定 |
 | CompositionLock | schemaVersion, node, dsh, plugins, sources | node/dsh 为 RuntimeArtifactRef（不含 url）；`sources` 并列保留下载 url 与 sha256 供来源追溯；plugins 在首切片为空 |
-| RuntimeCombination | id, platform, arch, node, dsh, compatibility, artifactLocations | node/dsh 为 RuntimeArtifactRef；`catalog.list` 的返回项；compatibility 至少含 status 与 evidenceRef，未核验组合不入列表；artifactLocations 并列记录下载 URL，不进入组成摘要 |
+| RuntimeCombination | id, platform, arch, node, dsh, compatibility, artifactLocations | node/dsh 为 RuntimeArtifactRef；`catalog.list` 的返回项；compatibility 至少含 status 与 evidenceRef，未核验组合不入列表，**且不匹配当前已核验宿主平台的组合也不入列表**（列表是「可安装」投影；平台门禁仍以 `UNSUPPORTED_COMBINATION` 拒绝越权请求）；artifactLocations 并列记录下载 URL，不进入组成摘要 |
 | RuntimeArtifactRef | version, platform, arch, sha256 | 进入 CompositionLock 与组成摘要的字段子集；sha256 为 64 个十六进制字符（256 位，小写）；**不含 url** |
 | RuntimeArtifact | version, platform, arch, url, sha256 | 受审 catalog 的完整产物记录；url 仅作并列位置，不参与摘要 |
 | Operation | id, environmentId, kind, phase, status, sequence, error | 状态 queued/running/succeeded/failed/cancelled，终态不可回退；`sequence` 为**每 operation** 单调递增计数 |

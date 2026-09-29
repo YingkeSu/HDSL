@@ -167,6 +167,20 @@ describe('F3 catalog.list only returns verified combinations', () => {
     expect(ids).toContain(FIXTURE_IDS.combination.verified);
     expect(ids).not.toContain(FIXTURE_IDS.combination.unverified);
   });
+
+  it('#147 filters out combinations that do not target the current host', () => {
+    // The fixture seeds a verified win32 combination explicitly to exercise the
+    // host mismatch, so it must never appear on the darwin/arm64 installable
+    // surface (Windows is preview-only, not supported).
+    const { runtime } = harness();
+    const response = runtime.dispatch(contractRequest('catalog.list', {}));
+    if (!response.ok) {
+      throw new Error(`catalog.list failed: ${response.error.code}`);
+    }
+    const ids = (response.value as readonly RuntimeCombination[]).map((entry) => entry.id);
+    expect(ids).not.toContain(FIXTURE_IDS.combination.win32);
+    expect(ids).toEqual([FIXTURE_IDS.combination.verified]);
+  });
 });
 
 describe('F4 retry semantics: same requestId replays, a new requestId retries', () => {

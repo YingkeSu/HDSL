@@ -6,7 +6,7 @@
  * about the real npm registry or Electron.
  */
 import type { DshVersionListing } from '@hdsl/contracts';
-import { FIXTURE_SEED } from '@hdsl/contracts/testing';
+import { FIXTURE_IDS, FIXTURE_SEED } from '@hdsl/contracts/testing';
 import { describe, expect, it } from 'vitest';
 import { RendererController } from '../../apps/desktop/src/renderer/controller.js';
 import { renderDshVersions } from '../../apps/desktop/src/renderer/testing/render-markup.js';
@@ -110,7 +110,7 @@ const listing: DshVersionListing = {
       distTags: ['latest'],
       publishedAt: '2025-12-01T00:00:00.000Z',
       supported: true,
-      catalogCombinationIds: ['combo-a'],
+      catalogCombinationIds: [FIXTURE_IDS.combination.verified],
     },
   ],
 };
@@ -118,7 +118,7 @@ const listing: DshVersionListing = {
 describe('DshVersions markup', () => {
   it('labels audited and unaudited versions distinctly and shows source/time', () => {
     const html = renderDshVersions({
-      state: { ...INITIAL_STATE, dshVersions: listing },
+      state: { ...INITIAL_STATE, phase: 'ready', catalog: FIXTURE_SEED.catalog, dshVersions: listing },
       actions: noopActions,
     });
     expect(html).toContain('上游 DSH 版本');
@@ -131,10 +131,35 @@ describe('DshVersions markup', () => {
 
   it('labels the unaudited version explicitly as unsupported', () => {
     const html = renderDshVersions({
-      state: { ...INITIAL_STATE, dshVersions: listing },
+      state: { ...INITIAL_STATE, phase: 'ready', catalog: FIXTURE_SEED.catalog, dshVersions: listing },
       actions: noopActions,
     });
     expect(html).toContain('未支持：不在受审组合白名单内');
     expect(html).toContain('已受审：可经既有受管安装新建环境');
+  });
+
+  it('#147 marks an audited version as not installable when no combination targets this host', () => {
+    // A Windows/Linux preview build receives a host-scoped `catalog.list` (empty)
+    // once it is ready, so the audited version must not claim it can create an
+    // environment here.
+    const html = renderDshVersions({
+      state: { ...INITIAL_STATE, phase: 'ready', catalog: [], dshVersions: listing },
+      actions: noopActions,
+    });
+    expect(html).toContain('已受审：当前平台没有可安装的受审组合');
+    expect(html).not.toContain('已受审：可经既有受管安装新建环境');
+    expect(html).toContain('受审组合（其他平台）');
+  });
+
+  it('#147 does not label a not-yet-loaded catalog as another platform (review 5300872760)', () => {
+    for (const phase of ['idle', 'loading', 'failed'] as const) {
+      const html = renderDshVersions({
+        state: { ...INITIAL_STATE, phase, catalog: [], dshVersions: listing },
+        actions: noopActions,
+      });
+      expect(html).not.toContain('受审组合（其他平台）');
+      expect(html).not.toContain('当前平台没有可安装的受审组合');
+      expect(html).toContain('已受审：运行时组合尚未加载');
+    }
   });
 });

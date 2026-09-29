@@ -22,6 +22,7 @@ export function CreateEnvironmentForm({
 }: CreateEnvironmentFormProps): ReactElement {
   const disabled = state.phase !== 'ready' || state.catalog.length === 0 || isBusy(state);
   const canSubmit = !disabled && !state.commandPending && state.createName.trim().length > 0;
+  const noInstallableCombination = state.phase === 'ready' && state.catalog.length === 0;
   return (
     <section aria-labelledby="create-heading" className="panel">
       <h2 id="create-heading">创建环境</h2>
@@ -73,8 +74,10 @@ export function CreateEnvironmentForm({
           创建环境
         </button>
       </form>
-      {state.phase === 'ready' && state.catalog.length === 0 && (
-        <p>没有已核验的运行时组合，暂时无法创建环境。</p>
+      {noInstallableCombination && (
+        <p className="muted">
+          当前平台没有可安装的受审运行时组合，已禁用创建。Windows / Linux 版本当前仅为界面预览，不代表已支持。
+        </p>
       )}
     </section>
   );
