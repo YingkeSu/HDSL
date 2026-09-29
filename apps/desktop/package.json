@@ -1,7 +1,7 @@
 {
   "name": "@hdsl/desktop",
   "productName": "HDSL",
-  "version": "0.1.0-preview.1",
+  "version": "0.1.0-preview.2",
   "private": true,
   "description": "Electron and React desktop app for managing local DeepSeek Harness environments.",
   "license": "SEE LICENSE IN ../../LICENSE",
