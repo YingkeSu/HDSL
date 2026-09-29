@@ -212,6 +212,40 @@ describe('createPluginRemovalPort', () => {
     expect(JSON.parse(outcome.value.targetDeclarationText).dependencies['hdsl-plugin-e2e-fixture']).toBeUndefined();
   });
 
+  it('fails closed when a retained patch carries the executable !!js tag (unresolved blocks)', async () => {
+    // #107: the managed dialect evaluates `tag:yaml.org,2002:js`. The scanner must
+    // not exempt the whole `tag:yaml.org,2002:` prefix, or the executable tag would
+    // be classified as an interpreted literal and the removal guard would miss the
+    // unresolved construct. With a known-empty service record, the unresolved
+    // source is the only thing that can block here.
+    const fixture = build({
+      pluginId: 'hdsl-plugin-e2e-fixture',
+      userPatch: ['- insert:', '    - id: js-row', "      name: !!js '1 + 1'"].join('\n'),
+    });
+    const port = createPluginRemovalPort({ executor: executor([]) });
+    const outcome = await port.resolveRemoval(
+      {
+        pluginId: 'hdsl-plugin-e2e-fixture',
+        expectedCommitSha: 'e7825788cce5e056a0eee6c1ff1ffbbf7c1c8838',
+        expectedManifestSha256: null,
+        declarationDirectory: fixture.declaration,
+        publishedProfileDirectory: fixture.published,
+        homeDirectory: fixture.home,
+        dshDirectory: fixture.dsh,
+        nodeExecutable: join(fixture.root, 'node'),
+        stagingDirectory: fixture.staging,
+        installed: [{ id: 'hdsl-plugin-e2e-fixture', version: '1.0.0', sha256: 'a'.repeat(64) }],
+        enabledBundles: ['hdsl-plugin-e2e-fixture'],
+        runtime: RUNTIME,
+      },
+      new AbortController().signal,
+    );
+    expect(outcome.ok).toBe(true);
+    if (!outcome.ok) return;
+    expect(outcome.value.serviceVerification.status).toBe('known');
+    expect(outcome.value.blockingReferences.some((reference) => reference.detail.includes('cannot be resolved'))).toBe(true);
+  });
+
   it('mandatory regression: a retained dependency that depends on the removed plugin keeps it in the closure', async () => {
     const fixture = build({ pluginId: 'hdsl-plugin-e2e-fixture' });
     const retainedLock = [

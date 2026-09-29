@@ -32,9 +32,9 @@
  * source that cannot be parsed never degrades to "no references"): parse errors,
  * multiple documents, non-sequence/non-mapping roots, `insert` values that are not
  * sequences of mapping rows, rows without a scalar `id`, non-string `name`, row
- * entries that are not mappings, aliases/anchors, merge keys, explicit tags
- * (never interpreted), complex (non-scalar) keys, block scalars in `name`/`insert`
- * positions, and size / node / depth bounds.
+ * entries that are not mappings, aliases/anchors, merge keys, explicit tags outside
+ * the interpreted core-schema allowlist (never interpreted), complex (non-scalar)
+ * keys, block scalars in `name`/`insert` positions, and size / node / depth bounds.
  *
  * Sources are safe identifiers (`user patch`, `bundle @scope/name`); no local
  * absolute path is ever emitted.
@@ -87,9 +87,29 @@ const lineOf = (node: Node | null | undefined): number => {
   return typeof range?.[0] === 'number' ? range[0] + 1 : 1;
 };
 
-const hasCustomTag = (node: Node): boolean => {
+/**
+ * Tags `yaml@2.9.1`'s core schema resolves into plain values (strings or
+ * structural maps/sequences) with no side effects. The allowlist is deliberately
+ * explicit instead of a `tag:yaml.org,2002:` prefix test: the managed DSH dialect
+ * registers the executable `tag:yaml.org,2002:js` (`!!js`/`!!js/function`) in that
+ * same namespace, so a prefix exemption would silently mark the one tag the
+ * runtime later evaluates (`new Function` + `eval`) as "already interpreted".
+ * Anything outside this set (including future dialect tags) is not statically
+ * interpretable and must fall through to `unknown` (fail closed).
+ */
+const INTERPRETED_TAGS: ReadonlySet<string> = new Set([
+  'tag:yaml.org,2002:str',
+  'tag:yaml.org,2002:null',
+  'tag:yaml.org,2002:bool',
+  'tag:yaml.org,2002:int',
+  'tag:yaml.org,2002:float',
+  'tag:yaml.org,2002:map',
+  'tag:yaml.org,2002:seq',
+]);
+
+const hasUninterpretedTag = (node: Node): boolean => {
   const tag = (node as { tag?: string }).tag;
-  return typeof tag === 'string' && !tag.startsWith('tag:yaml.org,2002:');
+  return typeof tag === 'string' && !INTERPRETED_TAGS.has(tag);
 };
 
 /**
@@ -154,7 +174,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
       pushUnknown(lineOf(node), `alias in ${position} cannot be resolved`);
       return undefined;
     }
-    if (hasCustomTag(node)) {
+    if (hasUninterpretedTag(node)) {
       pushUnknown(lineOf(node), `explicit tag in ${position} is not interpreted`);
       return undefined;
     }
@@ -195,7 +215,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
       pushUnknown(lineOf(row), 'alias row cannot be resolved');
       return;
     }
-    if (hasCustomTag(row)) {
+    if (hasUninterpretedTag(row)) {
       pushUnknown(lineOf(row), 'explicit tag is not interpreted');
       return;
     }
@@ -241,7 +261,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
           pushUnknown(lineOf(value), 'alias insert list cannot be resolved');
           continue;
         }
-        if (value !== null && value !== undefined && hasCustomTag(value)) {
+        if (value !== null && value !== undefined && hasUninterpretedTag(value)) {
           pushUnknown(lineOf(value), 'explicit tag is not interpreted');
           continue;
         }
@@ -269,16 +289,19 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
       pushUnknown(lineOf(node), 'alias in inject list cannot be resolved');
       return;
     }
-    if (hasCustomTag(node)) {
+    if (hasUninterpretedTag(node)) {
       pushUnknown(lineOf(node), 'explicit tag in inject list is not interpreted');
       return;
     }
     if (isSeq(node)) {
       for (const item of node.items as readonly (Node | null | undefined)[]) {
-        if (item !== null && item !== undefined && isScalar(item) && typeof item.value === 'string' && item.value !== '') {
-          services.add(item.value);
-        } else if (item !== null && item !== undefined && (isAlias(item) || hasCustomTag(item))) {
+        if (item === null || item === undefined) {
+          continue;
+        }
+        if (isAlias(item) || hasUninterpretedTag(item)) {
           pushUnknown(lineOf(item), 'inject entry cannot be resolved');
+        } else if (isScalar(item) && typeof item.value === 'string' && item.value !== '') {
+          services.add(item.value);
         }
       }
       return;
@@ -308,7 +331,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
       pushUnknown(lineOf(node), 'alias cannot be resolved');
       return;
     }
-    if (hasCustomTag(node)) {
+    if (hasUninterpretedTag(node)) {
       pushUnknown(lineOf(node), 'explicit tag is not interpreted');
       return;
     }
@@ -335,7 +358,7 @@ export const scanPatchReferences = (source: string, rawText: string): PatchRefer
   if (contents === null || contents === undefined) {
     return result();
   }
-  if (isAlias(contents) || hasCustomTag(contents)) {
+  if (isAlias(contents) || hasUninterpretedTag(contents)) {
     pushUnknown(lineOf(contents), 'patch root cannot be resolved');
     return result();
   }
