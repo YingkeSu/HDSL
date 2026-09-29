@@ -14,7 +14,7 @@
 | 数据目录锁与生命周期 | [所有权协调](development/dataroot-ownership.md) |
 | 当前进展与后续工作 | [路线图](development/roadmap.md) |
 | 本机验收与内测准备 | [macOS 内测准备](development/macos-internal-readiness.md) |
-| Windows x64 便携构建（未签名·未实机验证） | [Windows 便携构建](development/windows-portable-build.md) |
+| Windows x64 打包：便携 ZIP 与 NSIS 安装包（未签名·未实机验证） | [Windows 打包](development/windows-portable-build.md) |
 
 ## 设计与规格
 
