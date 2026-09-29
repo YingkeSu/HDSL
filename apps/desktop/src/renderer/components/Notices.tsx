@@ -26,11 +26,6 @@ export function Notices({ state }: { readonly state: RendererState }): ReactElem
           操作失败：{describeError(state.actionError)}
         </p>
       )}
-      {state.createError !== null && (
-        <p role="alert" className="notice notice-error">
-          创建参数无效：{state.createError}
-        </p>
-      )}
       {state.notice !== null && (
         <p role="status" aria-live="polite" className="notice">
           {state.notice}
