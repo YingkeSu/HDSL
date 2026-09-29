@@ -152,6 +152,23 @@ node apps/desktop/scripts/smoke-electron.mjs [--data-root <dir>]
 失败为原生错误框，只显示阶段与受控原因；成功只显示条数与“仅存引用、不读写 secret、不复制原文件”。
 无引用的环境启动时 main 只读预检并弹原生提示，指向该菜单；启动仍按 fail-closed 失败。
 
+## 应用菜单（按平台，issue #150）
+
+`buildApplicationMenuTemplate(actions, state, platform = process.platform)` 仍是返回纯数据的函数；
+平台是显式参数、默认取当前运行平台，因此调用方无需改动，三个平台分支都可单测。
+
+| 平台 | 顶层菜单（左→右） |
+| --- | --- |
+| darwin | `HDSL`（about / hide / hideOthers / unhide / quit）、编辑、视图、窗口（minimize / zoom / front）、环境 |
+| win32 / linux | 文件（退出）、编辑、视图、窗口（最小化 / 关闭窗口）、环境、帮助（关于 HDSL） |
+
+- `reload` / `forceReload` 统一归「视图」，不再放在「环境」；「环境 → 导入环境凭据引用…」在所有平台保留（ADR 0004）。
+- Electron 标注为 macOS-only 的 role（`hide` / `hideOthers` / `unhide` / `zoom` / `front`）只出现在 darwin
+  模板；其他平台不再出现可聚焦但无作用的死项。
+- 不新增无实现的空壳分类：win32/linux 的「帮助」只有可用的「关于 HDSL」，「编辑」/「视图」/「窗口」全部是
+  Electron 内置 role；darwin 的 about/hide/quit 行为不变。
+- 模板层由 `tests/desktop/menu.test.ts` 覆盖 darwin/win32/linux；**真实 Windows 原生菜单未实机逐项验证**。
+
 ## 测试入口注入（仅测试，生产入口不读任何钩子）
 
 生产入口 `src/main/index.ts` 以默认参数启动 `startDesktopApp`（只有原生菜单 + 原生对话框），**不读**
